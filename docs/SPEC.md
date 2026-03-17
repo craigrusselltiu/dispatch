@@ -857,4 +857,16 @@ Radio:
 
 9. **Concurrent `bd` calls**: if multiple agents finish tasks simultaneously, the console may issue concurrent `bd close` commands. Beads uses Dolt which handles concurrent writes, but worth testing under load.
 
-10. **Windows ConPTY quirks**: ConPTY occasionally differs from Unix PTYs in escape sequence handling, particularly around cursor visibility, alternate screen buffer transitions, and backspace behavior. `portable-pty` handles the major differences, but edge cases may surface with Claude Code's TUI. Test early on Windows. Also, Ctrl+C signal handling on Windows ConPTY sends the sequence differently -- `portable-pty` normalizes this, but verify that agent processes actually receive the interrupt.
+10. **Windows ConPTY quirks**: ~~Open -- see decision below.~~
+
+**Decision (dispatch-env):** ConPTY behavior was researched against Claude Code's TUI on Windows. Decisions per area:
+
+- **Cursor visibility** (`\x1b[?25l` / `\x1b[?25h`): ConPTY handles these correctly via `ENABLE_VIRTUAL_TERMINAL_PROCESSING`. No explicit handling needed -- `portable-pty` is sufficient.
+
+- **Alternate screen buffer** (`\x1b[?1049h` / `\x1b[?1049l`): ConPTY re-encodes output from the win32 screen buffer and can synthesize full-screen repaints. This is the highest-risk area. Decision: test with Claude Code's TUI during Phase 0. If alternate screen transitions produce corrupt output, the fallback is to pipe through `vt100` with tolerance for extra synthetic sequences (it ignores unknown escapes). No pre-emptive workaround -- identify the failure mode first.
+
+- **Backspace**: ConPTY sends `\x7f` (DEL) for backspace. `portable-pty` does not normalize this. The input forwarding table in the PTY Management section already maps `Backspace -> \x7f`, which is correct for ConPTY. No change needed.
+
+- **Ctrl+C**: Windows uses console control events, not Unix signals. `portable-pty` abstracts the delivery mechanism but semantics differ (a new thread is created on the Windows side). The ANSI sequence `\x03` written to the PTY still triggers an interrupt for console applications. Decision: write `\x03` as specified. Verify during Phase 0 that Claude Code actually cancels its current operation on Windows when Ctrl+C is forwarded this way.
+
+Summary: the backspace mapping is already correct. Alternate screen and Ctrl+C both require Phase 0 validation on Windows before any mitigations are coded.
