@@ -9,6 +9,7 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import com.dispatch.radio.model.Agent
+import com.dispatch.radio.ui.AudioLevelView
 import com.google.gson.Gson
 import com.google.gson.JsonObject
 
@@ -42,6 +43,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvTargetDetail: TextView
     private lateinit var flListening: View
     private lateinit var tvPartial: TextView
+    private lateinit var audioLevelView: AudioLevelView
     private lateinit var tvLastDispatch: TextView
     private lateinit var tvLastTaskId: TextView
     private lateinit var llAgents: LinearLayout
@@ -84,12 +86,14 @@ class MainActivity : AppCompatActivity() {
                 wsClient.send("""{"type":"radio_status","state":"listening"}""")
                 flListening.visibility = View.VISIBLE
                 tvPartial.text = ""
+                audioLevelView.level = 0f
             },
             onPartialResult = { partial ->
                 tvPartial.text = partial
             },
             onFinalResult = { transcript ->
                 flListening.visibility = View.INVISIBLE
+                audioLevelView.level = 0f
                 haptics.sendConfirm()
                 wsClient.send("""{"type":"radio_status","state":"idle"}""")
                 handleTranscript(transcript)
@@ -119,6 +123,7 @@ class MainActivity : AppCompatActivity() {
         tvTargetDetail = findViewById(R.id.tv_target_detail)
         flListening = findViewById(R.id.fl_listening)
         tvPartial = findViewById(R.id.tv_partial)
+        audioLevelView = findViewById(R.id.audio_level_view)
         tvLastDispatch = findViewById(R.id.tv_last_dispatch)
         tvLastTaskId = findViewById(R.id.tv_last_task_id)
         llAgents = findViewById(R.id.ll_agents)

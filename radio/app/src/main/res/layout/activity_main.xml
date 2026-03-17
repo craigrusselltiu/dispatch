@@ -145,6 +145,13 @@
                 android:fontFamily="monospace"
                 android:minHeight="40dp" />
 
+            <!-- Segmented audio level bar (dispatch-88k.6) -->
+            <com.dispatch.radio.ui.AudioLevelView
+                android:id="@+id/audio_level_view"
+                android:layout_width="match_parent"
+                android:layout_height="8dp"
+                android:layout_marginTop="8dp" />
+
         </LinearLayout>
 
     </FrameLayout>
