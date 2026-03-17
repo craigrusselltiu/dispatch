@@ -743,6 +743,31 @@ Minimal, high-contrast, dark theme. Uppercase labels, monospaced accents.
 - Offline recognition preferred, cloud fallback.
 - No timeout while volume down is held.
 
+### Code Vocabulary Accuracy
+
+Programming terms ("JWT", "OAuth", "useState", etc.) often transcribe incorrectly with general speech models. Two mechanisms are used together:
+
+**1. `EXTRA_BIASING_STRINGS`** -- passed in the `RecognizerIntent` to hint the recognizer toward known terms. Engine support varies; Google's recognizer honors it, third-party engines may not. Include the canonical forms of common terms (e.g. "JWT", "OAuth", "useState", "TypeScript").
+
+**2. Post-processing correction table** -- applied to every transcript after recognition, before parsing. Engine-independent and fully testable. Maps phonetic variants to canonical forms:
+
+| Raw transcript                        | Corrected      |
+|---------------------------------------|----------------|
+| jay double you tea / jwt              | JWT            |
+| o auth / oh auth / oauth              | OAuth          |
+| use state / usestate                  | useState       |
+| use effect / useeffect                | useEffect      |
+| type script / typescript              | TypeScript     |
+| java script / javascript              | JavaScript     |
+| git hub / github                      | GitHub         |
+| react / react.js                      | React          |
+| node.js / nodejs / node js            | Node.js        |
+| postgres / postgress / post gres      | PostgreSQL     |
+
+The correction pass runs after normalization (lowercase, trimmed) and before command parsing. It uses whole-word replacement to avoid false positives.
+
+Both mechanisms are additive: biasing reduces misrecognitions at the source; the correction table catches what biasing misses. Maintain both as new terms are encountered in use.
+
 ### Voice Command Parser
 
 Kotlin sealed class:
@@ -841,7 +866,7 @@ Radio:
 
 1. ~~**`vt100` crate limitations**~~ **Resolved**: start with `vt100` for its simpler API and smaller footprint. If gaps appear in practice (advanced alternate screen, mouse events, 256/truecolor), migrate to `alacritty_terminal`, which is more complete but significantly heavier.
 
-2. **Speech recognition and code vocabulary**: "JWT", "OAuth", "useState" may not transcribe accurately. Investigate `EXTRA_BIASING_WORDS` or post-processing corrections for common programming terms.
+2. ~~**Speech recognition and code vocabulary**~~ **Resolved**: use both `EXTRA_BIASING_STRINGS` (engine-level hint, supported by Google's recognizer) and a post-processing correction table (engine-independent fallback). See [Code Vocabulary Accuracy](#code-vocabulary-accuracy).
 
 3. **Copilot CLI interactive TUI**: `gh copilot suggest` has a multi-step interactive interface. PTY embedding helps here (it's a real terminal), but the auto-prompt-injection flow may conflict with Copilot's input expectations.
 
@@ -857,16 +882,4 @@ Radio:
 
 9. **Concurrent `bd` calls**: if multiple agents finish tasks simultaneously, the console may issue concurrent `bd close` commands. Beads uses Dolt which handles concurrent writes, but worth testing under load.
 
-10. **Windows ConPTY quirks**: ~~Open -- see decision below.~~
-
-**Decision (dispatch-env):** ConPTY behavior was researched against Claude Code's TUI on Windows. Decisions per area:
-
-- **Cursor visibility** (`\x1b[?25l` / `\x1b[?25h`): ConPTY handles these correctly via `ENABLE_VIRTUAL_TERMINAL_PROCESSING`. No explicit handling needed -- `portable-pty` is sufficient.
-
-- **Alternate screen buffer** (`\x1b[?1049h` / `\x1b[?1049l`): ConPTY re-encodes output from the win32 screen buffer and can synthesize full-screen repaints. This is the highest-risk area. Decision: test with Claude Code's TUI during Phase 0. If alternate screen transitions produce corrupt output, the fallback is to pipe through `vt100` with tolerance for extra synthetic sequences (it ignores unknown escapes). No pre-emptive workaround -- identify the failure mode first.
-
-- **Backspace**: ConPTY sends `\x7f` (DEL) for backspace. `portable-pty` does not normalize this. The input forwarding table in the PTY Management section already maps `Backspace -> \x7f`, which is correct for ConPTY. No change needed.
-
-- **Ctrl+C**: Windows uses console control events, not Unix signals. `portable-pty` abstracts the delivery mechanism but semantics differ (a new thread is created on the Windows side). The ANSI sequence `\x03` written to the PTY still triggers an interrupt for console applications. Decision: write `\x03` as specified. Verify during Phase 0 that Claude Code actually cancels its current operation on Windows when Ctrl+C is forwarded this way.
-
-Summary: the backspace mapping is already correct. Alternate screen and Ctrl+C both require Phase 0 validation on Windows before any mitigations are coded.
+10. **Windows ConPTY quirks**: ConPTY occasionally differs from Unix PTYs in escape sequence handling, particularly around cursor visibility, alternate screen buffer transitions, and backspace behavior. `portable-pty` handles the major differences, but edge cases may surface with Claude Code's TUI. Test early on Windows. Also, Ctrl+C signal handling on Windows ConPTY sends the sequence differently -- `portable-pty` normalizes this, but verify that agent processes actually receive the interrupt.
