@@ -5,7 +5,13 @@
 // dispatch-e0k.3: bd create integration from Rust
 // dispatch-bgz.4: modal input model (command mode / input mode)
 // dispatch-bgz.9: beads task lifecycle (create, assign, close, reopen)
+// dispatch-bgz.10: pane info strip and header bar
 // dispatch-bgz.12: config file and CLI subcommands
+//
+// Layout:
+//   Header bar  : DISPATCH title, radio state, PSK, agent count, PAGE X/Y, clock
+//   Quad pane   : 2x2 grid; each pane has info strip + terminal area
+//   Footer bar  : mode indicator, target, navigation hints
 
 mod config;
 
@@ -18,8 +24,26 @@ use std::{
         Arc, Mutex,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
+
+use chrono::Local;
+use crossterm::{
+    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
+    execute,
+    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
+};
+use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use ratatui::{
+    backend::CrosstermBackend,
+    layout::{Constraint, Direction, Layout, Rect},
+    style::{Color, Modifier, Style},
+    text::{Line, Span, Text},
+    widgets::{Block, Borders, Paragraph},
+    Frame, Terminal,
+};
+
+// ── CLI ───────────────────────────────────────────────────────────────────────
 
 #[derive(Parser)]
 #[command(name = "dispatch", about = "Dispatch console TUI")]
@@ -38,23 +62,18 @@ enum Commands {
     Config,
 }
 
-use crossterm::{
-    event::{self, Event, KeyCode, KeyEvent, KeyModifiers},
-    execute,
-    terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
-};
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
-use ratatui::{
-    backend::CrosstermBackend,
-    layout::{Constraint, Direction, Layout},
-    style::{Color, Modifier, Style},
-    text::{Line, Span, Text},
-    widgets::{Block, Borders, Paragraph},
-    Terminal,
-};
+// ── constants ────────────────────────────────────────────────────────────────
 
-const PTY_ROWS: u16 = 24;
+const PTY_ROWS: u16 = 20;
 const PTY_COLS: u16 = 80;
+
+const NATO: &[&str] = &[
+    "ALPHA", "BRAVO", "CHARLIE", "DELTA", "ECHO", "FOXTROT", "GOLF", "HOTEL", "INDIA", "JULIET",
+    "KILO", "LIMA", "MIKE", "NOVEMBER", "OSCAR", "PAPA", "QUEBEC", "ROMEO", "SIERRA", "TANGO",
+    "UNIFORM", "VICTOR", "WHISKEY", "X-RAY", "YANKEE", "ZULU",
+];
+
+// ── types ─────────────────────────────────────────────────────────────────────
 
 /// Input mode for the console (dispatch-bgz.4).
 ///
@@ -63,9 +82,86 @@ const PTY_COLS: u16 = 80;
 ///   The only key the console intercepts in this mode is Escape.
 ///   A double-Escape sends one literal Escape byte to the PTY.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum InputMode {
+enum Mode {
     Command,
     Input,
+}
+
+#[derive(Clone, Copy)]
+#[allow(dead_code)] // Connected variant used when WebSocket is wired up (dispatch-bgz.7)
+enum RadioState {
+    Connected,
+    Disconnected,
+}
+
+struct AgentSlot {
+    callsign: String,
+    tool: String,
+    task_id: Option<String>,
+    dispatch_time: Instant,
+    dispatch_wall_str: String, // "14:20"
+}
+
+struct App {
+    /// Four visible slots for the current page. None = empty.
+    slots: [Option<AgentSlot>; 4],
+    current_page: usize,
+    total_pages: usize,
+    /// 0-indexed into slots[] for the currently targeted pane.
+    target: usize,
+    mode: Mode,
+    /// Whether the previous key in Input mode was Escape (for double-Escape passthrough).
+    last_was_escape: bool,
+    radio_state: RadioState,
+    psk: String,
+    psk_expanded: bool,
+    active_count: usize,
+    max_agents: usize,
+}
+
+impl App {
+    fn new(psk: String, max_agents: usize, task_id: Option<String>) -> Self {
+        let wall = Local::now().format("%H:%M").to_string();
+        let alpha = AgentSlot {
+            callsign: NATO[0].to_string(),
+            tool: "claude-code".to_string(),
+            task_id,
+            dispatch_time: Instant::now(),
+            dispatch_wall_str: wall,
+        };
+        App {
+            slots: [Some(alpha), None, None, None],
+            current_page: 0,
+            total_pages: 1,
+            target: 0,
+            mode: Mode::Command,
+            last_was_escape: false,
+            radio_state: RadioState::Disconnected,
+            psk,
+            psk_expanded: false,
+            active_count: 1,
+            max_agents,
+        }
+    }
+
+    fn slot_number(&self, idx: usize) -> usize {
+        self.current_page * 4 + idx + 1
+    }
+
+    fn psk_display(&self) -> String {
+        if self.psk_expanded || self.psk.len() <= 4 {
+            self.psk.clone()
+        } else {
+            format!("{}...", &self.psk[..4])
+        }
+    }
+}
+
+// ── helpers ───────────────────────────────────────────────────────────────────
+
+fn format_runtime(elapsed: Duration) -> String {
+    let s = elapsed.as_secs();
+    format!("{}m{:02}s", s / 60, s % 60)
 }
 
 /// Run `bd create "{prompt}" -t task --json` and return the task ID.
@@ -231,6 +327,223 @@ fn screen_to_lines(screen: &vt100::Screen) -> Vec<Line<'static>> {
     lines
 }
 
+// ── rendering ─────────────────────────────────────────────────────────────────
+
+fn render_header(f: &mut Frame, area: Rect, app: &App) {
+    let radio_span = match app.radio_state {
+        RadioState::Connected => Span::styled(
+            "● CONNECTED",
+            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+        ),
+        RadioState::Disconnected => Span::styled(
+            "● DISCONNECTED",
+            Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+        ),
+    };
+
+    let clock = Local::now().format("%H:%M").to_string();
+    let right = format!(
+        "   PSK: {}   AGENTS: {}/{}  PAGE {}/{}  {}",
+        app.psk_display(),
+        app.active_count,
+        app.max_agents,
+        app.current_page + 1,
+        app.total_pages,
+        clock,
+    );
+
+    let status_line = Line::from(vec![
+        Span::raw(" RADIO: "),
+        radio_span,
+        Span::styled(right, Style::default().fg(Color::White)),
+    ]);
+
+    let block = Block::default()
+        .title(Span::styled(
+            " DISPATCH ",
+            Style::default()
+                .fg(Color::Green)
+                .add_modifier(Modifier::BOLD),
+        ))
+        .borders(Borders::ALL)
+        .border_style(Style::default().fg(Color::Green));
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+    f.render_widget(Paragraph::new(status_line), inner);
+}
+
+/// Build the 4-line info strip for one pane.
+fn pane_info_strip(slot_idx: usize, app: &App) -> Text<'static> {
+    let slot_num = app.slot_number(slot_idx);
+    let is_target = app.target == slot_idx;
+
+    let marker_str = if is_target { "▸ " } else { "  " };
+    let marker_style = if is_target {
+        match app.mode {
+            Mode::Command => Style::default().fg(Color::Cyan),
+            Mode::Input => Style::default().fg(Color::Green),
+        }
+    } else {
+        Style::default()
+    };
+
+    match &app.slots[slot_idx] {
+        None => {
+            let line1 = Line::from(vec![
+                Span::styled(marker_str.to_string(), marker_style),
+                Span::styled(
+                    format!("[{}] -- STANDBY --", slot_num),
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ]);
+            let sep = Line::from(Span::styled(
+                "┄".repeat(40),
+                Style::default().fg(Color::DarkGray),
+            ));
+            Text::from(vec![line1, Line::default(), Line::default(), sep])
+        }
+        Some(agent) => {
+            let line1 = Line::from(vec![
+                Span::styled(marker_str.to_string(), marker_style),
+                Span::styled(
+                    format!("[{}] {}", slot_num, agent.callsign),
+                    Style::default().add_modifier(Modifier::BOLD),
+                ),
+            ]);
+
+            let task_span = match &agent.task_id {
+                Some(id) => Span::styled(id.clone(), Style::default().fg(Color::Yellow)),
+                None => Span::styled("idle", Style::default().fg(Color::DarkGray)),
+            };
+            let line2 = Line::from(vec![
+                Span::styled(
+                    format!("  {} | ", agent.tool.to_uppercase()),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                task_span,
+            ]);
+
+            let runtime = format_runtime(agent.dispatch_time.elapsed());
+            let line3 = Line::from(Span::styled(
+                format!("  dispatched {} | {}", agent.dispatch_wall_str, runtime),
+                Style::default().fg(Color::DarkGray),
+            ));
+
+            let sep = Line::from(Span::styled(
+                "┄".repeat(40),
+                Style::default().fg(Color::DarkGray),
+            ));
+
+            Text::from(vec![line1, line2, line3, sep])
+        }
+    }
+}
+
+fn render_pane(
+    f: &mut Frame,
+    area: Rect,
+    slot_idx: usize,
+    app: &App,
+    vt_lines: Option<Vec<Line<'static>>>,
+) {
+    let is_target = app.target == slot_idx;
+    let border_style = if is_target {
+        match app.mode {
+            Mode::Command => Style::default().fg(Color::Cyan),
+            Mode::Input => Style::default().fg(Color::Green),
+        }
+    } else {
+        Style::default().fg(Color::DarkGray)
+    };
+
+    let block = Block::default()
+        .borders(Borders::ALL)
+        .border_style(border_style);
+
+    let inner = block.inner(area);
+    f.render_widget(block, area);
+
+    // Split inner: 4 lines for info strip, rest for terminal
+    let chunks = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Length(4), Constraint::Min(0)])
+        .split(inner);
+
+    let info = pane_info_strip(slot_idx, app);
+    f.render_widget(Paragraph::new(info), chunks[0]);
+
+    if let Some(lines) = vt_lines {
+        f.render_widget(Paragraph::new(Text::from(lines)), chunks[1]);
+    }
+}
+
+fn render_panes(f: &mut Frame, area: Rect, app: &App, vt_lines: Vec<Line<'static>>) {
+    let cols = Layout::default()
+        .direction(Direction::Horizontal)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(area);
+
+    let left_rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(cols[0]);
+    let right_rows = Layout::default()
+        .direction(Direction::Vertical)
+        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+        .split(cols[1]);
+
+    // top-left=slot0, top-right=slot1, bottom-left=slot2, bottom-right=slot3
+    render_pane(f, left_rows[0], 0, app, Some(vt_lines));
+    render_pane(f, right_rows[0], 1, app, None);
+    render_pane(f, left_rows[1], 2, app, None);
+    render_pane(f, right_rows[1], 3, app, None);
+}
+
+fn render_footer(f: &mut Frame, area: Rect, app: &App) {
+    let target_callsign = match &app.slots[app.target] {
+        Some(a) => a.callsign.clone(),
+        None => format!("[{}]", app.slot_number(app.target)),
+    };
+
+    let content = match app.mode {
+        Mode::Command => {
+            let radio_label = match app.radio_state {
+                RadioState::Connected => "RADIO CONNECTED",
+                RadioState::Disconnected => "RADIO IDLE",
+            };
+            Line::from(vec![
+                Span::styled(" ▸ ", Style::default().fg(Color::Cyan)),
+                Span::styled(radio_label, Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!(" │ TARGET: {} │ ", target_callsign),
+                    Style::default().fg(Color::White),
+                ),
+                Span::styled(
+                    "i/Enter input │ 1-4 select │ p psk │ q quit",
+                    Style::default().fg(Color::DarkGray),
+                ),
+            ])
+        }
+        Mode::Input => Line::from(vec![
+            Span::styled(
+                format!(" -- INPUT ({}) --", target_callsign),
+                Style::default()
+                    .fg(Color::Green)
+                    .add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                "                              ESC exit │ ESC ESC send Esc to PTY",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]),
+    };
+
+    f.render_widget(Paragraph::new(content), area);
+}
+
+// ── main ──────────────────────────────────────────────────────────────────────
+
 fn main() -> io::Result<()> {
     let cli = Cli::parse();
 
@@ -254,7 +567,6 @@ fn main() -> io::Result<()> {
 
     // Load (or create) config on startup.
     let cfg = config::load_or_create();
-    let psk_short: String = cfg.auth.psk.chars().take(8).collect();
 
     // dispatch-bgz.9: beads task lifecycle
     // Slot 1 callsign is Alpha by convention (NATO phonetic alphabet, dispatch order)
@@ -269,13 +581,7 @@ fn main() -> io::Result<()> {
         bd_assign_task(id, CALLSIGN);
     }
 
-    // Info strip: callsign, task ID, PSK prefix
-    let task_label = match &task_id {
-        Some(id) => format!(" | task: {id}"),
-        None => " | bd: unavailable".to_string(),
-    };
-
-    // Set up the PTY (dispatch-e0k.1)
+    // Create the PTY for slot 0 (Alpha)
     let pty_system = native_pty_system();
     let pair = pty_system
         .openpty(PtySize {
@@ -286,13 +592,12 @@ fn main() -> io::Result<()> {
         })
         .expect("failed to open PTY");
 
-    // Spawn `claude` (or fall back to shell for testing)
     let cmd = CommandBuilder::new("claude");
     let _child = pair
         .slave
         .spawn_command(cmd)
         .or_else(|_| {
-            // Fallback: open a shell so the PoC can be tested without claude installed
+            // Fallback: open a shell for testing without claude installed
             let shell = if cfg!(windows) { "cmd" } else { "bash" };
             pair.slave.spawn_command(CommandBuilder::new(shell))
         })
@@ -315,8 +620,7 @@ fn main() -> io::Result<()> {
             match pty_reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
-                    let mut parser = screen_writer.lock().unwrap();
-                    parser.process(&buf[..n]);
+                    screen_writer.lock().unwrap().process(&buf[..n]);
                 }
             }
         }
@@ -334,20 +638,18 @@ fn main() -> io::Result<()> {
         let _ = pty_writer.flush();
     }
 
-    // Set up ratatui terminal
+    // Terminal setup
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
-    // 4. Pane info strip: callsign, task ID, PSK prefix
-    let title_base = format!("DISPATCH | {CALLSIGN}{task_label}  |  psk: {psk_short}...");
-
-    // Modal input state (dispatch-bgz.4)
-    let mut mode = InputMode::Command;
-    // Track whether the previous key in Input mode was an Escape (for double-Escape passthrough).
-    let mut last_was_escape = false;
+    let mut app = App::new(
+        cfg.auth.psk.clone(),
+        cfg.terminal.max_agents as usize,
+        task_id.clone(),
+    );
 
     // Track exit reason to determine task close vs reopen (dispatch-bgz.9)
     let mut agent_terminated = false;
@@ -358,121 +660,97 @@ fn main() -> io::Result<()> {
             break;
         }
 
-        // Render
-        {
+        // Snapshot VT screen for slot 0 (Alpha's PTY)
+        let vt_lines = {
             let parser = screen.lock().unwrap();
-            let vt_screen = parser.screen();
-            let lines = screen_to_lines(vt_screen);
-            let text = Text::from(lines);
+            screen_to_lines(parser.screen())
+        };
 
-            // Mode indicator and help text vary by mode.
-            let (mode_label, help_text, border_color) = match mode {
-                InputMode::Command => (
-                    " [COMMAND]",
-                    " Enter/i: input mode  |  Ctrl+Q: quit",
-                    Color::Green,
-                ),
-                InputMode::Input => (
-                    " [INPUT]",
-                    " Esc: command mode  |  Esc Esc: send Esc to PTY",
-                    Color::Yellow,
-                ),
-            };
+        terminal.draw(|f| {
+            let full = f.area();
+            let chunks = Layout::default()
+                .direction(Direction::Vertical)
+                .constraints([
+                    Constraint::Length(3), // header bar
+                    Constraint::Min(0),    // quad pane
+                    Constraint::Length(1), // footer bar
+                ])
+                .split(full);
 
-            let title = format!("{title_base}{mode_label}");
+            render_header(f, chunks[0], &app);
+            render_panes(f, chunks[1], &app, vt_lines.clone());
+            render_footer(f, chunks[2], &app);
+        })?;
 
-            terminal.draw(|frame| {
-                let chunks = Layout::default()
-                    .direction(Direction::Vertical)
-                    .constraints([Constraint::Min(0), Constraint::Length(1)])
-                    .split(frame.area());
-
-                let block = Block::default()
-                    .title(Span::styled(
-                        title.as_str(),
-                        Style::default()
-                            .fg(border_color)
-                            .add_modifier(Modifier::BOLD),
-                    ))
-                    .borders(Borders::ALL)
-                    .border_style(Style::default().fg(border_color));
-
-                let inner = block.inner(chunks[0]);
-                frame.render_widget(block, chunks[0]);
-                frame.render_widget(Paragraph::new(text), inner);
-
-                let help = Span::styled(
-                    help_text,
-                    Style::default().fg(Color::DarkGray),
-                );
-                frame.render_widget(Paragraph::new(Line::from(help)), chunks[1]);
-            })?;
-        }
-
-        // Poll for input
         if event::poll(Duration::from_millis(16))? {
             if let Event::Key(key) = event::read()? {
-                match mode {
-                    // ----------------------------------------------------------------
-                    // Command mode: keystrokes control the console.
-                    // ----------------------------------------------------------------
-                    InputMode::Command => {
-                        // Quit on Ctrl+Q (always available in command mode).
-                        if key.code == KeyCode::Char('q')
-                            && key.modifiers.contains(KeyModifiers::CONTROL)
-                        {
-                            agent_terminated = true;
-                            break;
-                        }
-
-                        // Enter or 'i' transitions to Input mode.
-                        if key.code == KeyCode::Enter
-                            || (key.code == KeyCode::Char('i')
-                                && key.modifiers.is_empty())
-                        {
-                            mode = InputMode::Input;
-                            last_was_escape = false;
-                            continue;
-                        }
-
-                        // TODO: additional command-mode bindings (pane navigation, etc.)
-                        // will be added as part of the quad-pane layout epic.
-                    }
-
+                match app.mode {
                     // ----------------------------------------------------------------
                     // Input mode: keystrokes go to the PTY.
-                    // Escape is the only key the console intercepts here.
+                    // Escape is the only key the console intercepts.
                     // Double-Escape passes one literal Escape byte to the PTY.
-                    // Radio voice commands are handled at a higher layer (always active).
                     // ----------------------------------------------------------------
-                    InputMode::Input => {
+                    Mode::Input => {
                         if key.code == KeyCode::Esc {
-                            if last_was_escape {
+                            if app.last_was_escape {
                                 // Double-Escape: send one literal Escape to PTY, stay in Input mode.
-                                let _ = pty_writer.write_all(b"\x1b");
-                                let _ = pty_writer.flush();
-                                last_was_escape = false;
+                                if app.target == 0 {
+                                    let _ = pty_writer.write_all(b"\x1b");
+                                    let _ = pty_writer.flush();
+                                }
+                                app.last_was_escape = false;
                             } else {
-                                // First Escape: wait to see if a second Escape follows.
-                                last_was_escape = true;
+                                // First Escape: wait to see if a second follows.
+                                app.last_was_escape = true;
                             }
                             continue;
                         }
 
-                        if last_was_escape {
-                            // Single Escape was pressed before this non-Escape key:
-                            // switch to command mode and discard the current key.
-                            mode = InputMode::Command;
-                            last_was_escape = false;
+                        if app.last_was_escape {
+                            // Single Escape then non-Escape: exit input mode.
+                            app.mode = Mode::Command;
+                            app.last_was_escape = false;
                             continue;
                         }
 
-                        let bytes = key_to_pty_bytes(&key);
-                        if !bytes.is_empty() {
-                            let _ = pty_writer.write_all(&bytes);
-                            let _ = pty_writer.flush();
+                        // Forward to PTY only for slot 0 (the only slot with a PTY in PoC)
+                        if app.target == 0 {
+                            let bytes = key_to_pty_bytes(&key);
+                            if !bytes.is_empty() {
+                                let _ = pty_writer.write_all(&bytes);
+                                let _ = pty_writer.flush();
+                            }
                         }
                     }
+
+                    // ----------------------------------------------------------------
+                    // Command mode: keystrokes control the console.
+                    // ----------------------------------------------------------------
+                    Mode::Command => match key.code {
+                        KeyCode::Char('q') => {
+                            agent_terminated = true;
+                            break;
+                        }
+
+                        // Enter input mode
+                        KeyCode::Enter | KeyCode::Char('i') => {
+                            app.mode = Mode::Input;
+                            app.last_was_escape = false;
+                        }
+
+                        // Select target slot (1-4 on current page)
+                        KeyCode::Char('1') => app.target = 0,
+                        KeyCode::Char('2') => app.target = 1,
+                        KeyCode::Char('3') => app.target = 2,
+                        KeyCode::Char('4') => app.target = 3,
+
+                        // Toggle PSK expansion
+                        KeyCode::Char('p') => {
+                            app.psk_expanded = !app.psk_expanded;
+                        }
+
+                        _ => {}
+                    },
                 }
             }
         }
