@@ -601,6 +601,28 @@ writer.write_all(format!("{}\r", prompt_text).as_bytes())?;
 
 When the console window is resized, each PTY is notified via `pty.master.resize()` and the VTE parser dimensions are updated. The terminal content reflows.
 
+Resize events are debounced with a **100ms delay**. When a resize event arrives, any pending resize is cancelled and a fresh 100ms timer starts. Only after 100ms of no further resize events are the PTYs and `vt100::Parser` dimensions actually updated. This prevents rendering artifacts from resize storms during window drag on all platforms (including Windows ConPTY, which has higher per-resize overhead).
+
+```rust
+// Pseudocode: debounced resize in the event loop
+let mut resize_deadline: Option<tokio::time::Instant> = None;
+
+// On crossterm resize event:
+resize_deadline = Some(tokio::time::Instant::now() + Duration::from_millis(100));
+
+// In the tick/select loop, after 100ms elapses:
+if let Some(deadline) = resize_deadline {
+    if tokio::time::Instant::now() >= deadline {
+        resize_deadline = None;
+        let (cols, rows) = crossterm::terminal::size()?;
+        for slot in active_slots.iter_mut() {
+            slot.pty_master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })?;
+            slot.vte_parser.set_size(rows, cols);
+        }
+    }
+}
+```
+
 **Agent termination:**
 
 The child process is killed, the PTY is closed, and the slot is marked empty. Any active beads task for that agent is updated to `open` (unassigned) so it can be picked up later.
@@ -853,7 +875,7 @@ Radio:
 
 7. **`bd` CLI availability**: the console requires `bd` on PATH. Should detect and warn on startup if missing, with a link to install instructions.
 
-8. **PTY size synchronization**: each pane's terminal size depends on the console window dimensions divided by the quad layout. Rapid resizing may cause brief rendering artifacts. Debounce resize events.
+8. ~~**PTY size synchronization**~~ **Resolved (dispatch-dvo)**: debounce resize events with a 100ms delay. See [Terminal resize](#pty-management) for the implementation pattern.
 
 9. **Concurrent `bd` calls**: if multiple agents finish tasks simultaneously, the console may issue concurrent `bd close` commands. Beads uses Dolt which handles concurrent writes, but worth testing under load.
 
