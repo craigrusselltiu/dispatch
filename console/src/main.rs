@@ -5,6 +5,7 @@
 // dispatch-e0k.3: bd create integration from Rust
 // dispatch-bgz.4: modal input model (command mode / input mode)
 // dispatch-bgz.5: full command mode keybindings
+// dispatch-bgz.8: WebSocket protocol (ws_server + protocol modules)
 // dispatch-bgz.9: beads task lifecycle (create, assign, close, reopen)
 // dispatch-bgz.10: pane info strip and header bar
 // dispatch-bgz.11: standby pane (empty slot display + queued task list)
@@ -16,6 +17,8 @@
 //   Footer bar  : mode indicator, target, navigation hints
 
 mod config;
+mod protocol;
+mod ws_server;
 
 use clap::{Parser, Subcommand};
 use std::{
@@ -144,10 +147,12 @@ struct App {
     input_buf: String,
     /// Open/unblocked tasks from beads, displayed in the last standby pane (dispatch-bgz.11).
     queued_tasks: Vec<QueuedTask>,
+    /// WebSocket protocol state shared with the WS server thread (dispatch-bgz.8).
+    ws_state: ws_server::SharedState,
 }
 
 impl App {
-    fn new(psk: String, max_agents: usize, task_id: Option<String>) -> Self {
+    fn new(psk: String, max_agents: usize, task_id: Option<String>, ws_state: ws_server::SharedState) -> Self {
         let wall = Local::now().format("%H:%M").to_string();
         let alpha = AgentSlot {
             callsign: NATO[0].to_string(),
@@ -171,7 +176,16 @@ impl App {
             overlay: Overlay::None,
             input_buf: String::new(),
             queued_tasks: Vec::new(),
+            ws_state,
         }
+    }
+
+    /// Returns the callsign of the WS-protocol-targeted agent (slot from last set_target message).
+    fn ws_target_callsign(&self) -> Option<String> {
+        let st = self.ws_state.lock().ok()?;
+        let slot = st.target?;
+        let idx = (slot as usize).saturating_sub(1);
+        st.slots.get(idx)?.as_ref().map(|a| a.callsign.clone())
     }
 
     fn slot_number(&self, idx: usize) -> usize {
@@ -651,15 +665,21 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
                 RadioState::Connected => "RADIO CONNECTED",
                 RadioState::Disconnected => "RADIO IDLE",
             };
+            // Show WS radio target if set (dispatch-bgz.8)
+            let ws_target_str = match app.ws_target_callsign() {
+                Some(cs) => format!(" │ WS→{} ", cs),
+                None => String::new(),
+            };
             Line::from(vec![
                 Span::styled(" ▸ ", Style::default().fg(Color::Cyan)),
                 Span::styled(radio_label, Style::default().fg(Color::DarkGray)),
                 Span::styled(
-                    format!(" │ TARGET: {} │ ", target_callsign),
+                    format!(" │ TARGET: {} ", target_callsign),
                     Style::default().fg(Color::White),
                 ),
+                Span::styled(ws_target_str, Style::default().fg(Color::Cyan)),
                 Span::styled(
-                    "i/Enter input │ 1-4 slot │ Tab cycle │ ]/[ page │ n/N dispatch │ x term │ t tasks │ p psk │ q quit │ ? help",
+                    "│ i/Enter input │ 1-4 slot │ Tab cycle │ ]/[ page │ n/N dispatch │ x term │ t tasks │ p psk │ q quit │ ? help",
                     Style::default().fg(Color::DarkGray),
                 ),
             ])
@@ -867,6 +887,19 @@ fn main() -> io::Result<()> {
     // Load (or create) config on startup.
     let cfg = config::load_or_create();
 
+    // dispatch-bgz.8: Start the WebSocket server; share state with the App for UI reads.
+    let ws_state: ws_server::SharedState = Arc::new(Mutex::new(ws_server::ConsoleState::new()));
+    {
+        let state = Arc::clone(&ws_state);
+        let psk = cfg.auth.psk.clone();
+        let port = cfg.server.port;
+        thread::spawn(move || {
+            tokio::runtime::Runtime::new()
+                .expect("tokio runtime")
+                .block_on(ws_server::run_server(state, port, psk));
+        });
+    }
+
     // dispatch-bgz.9: beads task lifecycle
     // Slot 1 callsign is Alpha by convention (NATO phonetic alphabet, dispatch order)
     const CALLSIGN: &str = "Alpha";
@@ -956,6 +989,7 @@ fn main() -> io::Result<()> {
         cfg.auth.psk.clone(),
         cfg.terminal.max_agents as usize,
         task_id.clone(),
+        ws_state,
     );
 
     // Track exit reason to determine task close vs reopen (dispatch-bgz.9)
