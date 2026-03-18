@@ -2,14 +2,14 @@
 
 > Voice-powered command center for AI coding agents.
 
-Turn your Android phone into a push-to-talk radio that dispatches tasks to AI coding agents. The PC-side TUI gives you a live quad-pane view of embedded agent terminals, backed by [Beads](https://github.com/steveyegge/beads) for structured task tracking, dependency management, and persistent memory across sessions.
+Turn your Android phone into a push-to-talk radio that dispatches tasks to AI coding agents. The PC-side TUI gives you a live quad-pane view of embedded agent terminals, with task tracking via a simple markdown file (`TASKS.md`) for dependency management and persistent memory across sessions.
 
 ## Overview
 
 Dispatch has two components:
 
 - **Dispatch Radio** (Android) -- a minimal push-to-talk app controlled via hardware volume buttons. Hold Volume Down to speak; the app transcribes speech, parses voice commands, and sends structured messages to the console over a local WebSocket connection.
-- **Dispatch Console** (PC) -- a TUI command center with up to 26 embedded terminal panes, each running a live AI agent session. Receives voice commands from the radio, manages agent lifecycles, and integrates with Beads for task orchestration. Supports direct keyboard input into any agent pane via a vim-style modal interface.
+- **Dispatch Console** (PC) -- a TUI command center with up to 26 embedded terminal panes, each running a live AI agent session. Receives voice commands from the radio, manages agent lifecycles, and tracks tasks in `TASKS.md`. Supports direct keyboard input into any agent pane via a vim-style modal interface.
 
 ```
 ┌──────────────┐     WebSocket (LAN, PSK)     ┌──────────────────┐
@@ -19,8 +19,8 @@ Dispatch has two components:
 │              │                               │                  │
 │  Volume keys │                               │  4x embedded     │
 │  Speech-to-  │                               │  terminals (PTY) │
-│  text, voice │                               │  Beads task      │
-│  commands    │                               │  orchestration   │
+│  text, voice │                               │  TASKS.md task   │
+│  commands    │                               │  tracking        │
 └──────────────┘                               └──────────────────┘
 ```
 
@@ -31,7 +31,7 @@ dispatch/
   radio/               # Android app (Kotlin, Gradle)
   console/             # PC TUI (Rust, Cargo)
   docs/                # SPEC.md and other documentation
-  .beads/              # Beads issue tracker
+  TASKS.md             # Task tracking (read/written by the console)
   AGENTS.md            # Agent workflow instructions
 ```
 
@@ -39,7 +39,7 @@ dispatch/
 
 ### Prerequisites
 
-- **Dispatch Console**: Rust toolchain (`cargo`), [`bd` CLI](https://github.com/steveyegge/beads) on PATH
+- **Dispatch Console**: Rust toolchain (`cargo`)
 - **Dispatch Radio**: Android Studio, Android device running API 28+ (Android 9+)
 - Both devices on the same local network
 
@@ -65,15 +65,7 @@ The PSK is displayed in the console header bar. You'll need it to connect the ra
 2. Build and install the app on your Android device.
 3. Enter the console's IP address and PSK in the radio's settings screen.
 
-### Beads Setup
-
-Dispatch uses Beads for task tracking. After cloning, initialize the database:
-
-```sh
-bd init
-```
-
-See `AGENTS.md` for the full agent workflow.
+Tasks are tracked in `TASKS.md` at the repo root. The console reads and writes it automatically. See `AGENTS.md` for the agent workflow.
 
 ## Usage
 
@@ -92,7 +84,7 @@ The console displays four agent panes at a time in a 2x2 grid. Each agent runs i
 | `n`               | Dispatch new agent into first empty slot            |
 | `x`               | Terminate agent in targeted slot                    |
 | `R`               | Rename agent in targeted slot                       |
-| `t`               | Show Beads task list                                |
+| `t`               | Show task list from `TASKS.md`                      |
 | `p`               | Show/hide full PSK                                  |
 | `q`               | Quit                                                |
 | `?`               | Toggle help overlay                                 |
@@ -125,7 +117,7 @@ Unaddressed prompts go to the current target. If no agents are running, the cons
 ## Key Features
 
 - **Embedded terminals** -- each pane is a real PTY, not text capture. Full color, interactive TUI apps, tab completion, Ctrl+C -- everything works.
-- **Beads integration** -- every voice prompt creates a tracked task with a persistent ID. Agents can close tasks themselves; the console also detects completion via idle prompt patterns or inactivity timeout.
+- **Markdown task tracking** -- every voice prompt creates an entry in `TASKS.md` with a persistent ID. Agents can mark tasks done themselves; the console also detects completion via idle prompt patterns or inactivity timeout.
 - **Auto-dispatch** -- send a prompt without specifying an agent and the console finds an idle agent, launches a new one, or queues the task if all slots are busy.
 - **NATO callsigns** -- agents are assigned Alpha, Bravo, Charlie, ... in dispatch order. Addressable by voice from any page.
 - **Paged layout** -- up to 26 agents across 7 pages. Off-screen agents keep running and are still addressable.
