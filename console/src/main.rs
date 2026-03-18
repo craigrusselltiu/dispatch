@@ -37,6 +37,7 @@
 mod config;
 mod mdns;
 mod protocol;
+mod tools;
 mod ws_server;
 
 use clap::{Parser, Subcommand};
@@ -464,6 +465,238 @@ impl App {
             }
         }
         line.into_iter().collect()
+    }
+
+    // ── orchestrator tool execution (dispatch-x94) ──────────────────────────
+
+    /// Execute a tool call from the orchestrator agent. Returns the result.
+    pub fn execute_tool(&mut self, call: &tools::ToolCall) -> tools::ToolResult {
+        match call {
+            tools::ToolCall::Dispatch { repo: _, prompt } => {
+                // Find an idle slot (has PTY but no task) or an empty slot.
+                let slot_idx = self.slots.iter().enumerate().find_map(|(i, s)| {
+                    match s {
+                        Some(slot) if slot.task_id.is_none() => Some(i),
+                        _ => None,
+                    }
+                }).or_else(|| {
+                    self.slots.iter().position(|s| s.is_none())
+                });
+
+                let slot_idx = match slot_idx {
+                    Some(i) => i,
+                    None => return tools::ToolResult::Error {
+                        message: "no available slots".to_string(),
+                    },
+                };
+
+                // Create task in tasks.md.
+                let task_id = match create_task_in_file(&self.repo_root, prompt) {
+                    Some(id) => id,
+                    None => return tools::ToolResult::Error {
+                        message: "failed to create task".to_string(),
+                    },
+                };
+
+                // Create worktree.
+                let worktree = create_worktree(&task_id, &self.repo_root);
+
+                // Spawn PTY if slot is empty.
+                if self.slots[slot_idx].is_none() {
+                    let cmd = self.tool_cmd("claude-code").to_string();
+                    match dispatch_slot(
+                        slot_idx, "claude-code", &cmd, self.pane_rows, self.pane_cols,
+                        worktree.as_deref(), self.scrollback_lines,
+                        repo_name_from_path(&self.repo_root),
+                    ) {
+                        Some(slot) => { self.slots[slot_idx] = Some(slot); }
+                        None => return tools::ToolResult::Error {
+                            message: "failed to spawn agent PTY".to_string(),
+                        },
+                    }
+                }
+
+                // Assign task to slot.
+                let callsign = {
+                    let slot = self.slots[slot_idx].as_mut().unwrap();
+                    update_task_in_file(&self.repo_root, &task_id, '~', Some(&slot.callsign));
+                    slot.task_id = Some(task_id.clone());
+                    slot.worktree_path = worktree;
+                    let prefixed = format!("[Dispatch task {}] {}\r", task_id, prompt);
+                    let _ = slot.writer.write_all(prefixed.as_bytes());
+                    let _ = slot.writer.flush();
+                    slot.last_output_at = Instant::now();
+                    slot.display_name().to_string()
+                };
+
+                self.push_orch(OrchestratorEventKind::TaskAssigned {
+                    id: task_id.clone(), agent: callsign.clone(), slot: slot_idx + 1,
+                });
+                self.push_ticker(format!(
+                    "DISPATCH: {} -> {} (slot {})", task_id, callsign, slot_idx + 1
+                ));
+
+                // Sync ws_state.
+                {
+                    let mut st = self.ws_state.lock().unwrap();
+                    st.slots[slot_idx] = Some(ws_server::AgentSlot {
+                        callsign: callsign.clone(),
+                        tool: "claude-code".to_string(),
+                        status: ws_server::AgentStatus::Busy,
+                        task: Some(task_id.clone()),
+                        repo: Some(repo_name_from_path(&self.repo_root).to_string()),
+                    });
+                }
+
+                tools::ToolResult::Dispatched {
+                    slot: (slot_idx + 1) as u32,
+                    callsign,
+                    task_id,
+                }
+            }
+
+            tools::ToolCall::Terminate { agent } => {
+                let (slot_occupied, callsigns): (Vec<bool>, Vec<Option<String>>) = self.slots
+                    .iter()
+                    .map(|s| match s {
+                        Some(slot) => (true, Some(slot.display_name().to_string())),
+                        None => (false, None),
+                    })
+                    .unzip();
+
+                let idx = match tools::resolve_agent(agent, &slot_occupied, &callsigns) {
+                    Some(i) => i,
+                    None => return tools::ToolResult::Error {
+                        message: format!("agent '{}' not found", agent),
+                    },
+                };
+
+                let callsign = self.slots[idx].as_ref().unwrap().display_name().to_string();
+                let task_id = terminate_slot(&mut self.slots[idx]);
+
+                // Reopen task if assigned.
+                if let Some(ref id) = task_id {
+                    update_task_in_file(&self.repo_root, id, ' ', None);
+                }
+
+                self.push_orch(OrchestratorEventKind::Terminated {
+                    agent: callsign.clone(), slot: idx + 1,
+                });
+                self.push_ticker(format!("TERMINATED: {} (slot {})", callsign, idx + 1));
+
+                // Sync ws_state.
+                {
+                    let mut st = self.ws_state.lock().unwrap();
+                    st.slots[idx] = None;
+                    if st.target == Some((idx + 1) as u32) {
+                        st.target = None;
+                    }
+                }
+
+                tools::ToolResult::Terminated {
+                    slot: (idx + 1) as u32,
+                    callsign,
+                }
+            }
+
+            tools::ToolCall::Merge { task_id } => {
+                let success = merge_worktree(task_id, &self.repo_root);
+                if success {
+                    update_task_in_file(&self.repo_root, task_id, 'x', None);
+                    self.push_orch(OrchestratorEventKind::Merged { id: task_id.clone() });
+                    self.push_ticker(format!("MERGED: task/{}", task_id));
+                    tools::ToolResult::Merged {
+                        task_id: task_id.clone(),
+                        success: true,
+                        message: format!("task/{} merged into main", task_id),
+                    }
+                } else {
+                    self.conflict_tasks.push(task_id.clone());
+                    self.push_orch(OrchestratorEventKind::MergeConflict { id: task_id.clone() });
+                    self.push_ticker(format!("CONFLICT: task/{} — merge aborted", task_id));
+                    tools::ToolResult::Merged {
+                        task_id: task_id.clone(),
+                        success: false,
+                        message: format!("merge conflict on task/{}, worktree preserved", task_id),
+                    }
+                }
+            }
+
+            tools::ToolCall::ListAgents => {
+                let agents: Vec<tools::AgentInfo> = self.slots.iter().enumerate()
+                    .filter_map(|(i, s)| {
+                        s.as_ref().map(|slot| tools::AgentInfo {
+                            slot: (i + 1) as u32,
+                            callsign: slot.display_name().to_string(),
+                            tool: slot.tool.clone(),
+                            status: if slot.task_id.is_some() { "busy".to_string() } else { "idle".to_string() },
+                            task: slot.task_id.clone(),
+                            repo: Some(slot.repo_name.clone()),
+                        })
+                    })
+                    .collect();
+                tools::ToolResult::Agents { agents }
+            }
+
+            tools::ToolCall::ListRepos => {
+                let name = repo_name_from_path(&self.repo_root).to_string();
+                let repos = vec![tools::RepoInfo {
+                    name,
+                    path: self.repo_root.clone(),
+                }];
+                tools::ToolResult::Repos { repos }
+            }
+
+            tools::ToolCall::Plan { repo: _, prompt } => {
+                if self.planner.is_some() {
+                    return tools::ToolResult::Error {
+                        message: "planner already running".to_string(),
+                    };
+                }
+                let cmd = self.tool_cmd("claude-code").to_string();
+                let rx = spawn_planner(prompt, &cmd, &self.repo_root);
+                self.planner = Some(PlannerState {
+                    prompt: prompt.clone(),
+                    receiver: rx,
+                });
+                self.push_orch(OrchestratorEventKind::PlanStart { prompt: prompt.clone() });
+                let display = if prompt.len() > 60 {
+                    format!("{}...", &prompt[..57])
+                } else {
+                    prompt.clone()
+                };
+                self.push_ticker(format!("PLANNING: {}", display));
+                tools::ToolResult::PlanStarted { prompt: prompt.clone() }
+            }
+
+            tools::ToolCall::MessageAgent { agent, text } => {
+                let (slot_occupied, callsigns): (Vec<bool>, Vec<Option<String>>) = self.slots
+                    .iter()
+                    .map(|s| match s {
+                        Some(slot) => (true, Some(slot.display_name().to_string())),
+                        None => (false, None),
+                    })
+                    .unzip();
+
+                let idx = match tools::resolve_agent(agent, &slot_occupied, &callsigns) {
+                    Some(i) => i,
+                    None => return tools::ToolResult::Error {
+                        message: format!("agent '{}' not found", agent),
+                    },
+                };
+
+                let slot = self.slots[idx].as_mut().unwrap();
+                let msg = format!("{}\r", text);
+                let _ = slot.writer.write_all(msg.as_bytes());
+                let _ = slot.writer.flush();
+                slot.last_output_at = Instant::now();
+
+                tools::ToolResult::MessageSent {
+                    agent: slot.display_name().to_string(),
+                    slot: (idx + 1) as u32,
+                }
+            }
+        }
     }
 }
 
@@ -941,7 +1174,7 @@ fn dispatch_plan_tasks(app: &mut App) -> usize {
             let worktree = create_worktree(&task.id, &repo_root);
             if let Some(slot) = dispatch_slot(
                 slot_idx, "claude-code", &tool_cmd, pane_rows, pane_cols,
-                worktree.as_deref(), scrollback,
+                worktree.as_deref(), scrollback, repo_name_from_path(&repo_root),
             ) {
                 app.slots[slot_idx] = Some(slot);
             } else {
@@ -2293,7 +2526,7 @@ fn main() -> io::Result<()> {
     let claude_cmd = app.tool_cmd("claude-code").to_string();
     if let Some(mut slot) = dispatch_slot(
         0, "claude-code", &claude_cmd, pane_rows, pane_cols,
-        startup_worktree.as_deref(), app.scrollback_lines,
+        startup_worktree.as_deref(), app.scrollback_lines, repo_name_from_path(&repo_root),
     ) {
         // dispatch-1lc.3: task lifecycle via .dispatch/tasks.md
         if let Some(id) = &startup_task_id {
@@ -2502,7 +2735,7 @@ fn main() -> io::Result<()> {
                             let worktree = create_worktree(&id, &app.repo_root);
                             if let Some(mut slot) = dispatch_slot(
                                 g, "claude-code", &cmd, app.pane_rows, app.pane_cols,
-                                worktree.as_deref(), app.scrollback_lines,
+                                worktree.as_deref(), app.scrollback_lines, repo_name_from_path(&app.repo_root),
                             ) {
                                 update_task_in_file(&app.repo_root, &id, '~', Some(&slot.callsign));
                                 let prefixed = format!("[Dispatch task {id}] {prompt}\r");
@@ -2532,7 +2765,7 @@ fn main() -> io::Result<()> {
                         if app.slots[g].is_none() {
                             let cmd = app.tool_cmd("claude-code").to_string();
                             if let Some(s) = dispatch_slot(
-                                g, "claude-code", &cmd, app.pane_rows, app.pane_cols, None, app.scrollback_lines,
+                                g, "claude-code", &cmd, app.pane_rows, app.pane_cols, None, app.scrollback_lines, repo_name_from_path(&app.repo_root),
                             ) {
                                 let name = s.display_name().to_string();
                                 app.push_orch(OrchestratorEventKind::Dispatched { agent: name.clone(), slot: g + 1, tool: "claude-code".to_string() });
@@ -2750,7 +2983,7 @@ fn main() -> io::Result<()> {
                                                 if app.slots[g].is_none() {
                                                     let cmd = app.tool_cmd("claude-code").to_string();
                                                     if let Some(slot) = dispatch_slot(
-                                                        g, "claude-code", &cmd, app.pane_rows, app.pane_cols, None, app.scrollback_lines,
+                                                        g, "claude-code", &cmd, app.pane_rows, app.pane_cols, None, app.scrollback_lines, repo_name_from_path(&app.repo_root),
                                                     ) {
                                                         let name = slot.display_name().to_string();
                                                         app.push_orch(OrchestratorEventKind::Dispatched { agent: name.clone(), slot: g + 1, tool: "claude-code".to_string() });
@@ -2871,7 +3104,7 @@ fn main() -> io::Result<()> {
                                     if let Some(g) = app.slots.iter().position(|s| s.is_none()) {
                                         let cmd = app.tool_cmd("claude-code").to_string();
                                         if let Some(slot) = dispatch_slot(
-                                            g, "claude-code", &cmd, app.pane_rows, app.pane_cols, None, app.scrollback_lines,
+                                            g, "claude-code", &cmd, app.pane_rows, app.pane_cols, None, app.scrollback_lines, repo_name_from_path(&app.repo_root),
                                         ) {
                                             let page = g / SLOTS_PER_PAGE;
                                             let local = g % SLOTS_PER_PAGE;
