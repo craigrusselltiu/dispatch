@@ -10,6 +10,7 @@
 // dispatch-bgz.10: pane info strip and header bar
 // dispatch-bgz.11: standby pane (empty slot display + queued task list)
 // dispatch-bgz.12: config file and CLI subcommands
+// dispatch-bgz.1: quad-pane TUI layout with multi-page support
 //
 // Layout:
 //   Header bar  : DISPATCH title, radio state, PSK, agent count, PAGE X/Y, clock
@@ -127,11 +128,11 @@ struct QueuedTask {
 }
 
 struct App {
-    /// Four visible slots for the current page. None = empty.
-    slots: [Option<AgentSlot>; 4],
+    /// All agent slots (length = max_agents). Index = global slot number - 1.
+    slots: Vec<Option<AgentSlot>>,
     current_page: usize,
     total_pages: usize,
-    /// 0-indexed into slots[] for the currently targeted pane.
+    /// 0-indexed into the current page's 4 slots (0-3) for the targeted pane.
     target: usize,
     mode: Mode,
     /// Whether the previous key in Input mode was Escape (for double-Escape passthrough).
@@ -161,10 +162,13 @@ impl App {
             dispatch_time: Instant::now(),
             dispatch_wall_str: wall,
         };
+        let mut slots: Vec<Option<AgentSlot>> = (0..max_agents).map(|_| None).collect();
+        slots[0] = Some(alpha);
+        let total_pages = (max_agents + 3) / 4;
         App {
-            slots: [Some(alpha), None, None, None],
+            slots,
             current_page: 0,
-            total_pages: 1,
+            total_pages,
             target: 0,
             mode: Mode::Command,
             last_was_escape: false,
@@ -188,8 +192,9 @@ impl App {
         st.slots.get(idx)?.as_ref().map(|a| a.callsign.clone())
     }
 
-    fn slot_number(&self, idx: usize) -> usize {
-        self.current_page * 4 + idx + 1
+    /// Global slot index for the currently targeted pane.
+    fn global_target(&self) -> usize {
+        self.current_page * 4 + self.target
     }
 
     fn psk_display(&self) -> String {
@@ -200,17 +205,17 @@ impl App {
         }
     }
 
-    /// True if `slot_idx` is the last empty slot on the last page (dispatch-bgz.11).
-    fn is_last_standby(&self, slot_idx: usize) -> bool {
-        if self.slots[slot_idx].is_some() {
+    /// True if `global_idx` is the last empty slot on the last page (dispatch-bgz.11).
+    fn is_last_standby(&self, global_idx: usize) -> bool {
+        if self.slots[global_idx].is_some() {
             return false;
         }
         // Only applies to the last page
-        if self.current_page != self.total_pages - 1 {
+        if global_idx / 4 != self.total_pages - 1 {
             return false;
         }
-        // No later empty slot on this page
-        for i in (slot_idx + 1)..4 {
+        // No later slot on the last page is also empty
+        for i in (global_idx + 1)..self.slots.len() {
             if self.slots[i].is_none() {
                 return false;
             }
@@ -467,9 +472,10 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
 }
 
 /// Build the 4-line info strip for one pane.
-fn pane_info_strip(slot_idx: usize, app: &App) -> Text<'static> {
-    let slot_num = app.slot_number(slot_idx);
-    let is_target = app.target == slot_idx;
+/// `local_idx`: 0-3 position on current page; `global_idx`: index into app.slots.
+fn pane_info_strip(local_idx: usize, global_idx: usize, app: &App) -> Text<'static> {
+    let slot_num = global_idx + 1;
+    let is_target = app.target == local_idx;
 
     let marker_str = if is_target { "▸ " } else { "  " };
     let marker_style = if is_target {
@@ -481,7 +487,7 @@ fn pane_info_strip(slot_idx: usize, app: &App) -> Text<'static> {
         Style::default()
     };
 
-    match &app.slots[slot_idx] {
+    match &app.slots[global_idx] {
         None => {
             let line1 = Line::from(vec![
                 Span::styled(marker_str.to_string(), marker_style),
@@ -536,11 +542,11 @@ fn pane_info_strip(slot_idx: usize, app: &App) -> Text<'static> {
 /// Build the standby body lines for an empty pane (dispatch-bgz.11).
 ///
 /// The last standby slot on the last page shows queued tasks; all others show dispatch shortcuts.
-fn standby_body(slot_idx: usize, app: &App) -> Vec<Line<'static>> {
+fn standby_body(global_idx: usize, app: &App) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push(Line::from(""));
 
-    if app.is_last_standby(slot_idx) {
+    if app.is_last_standby(global_idx) {
         // Last standby on the last page: show queued task count and truncated titles
         lines.push(Line::from(Span::styled(
             format!(" Queued tasks: {}", app.queued_tasks.len()),
@@ -591,11 +597,12 @@ fn standby_body(slot_idx: usize, app: &App) -> Vec<Line<'static>> {
 fn render_pane(
     f: &mut Frame,
     area: Rect,
-    slot_idx: usize,
+    local_idx: usize,
+    global_idx: usize,
     app: &App,
     vt_lines: Option<Vec<Line<'static>>>,
 ) {
-    let is_target = app.target == slot_idx;
+    let is_target = app.target == local_idx;
     let border_style = if is_target {
         match app.mode {
             Mode::Command => Style::default().fg(Color::Cyan),
@@ -618,7 +625,7 @@ fn render_pane(
         .constraints([Constraint::Length(4), Constraint::Min(0)])
         .split(inner);
 
-    let info = pane_info_strip(slot_idx, app);
+    let info = pane_info_strip(local_idx, global_idx, app);
     f.render_widget(Paragraph::new(info), chunks[0]);
 
     if let Some(lines) = vt_lines {
@@ -626,7 +633,7 @@ fn render_pane(
         f.render_widget(Paragraph::new(Text::from(lines)), chunks[1]);
     } else {
         // Standby pane: show dispatch shortcuts or queued task list (dispatch-bgz.11)
-        let body = standby_body(slot_idx, app);
+        let body = standby_body(global_idx, app);
         f.render_widget(Paragraph::new(body), chunks[1]);
     }
 }
@@ -646,17 +653,24 @@ fn render_panes(f: &mut Frame, area: Rect, app: &App, vt_lines: Vec<Line<'static
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
         .split(cols[1]);
 
-    // top-left=slot0, top-right=slot1, bottom-left=slot2, bottom-right=slot3
-    render_pane(f, left_rows[0], 0, app, Some(vt_lines));
-    render_pane(f, right_rows[0], 1, app, None);
-    render_pane(f, left_rows[1], 2, app, None);
-    render_pane(f, right_rows[1], 3, app, None);
+    // top-left=local0, top-right=local1, bottom-left=local2, bottom-right=local3
+    // global_idx = current_page * 4 + local_idx
+    let page_start = app.current_page * 4;
+    // PTY is only wired to slot 0 (Alpha); other slots are standby
+    let pty_slot = |global: usize| -> Option<Vec<Line<'static>>> {
+        if global == 0 { Some(vt_lines.clone()) } else { None }
+    };
+    render_pane(f, left_rows[0], 0, page_start,     app, pty_slot(page_start));
+    render_pane(f, right_rows[0], 1, page_start + 1, app, pty_slot(page_start + 1));
+    render_pane(f, left_rows[1], 2, page_start + 2, app, pty_slot(page_start + 2));
+    render_pane(f, right_rows[1], 3, page_start + 3, app, pty_slot(page_start + 3));
 }
 
 fn render_footer(f: &mut Frame, area: Rect, app: &App) {
-    let target_callsign = match &app.slots[app.target] {
+    let global = app.global_target();
+    let target_callsign = match &app.slots[global] {
         Some(a) => a.callsign.clone(),
-        None => format!("[{}]", app.slot_number(app.target)),
+        None => format!("[{}]", global + 1),
     };
 
     let content = match app.mode {
@@ -762,30 +776,33 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
 }
 
 fn render_task_list_overlay(f: &mut Frame, area: Rect, app: &App) {
-    let r = centered_rect(54, 14, area);
+    // Show only active (non-empty) slots across all pages
+    let active: Vec<(usize, &AgentSlot)> = app.slots.iter().enumerate()
+        .filter_map(|(i, s)| s.as_ref().map(|a| (i, a)))
+        .collect();
+    let height = (active.len() + 4).max(6) as u16;
+    let r = centered_rect(54, height, area);
     f.render_widget(Clear, r);
     let mut lines = vec![Line::default()];
-    for (i, slot) in app.slots.iter().enumerate() {
-        let slot_num = app.slot_number(i);
-        match slot {
-            None => lines.push(Line::from(Span::styled(
-                format!("  [{}]  -- empty --", slot_num),
-                Style::default().fg(Color::DarkGray),
-            ))),
-            Some(a) => {
-                let task = a.task_id.as_deref().unwrap_or("no task");
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        format!("  [{}]  {}", slot_num, a.callsign),
-                        Style::default().add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(
-                        format!("  {}", task),
-                        Style::default().fg(Color::Yellow),
-                    ),
-                ]));
-            }
-        }
+    if active.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  (no active agents)",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    for (global_idx, a) in &active {
+        let slot_num = global_idx + 1;
+        let task = a.task_id.as_deref().unwrap_or("no task");
+        lines.push(Line::from(vec![
+            Span::styled(
+                format!("  [{}]  {}", slot_num, a.callsign),
+                Style::default().add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(
+                format!("  {}", task),
+                Style::default().fg(Color::Yellow),
+            ),
+        ]));
     }
     lines.push(Line::default());
     lines.push(Line::from(Span::styled(
@@ -833,7 +850,7 @@ fn render_confirm_overlay(f: &mut Frame, area: Rect, title: &str, body: &str) {
 fn render_dispatch_overlay(f: &mut Frame, area: Rect, app: &App) {
     let r = centered_rect(50, 7, area);
     f.render_widget(Clear, r);
-    let total_slots = app.total_pages * 4;
+    let total_slots = app.slots.len();
     let lines = vec![
         Line::default(),
         Line::from(Span::styled(
@@ -1039,9 +1056,10 @@ fn main() -> io::Result<()> {
                     "Agents are running. Really quit?",
                 ),
                 Overlay::ConfirmTerminate => {
-                    let callsign = match &app.slots[app.target] {
+                    let global = app.global_target();
+                    let callsign = match &app.slots[global] {
                         Some(a) => a.callsign.clone(),
-                        None => format!("slot {}", app.target + 1),
+                        None => format!("slot {}", global + 1),
                     };
                     render_confirm_overlay(
                         f,
@@ -1066,7 +1084,7 @@ fn main() -> io::Result<()> {
                         if key.code == KeyCode::Esc {
                             if app.last_was_escape {
                                 // Double-Escape: send one literal Escape to PTY, stay in Input mode.
-                                if app.target == 0 {
+                                if app.global_target() == 0 {
                                     let _ = pty_writer.write_all(b"\x1b");
                                     let _ = pty_writer.flush();
                                 }
@@ -1086,7 +1104,7 @@ fn main() -> io::Result<()> {
                         }
 
                         // Forward to PTY only for slot 0 (the only slot with a PTY in PoC)
-                        if app.target == 0 {
+                        if app.global_target() == 0 {
                             let bytes = key_to_pty_bytes(&key);
                             if !bytes.is_empty() {
                                 let _ = pty_writer.write_all(&bytes);
@@ -1118,7 +1136,8 @@ fn main() -> io::Result<()> {
                                 Overlay::ConfirmTerminate => match key.code {
                                     KeyCode::Char('y') | KeyCode::Char('Y') => {
                                         // Terminate the targeted slot.
-                                        app.slots[app.target] = None;
+                                        let global = app.global_target();
+                                        app.slots[global] = None;
                                         if app.active_count > 0 {
                                             app.active_count -= 1;
                                         }
@@ -1138,20 +1157,21 @@ fn main() -> io::Result<()> {
                                     }
                                     KeyCode::Enter => {
                                         if let Ok(n) = app.input_buf.trim().parse::<usize>() {
-                                            let total = app.total_pages * 4;
+                                            let total = app.slots.len();
                                             if n >= 1 && n <= total {
-                                                let page = (n - 1) / 4;
-                                                let idx = (n - 1) % 4;
-                                                // Switch to the page and target slot
+                                                let global = n - 1;
+                                                let page = global / 4;
+                                                let local_idx = global % 4;
+                                                // Auto-navigate to the page and target slot
                                                 app.current_page = page;
-                                                app.target = idx;
+                                                app.target = local_idx;
                                                 // Dispatch: fill slot if empty
-                                                if app.slots[idx].is_none() {
+                                                if app.slots[global].is_none() {
                                                     let callsign = NATO
-                                                        .get((page * 4 + idx) % NATO.len())
+                                                        .get(global % NATO.len())
                                                         .unwrap_or(&"AGENT");
                                                     let wall = Local::now().format("%H:%M").to_string();
-                                                    app.slots[idx] = Some(AgentSlot {
+                                                    app.slots[global] = Some(AgentSlot {
                                                         callsign: callsign.to_string(),
                                                         tool: "claude-code".to_string(),
                                                         task_id: None,
@@ -1241,17 +1261,16 @@ fn main() -> io::Result<()> {
                                     }
                                 }
 
-                                // Dispatch into first empty slot
+                                // Dispatch into first empty slot (across all pages)
                                 KeyCode::Char('n') => {
-                                    if let Some(idx) =
+                                    if let Some(global) =
                                         app.slots.iter().position(|s| s.is_none())
                                     {
-                                        let global = app.current_page * 4 + idx;
                                         let callsign = NATO
                                             .get(global % NATO.len())
                                             .unwrap_or(&"AGENT");
                                         let wall = Local::now().format("%H:%M").to_string();
-                                        app.slots[idx] = Some(AgentSlot {
+                                        app.slots[global] = Some(AgentSlot {
                                             callsign: callsign.to_string(),
                                             tool: "claude-code".to_string(),
                                             task_id: None,
@@ -1259,7 +1278,9 @@ fn main() -> io::Result<()> {
                                             dispatch_wall_str: wall,
                                         });
                                         app.active_count += 1;
-                                        app.target = idx;
+                                        // Auto-navigate to the page containing the new slot
+                                        app.current_page = global / 4;
+                                        app.target = global % 4;
                                     }
                                 }
 
@@ -1271,7 +1292,7 @@ fn main() -> io::Result<()> {
 
                                 // Terminate target agent (confirm first)
                                 KeyCode::Char('x') => {
-                                    if app.slots[app.target].is_some() {
+                                    if app.slots[app.global_target()].is_some() {
                                         app.overlay = Overlay::ConfirmTerminate;
                                     }
                                 }
