@@ -221,6 +221,23 @@ If an agent is terminated before completing its task, the worktree and branch ar
 
 The `.dispatch/` directory is gitignored.
 
+### Multi-Repo Mode
+
+Dispatch supports two workspace modes:
+
+**Single-repo mode** (default): Launched inside a git repo. Behaves as documented above -- one repo, `.dispatch/` in the repo root.
+
+**Multi-repo mode**: Launched from a directory that is not itself a git repo. Dispatch scans immediate children for directories containing `.git` and holds the list in memory. No `.dispatch/` or workspace-level artifacts are created at the parent directory level.
+
+In multi-repo mode:
+
+- Pressing `n` opens a repo selector overlay instead of dispatching immediately. The user picks which repo to target.
+- Each agent slot tracks its own `repo_root`. Task and worktree operations use the slot's repo, not a global root.
+- The task list overlay (`t`) aggregates tasks from all detected repos.
+- Pressing `S` rescans child directories for new or removed repos.
+- The header bar shows the repo count.
+- Auto-startup (dispatching Alpha on launch) is skipped; the user must select a repo first.
+
 ### Task Lifecycle
 
 **Complex task (planning flow):**
@@ -663,10 +680,11 @@ While in input mode, `Escape` is the only key intercepted by the console. Everyt
 | `Shift+Tab`       | Cycle target backward across all pages                       |
 | `]` / `Shift+Right` | Next page                                                 |
 | `[` / `Shift+Left`  | Previous page                                             |
-| `n`               | Dispatch new agent (prompts for tool, fills first empty slot across all pages) |
+| `n`               | Dispatch new agent (repo selector in multi-repo mode)        |
 | `N`               | Dispatch new agent into a specific slot (prompts for slot number) |
 | `x`               | Terminate agent in currently targeted slot (confirms first)  |
 | `R`               | Rename agent in currently targeted slot                      |
+| `S`               | Rescan repos (multi-repo mode only)                          |
 | `t`               | Show task list overlay (plan, active, queued, completed)             |
 | `o`               | Toggle orchestrator view (replaces agent grid with event log) |
 | `p`               | Show/hide full PSK                                           |

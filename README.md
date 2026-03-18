@@ -89,7 +89,7 @@ The PSK is displayed in the console header bar. You'll need it to connect the ra
 
 ## Usage
 
-`cd` into any git repo and run `dispatch`. The console starts listening for voice commands. A `.dispatch/` directory is created in the repo when the first agent is dispatched.
+`cd` into any git repo and run `dispatch`. The console starts listening for voice commands. A `.dispatch/` directory is created in the repo when the first agent is dispatched. You can also launch `dispatch` from a parent directory that contains multiple git repos -- it will detect the repos and let you choose which to target (multi-repo mode).
 
 ### Console
 
@@ -104,9 +104,10 @@ The console displays four agent panes at a time in a 2x2 grid with a scrolling t
 | `Tab`             | Cycle target forward across all agents              |
 | `]` / `[`         | Next / previous page                                |
 | `PgUp` / `PgDn`   | Scroll pane output up/down                          |
-| `n`               | Dispatch new agent into first empty slot            |
+| `n`               | Dispatch new agent (repo select in multi-repo mode) |
 | `x`               | Terminate agent in targeted slot                    |
 | `R`               | Rename agent in targeted slot                       |
+| `S`               | Rescan repos (multi-repo mode)                      |
 | `t`               | Show task list overlay                              |
 | `o`               | Toggle orchestrator view (event log)                |
 | `p`               | Show/hide full PSK                                  |

@@ -24,6 +24,7 @@
 // dispatch-1lc.3: task dependencies — -> arrow syntax in .dispatch/tasks.md, dependency-aware dispatch
 // dispatch-fnx: headless planner — spawns claude -p to decompose complex prompts into task plans
 // dispatch-ct2.4: terminal scrollback in panes — PgUp/PgDn in command mode, configurable buffer
+// dispatch-sa1: multi-repo support — detect non-repo parent, scan children for git repos
 //
 // Layout:
 //   Header bar  : DISPATCH title, radio state, PSK, agent count, PAGE X/Y, clock
@@ -165,7 +166,16 @@ enum OrchestratorEventKind {
     PlanDispatched { count: usize },
 }
 
-/// Active overlay (dispatch-bgz.5).
+/// Workspace mode: single repo or multi-repo parent directory (dispatch-sa1).
+#[derive(Debug, Clone)]
+enum Workspace {
+    /// Launched inside a git repo — original single-repo behavior.
+    SingleRepo { root: String },
+    /// Launched from a non-repo directory — children contain git repos.
+    MultiRepo { parent: String, repos: Vec<String> },
+}
+
+/// Active overlay (dispatch-sa1, dispatch-bgz.5).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 enum Overlay {
     None,
@@ -176,6 +186,7 @@ enum Overlay {
     ConfirmTerminate,
     DispatchSlot,
     Rename,
+    RepoSelect,  // dispatch-sa1: pick which repo to dispatch into
 }
 
 #[derive(Clone, Copy)]
@@ -193,6 +204,7 @@ struct SlotState {
     task_id: Option<String>,
     worktree_path: Option<String>, // git worktree path for this task (dispatch-xje)
     repo_name: String,             // short repo dir name for grid header (dispatch-2dc)
+    repo_root: String,             // absolute repo root for this slot (dispatch-sa1)
     dispatch_time: Instant,
     dispatch_wall_str: String,
     // PTY
@@ -267,7 +279,12 @@ struct App {
     /// Task IDs with unresolved merge conflicts (dispatch-xje).
     conflict_tasks: Vec<String>,
     /// Absolute path to the target repo root (dispatch-xje).
+    /// In single-repo mode: the git repo root. In multi-repo mode: the parent directory.
     repo_root: String,
+    /// Workspace mode: single-repo or multi-repo (dispatch-sa1).
+    workspace: Workspace,
+    /// Currently highlighted repo in the RepoSelect overlay (dispatch-sa1).
+    repo_select_idx: usize,
     // Task list overlay cache (dispatch-1lc.4): loaded when overlay opens
     task_list_data: Vec<TaskEntry>,
     // Headless planner (dispatch-fnx)
@@ -292,6 +309,7 @@ impl App {
         tools: std::collections::HashMap<String, String>,
         completion_timeout: Duration,
         repo_root: String,
+        workspace: Workspace,
         scrollback_lines: u32,
         tls_fingerprint: String,
     ) -> Self {
@@ -319,6 +337,8 @@ impl App {
             ticker_frame_counter: 0,
             conflict_tasks: Vec::new(),
             repo_root,
+            workspace,
+            repo_select_idx: 0,
             task_list_data: Vec::new(),
             planner: None,
             scrollback_lines,
@@ -406,6 +426,34 @@ impl App {
             .unwrap_or("claude")
     }
 
+    /// Whether we're in multi-repo mode (dispatch-sa1).
+    fn is_multi_repo(&self) -> bool {
+        matches!(self.workspace, Workspace::MultiRepo { .. })
+    }
+
+    /// Get the list of repos (dispatch-sa1). Single-repo returns a one-element vec.
+    fn repo_list(&self) -> Vec<&str> {
+        match &self.workspace {
+            Workspace::SingleRepo { root } => vec![root.as_str()],
+            Workspace::MultiRepo { repos, .. } => repos.iter().map(|s| s.as_str()).collect(),
+        }
+    }
+
+    /// Default repo root: first repo in list (dispatch-sa1).
+    fn default_repo_root(&self) -> &str {
+        match &self.workspace {
+            Workspace::SingleRepo { root } => root.as_str(),
+            Workspace::MultiRepo { repos, .. } => repos.first().map(|s| s.as_str()).unwrap_or("."),
+        }
+    }
+
+    /// Re-scan child directories for git repos in multi-repo mode (dispatch-sa1).
+    fn rescan_repos(&mut self) {
+        if let Workspace::MultiRepo { parent, repos } = &mut self.workspace {
+            *repos = scan_child_repos(parent);
+        }
+    }
+
     /// Queue a message on the ticker (dispatch-ami).
     fn push_ticker(&mut self, msg: impl Into<String>) {
         self.ticker_queue.push_back(msg.into());
@@ -475,6 +523,24 @@ fn repo_name_from_path(path: &str) -> &str {
         .unwrap_or(path)
 }
 
+/// Scan immediate children of `parent` for git repos. Returns sorted list of
+/// absolute paths to directories that contain a `.git` entry (dispatch-sa1).
+fn scan_child_repos(parent: &str) -> Vec<String> {
+    let mut repos = Vec::new();
+    if let Ok(entries) = std::fs::read_dir(parent) {
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() && path.join(".git").exists() {
+                if let Some(s) = path.to_str() {
+                    repos.push(s.to_string());
+                }
+            }
+        }
+    }
+    repos.sort();
+    repos
+}
+
 // ── PTY helpers (dispatch-bgz.2, dispatch-bgz.6) ──────────────────────────────
 
 /// Open a PTY and spawn a process. Returns a SlotState on success.
@@ -488,6 +554,7 @@ fn dispatch_slot(
     cwd: Option<&str>,
     scrollback_lines: u32,
     repo_name: &str,
+    repo_root: &str,
 ) -> Option<SlotState> {
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -557,6 +624,7 @@ fn dispatch_slot(
         task_id: None,
         worktree_path: None,
         repo_name: repo_name.to_string(),
+        repo_root: repo_root.to_string(),
         dispatch_time: now,
         dispatch_wall_str: wall,
         screen,
@@ -942,7 +1010,7 @@ fn dispatch_plan_tasks(app: &mut App) -> usize {
             let worktree = create_worktree(&task.id, &repo_root);
             if let Some(slot) = dispatch_slot(
                 slot_idx, "claude-code", &tool_cmd, pane_rows, pane_cols,
-                worktree.as_deref(), scrollback, &short_repo,
+                worktree.as_deref(), scrollback, &short_repo, &repo_root,
             ) {
                 app.slots[slot_idx] = Some(slot);
             } else {
@@ -1199,11 +1267,18 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
     };
 
     let clock = Local::now().format("%H:%M").to_string();
+    // dispatch-sa1: show repo count in multi-repo mode.
+    let workspace_indicator = if app.is_multi_repo() {
+        format!("  REPOS: {}  ", app.repo_list().len())
+    } else {
+        String::new()
+    };
     let right = format!(
-        "   PSK: {}   AGENTS: {}/{}  PAGE {}/{}  {}",
+        "   PSK: {}   AGENTS: {}/{}{}  PAGE {}/{}  {}",
         app.psk_display(),
         app.active_count(),
         app.slots.len(),
+        workspace_indicator,
         app.current_page + 1,
         app.total_pages(),
         clock,
@@ -1687,10 +1762,11 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         Line::from(Span::raw("  ] / Shift+→  Next page")),
         Line::from(Span::raw("  [ / Shift+←  Prev page")),
         Line::from(Span::raw("  PgUp / PgDn  Scroll pane output")),
-        Line::from(Span::raw("  n            Dispatch into first empty slot")),
+        Line::from(Span::raw("  n            Dispatch (repo select in multi-repo)")),
         Line::from(Span::raw("  N            Dispatch into specific slot")),
         Line::from(Span::raw("  x            Terminate target agent")),
         Line::from(Span::raw("  R            Rename target agent")),
+        Line::from(Span::raw("  S            Rescan repos (multi-repo mode)")),
         Line::from(Span::raw("  t            Task list overlay")),
         Line::from(Span::raw("  o            Toggle orchestrator view")),
         Line::from(Span::raw("  p            Toggle PSK visibility")),
@@ -2051,6 +2127,49 @@ fn render_dispatch_overlay(f: &mut Frame, area: Rect, app: &App) {
     );
 }
 
+/// Render the repo selection overlay for multi-repo mode (dispatch-sa1).
+fn render_repo_select_overlay(f: &mut Frame, area: Rect, app: &App) {
+    let repos = app.repo_list();
+    let height = (repos.len() as u16 + 5).min(area.height.saturating_sub(4));
+    let r = centered_rect(60, height, area);
+    f.render_widget(Clear, r);
+    let mut lines = vec![Line::default()];
+    for (i, repo) in repos.iter().enumerate() {
+        let name = repo_name_from_path(repo);
+        let marker = if i == app.repo_select_idx { ">" } else { " " };
+        let style = if i == app.repo_select_idx {
+            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
+        } else {
+            Style::default().fg(Color::White)
+        };
+        lines.push(Line::from(Span::styled(
+            format!("  {} {}  {}", marker, i + 1, name),
+            style,
+        )));
+    }
+    if repos.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "  (no git repos found in child directories)",
+            Style::default().fg(Color::DarkGray),
+        )));
+    }
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        "  Enter select    j/k navigate    r rescan    Esc cancel",
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::default());
+    f.render_widget(
+        Paragraph::new(Text::from(lines)).block(
+            Block::default()
+                .title(" SELECT REPO ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Cyan)),
+        ),
+        r,
+    );
+}
+
 fn render_rename_overlay(f: &mut Frame, area: Rect, app: &App) {
     let r = centered_rect(52, 8, area);
     f.render_widget(Clear, r);
@@ -2259,8 +2378,8 @@ fn main() -> io::Result<()> {
 
     let completion_timeout = Duration::from_secs(cfg.beads.completion_timeout_secs as u64);
 
-    // Resolve repo root for worktree operations (dispatch-xje).
-    let repo_root = Command::new("git")
+    // Resolve repo root and workspace mode (dispatch-xje, dispatch-sa1).
+    let git_toplevel = Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
         .output()
         .ok()
@@ -2268,8 +2387,20 @@ fn main() -> io::Result<()> {
             String::from_utf8(o.stdout).ok().map(|s| s.trim().to_string())
         } else {
             None
-        })
-        .unwrap_or_else(|| ".".to_string());
+        });
+
+    let (repo_root, workspace) = if let Some(root) = git_toplevel {
+        // Inside a git repo — single-repo mode (backwards compatible).
+        (root.clone(), Workspace::SingleRepo { root })
+    } else {
+        // Not in a git repo — scan children for repos (dispatch-sa1).
+        let cwd = std::env::current_dir()
+            .ok()
+            .and_then(|p| p.to_str().map(|s| s.to_string()))
+            .unwrap_or_else(|| ".".to_string());
+        let repos = scan_child_repos(&cwd);
+        (cwd.clone(), Workspace::MultiRepo { parent: cwd, repos })
+    };
 
     let mut app = App::new(
         cfg.auth.psk.clone(),
@@ -2280,6 +2411,7 @@ fn main() -> io::Result<()> {
         cfg.tools.clone(),
         completion_timeout,
         repo_root.clone(),
+        workspace,
         cfg.terminal.scrollback_lines,
         tls_fingerprint,
     );
@@ -2287,16 +2419,22 @@ fn main() -> io::Result<()> {
     // Dispatch slot 0 (Alpha) with claude on startup (dispatch-bgz.6).
     // dispatch-et1: spawn Alpha in repo root without creating .dispatch —
     // the folder is deferred until the first real dispatch via radio/planner.
-    let claude_cmd = app.tool_cmd("claude-code").to_string();
-    let short_repo_name = repo_name_from_path(&repo_root).to_string();
-    if let Some(slot) = dispatch_slot(
-        0, "claude-code", &claude_cmd, pane_rows, pane_cols,
-        Some(&repo_root), app.scrollback_lines, &short_repo_name,
-    ) {
-        let name = slot.display_name().to_string();
-        app.push_orch(OrchestratorEventKind::Dispatched { agent: name.clone(), slot: 1, tool: "claude-code".to_string() });
-        app.push_ticker(format!("DISPATCH: {} launched in slot 1 — claude-code ready", name));
-        app.slots[0] = Some(slot);
+    // dispatch-sa1: only auto-dispatch in single-repo mode.
+    if !app.is_multi_repo() {
+        let claude_cmd = app.tool_cmd("claude-code").to_string();
+        let short_repo_name = repo_name_from_path(&repo_root).to_string();
+        if let Some(slot) = dispatch_slot(
+            0, "claude-code", &claude_cmd, pane_rows, pane_cols,
+            Some(&repo_root), app.scrollback_lines, &short_repo_name, &repo_root,
+        ) {
+            let name = slot.display_name().to_string();
+            app.push_orch(OrchestratorEventKind::Dispatched { agent: name.clone(), slot: 1, tool: "claude-code".to_string() });
+            app.push_ticker(format!("DISPATCH: {} launched in slot 1 — claude-code ready", name));
+            app.slots[0] = Some(slot);
+        }
+    } else {
+        let repo_count = app.repo_list().len();
+        app.push_ticker(format!("MULTI-REPO: detected {} repos — press 'n' to dispatch into a repo", repo_count));
     }
 
     // Channel for WsEvents from the WebSocket thread (dispatch-1lc.1).
@@ -2307,10 +2445,15 @@ fn main() -> io::Result<()> {
     }
 
     // Background thread: poll .dispatch/tasks.md for ready tasks (dispatch-1lc.3).
+    // dispatch-sa1: in multi-repo mode, poll all repos.
     let (tasks_tx, tasks_rx) = mpsc::channel::<Vec<QueuedTask>>();
-    let poll_repo_root = repo_root.clone();
+    let poll_repos: Vec<String> = app.repo_list().iter().map(|s| s.to_string()).collect();
     thread::spawn(move || loop {
-        let _ = tasks_tx.send(fetch_ready_tasks(&poll_repo_root));
+        let mut all_tasks = Vec::new();
+        for repo in &poll_repos {
+            all_tasks.extend(fetch_ready_tasks(repo));
+        }
+        let _ = tasks_tx.send(all_tasks);
         thread::sleep(Duration::from_secs(TASK_POLL_SECS));
     });
 
@@ -2330,12 +2473,13 @@ fn main() -> io::Result<()> {
                     let callsign = s.display_name().to_string();
                     let task_id = s.task_id.clone();
                     let worktree_path = s.worktree_path.clone();
+                    let slot_repo = s.repo_root.clone();
                     app.slots[i] = None;
                     if let Some(id) = task_id {
                         app.push_orch(OrchestratorEventKind::TaskComplete { id: id.clone(), agent: callsign.clone() });
                         // dispatch-xje: merge worktree before closing; flag on conflict.
                         if worktree_path.is_some() {
-                            if merge_worktree(&id, &app.repo_root) {
+                            if merge_worktree(&id, &slot_repo) {
                                 app.push_orch(OrchestratorEventKind::Merged { id: id.clone() });
                                 app.push_ticker(format!("TASK COMPLETE: {} merged {} — slot {} now standby", callsign, id, i + 1));
                             } else {
@@ -2346,7 +2490,7 @@ fn main() -> io::Result<()> {
                         } else {
                             app.push_ticker(format!("TASK COMPLETE: {} closed {} — slot {} now standby", callsign, id, i + 1));
                         }
-                        update_task_in_file(&app.repo_root, &id, 'x', None);
+                        update_task_in_file(&slot_repo, &id, 'x', None);
                         // dispatch-fnx: dispatch newly unblocked plan tasks after completion.
                         dispatch_plan_tasks(&mut app);
                     } else {
@@ -2408,24 +2552,25 @@ fn main() -> io::Result<()> {
 
         for (i, task_id) in completed {
             let agent_name = app.slots[i].as_ref().map(|s| s.display_name().to_string()).unwrap_or_default();
+            let slot_repo = app.slots[i].as_ref().map(|s| s.repo_root.clone()).unwrap_or_else(|| app.default_repo_root().to_string());
             app.push_orch(OrchestratorEventKind::TaskComplete { id: task_id.clone(), agent: agent_name });
             if let Some(slot) = app.slots[i].as_mut() {
                 slot.task_id = None;
                 slot.idle_since = None;
             }
-            update_task_in_file(&app.repo_root, &task_id, 'x', None);
+            update_task_in_file(&slot_repo, &task_id, 'x', None);
 
             // dispatch-fnx: dispatch newly unblocked plan tasks after completion.
             dispatch_plan_tasks(&mut app);
 
             // Pick up next available queued task and assign it to the idle slot.
-            let next = fetch_ready_tasks(&app.repo_root).into_iter().next();
+            let next = fetch_ready_tasks(&slot_repo).into_iter().next();
             if let Some(qt) = next {
                 let mut assigned = false;
                 let mut assigned_callsign = String::new();
                 if let Some(slot) = app.slots[i].as_mut() {
                     let callsign = slot.callsign.clone();
-                    if update_task_in_file(&app.repo_root, &qt.id, '~', Some(&callsign)) {
+                    if update_task_in_file(&slot_repo, &qt.id, '~', Some(&callsign)) {
                         let prompt = format!("[Dispatch task {}] {}\r", qt.id, qt.title);
                         let _ = slot.writer.write_all(prompt.as_bytes());
                         let _ = slot.writer.flush();
@@ -2464,10 +2609,11 @@ fn main() -> io::Result<()> {
                 let prompt = app.planner.take().unwrap().prompt;
                 if let Some(plan_text) = result {
                     // Write the plan to .dispatch/tasks.md.
-                    let dir = format!("{}/.dispatch", app.repo_root);
+                    let target_repo = app.default_repo_root().to_string();
+                    let dir = format!("{}/.dispatch", target_repo);
                     let _ = std::fs::create_dir_all(&dir);
-                    let _ = std::fs::write(tasks_md_path(&app.repo_root), &plan_text);
-                    let (_, tasks) = parse_tasks_md(&app.repo_root);
+                    let _ = std::fs::write(tasks_md_path(&target_repo), &plan_text);
+                    let (_, tasks) = parse_tasks_md(&target_repo);
                     let total = tasks.len();
                     app.push_orch(OrchestratorEventKind::PlanComplete { task_count: total, prompt: prompt.clone() });
                     let dispatched = dispatch_plan_tasks(&mut app);
@@ -2484,17 +2630,17 @@ fn main() -> io::Result<()> {
                     // Planner failed: fall back to direct single-task dispatch.
                     app.push_orch(OrchestratorEventKind::PlanFailed);
                     app.push_ticker("PLANNER FAILED: falling back to direct dispatch".to_string());
-                    if let Some(id) = create_task_in_file(&app.repo_root, &prompt) {
+                    let target_repo = app.default_repo_root().to_string();
+                    if let Some(id) = create_task_in_file(&target_repo, &prompt) {
                         // Try to dispatch directly to the first available slot.
                         if let Some(g) = app.slots.iter().position(|s| s.is_none()) {
                             let cmd = app.tool_cmd("claude-code").to_string();
-                            let rn = repo_name_from_path(&app.repo_root).to_string();
-                            let worktree = create_worktree(&id, &app.repo_root);
+                            let worktree = create_worktree(&id, &target_repo);
                             if let Some(mut slot) = dispatch_slot(
                                 g, "claude-code", &cmd, app.pane_rows, app.pane_cols,
-                                worktree.as_deref(), app.scrollback_lines, &rn,
+                                worktree.as_deref(), app.scrollback_lines, repo_name_from_path(&target_repo), &target_repo,
                             ) {
-                                update_task_in_file(&app.repo_root, &id, '~', Some(&slot.callsign));
+                                update_task_in_file(&target_repo, &id, '~', Some(&slot.callsign));
                                 let prefixed = format!("[Dispatch task {id}] {prompt}\r");
                                 let _ = slot.writer.write_all(prefixed.as_bytes());
                                 let _ = slot.writer.flush();
@@ -2517,13 +2663,14 @@ fn main() -> io::Result<()> {
                 ws_server::WsEvent::AutoDispatch { slot, prompt } => {
                     app.push_orch(OrchestratorEventKind::VoiceTranscript { text: prompt.clone() });
                     let g = (slot as usize).saturating_sub(1);
+                    let target_repo = app.default_repo_root().to_string();
                     if g < MAX_SLOTS {
                         // Spawn a PTY if the slot is empty.
                         if app.slots[g].is_none() {
                             let cmd = app.tool_cmd("claude-code").to_string();
-                            let rn = repo_name_from_path(&app.repo_root).to_string();
                             if let Some(s) = dispatch_slot(
-                                g, "claude-code", &cmd, app.pane_rows, app.pane_cols, None, app.scrollback_lines, &rn,
+                                g, "claude-code", &cmd, app.pane_rows, app.pane_cols, None,
+                                app.scrollback_lines, repo_name_from_path(&target_repo), &target_repo,
                             ) {
                                 let name = s.display_name().to_string();
                                 app.push_orch(OrchestratorEventKind::Dispatched { agent: name.clone(), slot: g + 1, tool: "claude-code".to_string() });
@@ -2531,7 +2678,7 @@ fn main() -> io::Result<()> {
                                 app.push_ticker(format!("AUTO-DISPATCH: {} launched in slot {}", name, g + 1));
                             }
                         }
-                        let task_id = create_task_in_file(&app.repo_root, &prompt);
+                        let task_id = create_task_in_file(&target_repo, &prompt);
                         if let Some(ref id) = task_id {
                             app.push_orch(OrchestratorEventKind::TaskCreated { id: id.clone(), title: prompt.clone() });
                         }
@@ -2539,7 +2686,7 @@ fn main() -> io::Result<()> {
                         let mut orch_assign: Option<(String, String)> = None;
                         if let Some(slot_state) = app.slots[g].as_mut() {
                             if let Some(ref id) = task_id {
-                                update_task_in_file(&app.repo_root, id, '~', Some(&slot_state.callsign));
+                                update_task_in_file(&target_repo, id, '~', Some(&slot_state.callsign));
                                 let prefixed = format!("[Dispatch task {id}] {prompt}\r");
                                 let _ = slot_state.writer.write_all(prefixed.as_bytes());
                                 let _ = slot_state.writer.flush();
@@ -2562,20 +2709,22 @@ fn main() -> io::Result<()> {
                 }
                 ws_server::WsEvent::QueueTask { prompt } => {
                     app.push_orch(OrchestratorEventKind::VoiceTranscript { text: prompt.clone() });
+                    let target_repo = app.default_repo_root().to_string();
                     // Create an open task in .dispatch/tasks.md; it will
                     // surface in the next poll and be picked up when a slot frees.
-                    if let Some(id) = create_task_in_file(&app.repo_root, &prompt) {
+                    if let Some(id) = create_task_in_file(&target_repo, &prompt) {
                         app.push_orch(OrchestratorEventKind::Queued { id: id.clone() });
                         app.push_ticker(format!("QUEUED: all agents busy — task {} waiting", id));
                     }
                 }
                 ws_server::WsEvent::PlanRequest { prompt } => {
                     app.push_orch(OrchestratorEventKind::VoiceTranscript { text: prompt.clone() });
+                    let target_repo = app.default_repo_root().to_string();
                     // dispatch-fnx: spawn a headless planner for complex prompts.
                     if app.planner.is_none() {
                         app.push_orch(OrchestratorEventKind::PlanStart { prompt: prompt.clone() });
                         let cmd = app.tool_cmd("claude-code").to_string();
-                        let rx = spawn_planner(&prompt, &cmd, &app.repo_root);
+                        let rx = spawn_planner(&prompt, &cmd, &target_repo);
                         app.planner = Some(PlannerState { prompt: prompt.clone(), receiver: rx });
                         let display = if prompt.len() > 60 {
                             format!("{}...", &prompt[..57])
@@ -2585,7 +2734,7 @@ fn main() -> io::Result<()> {
                         app.push_ticker(format!("PLANNING: {}", display));
                     } else {
                         // Planner already running; queue as a direct task.
-                        if let Some(id) = create_task_in_file(&app.repo_root, &prompt) {
+                        if let Some(id) = create_task_in_file(&target_repo, &prompt) {
                             app.push_orch(OrchestratorEventKind::Queued { id: id.clone() });
                             app.push_ticker(format!("QUEUED: planner busy — task {} waiting", id));
                         }
@@ -2633,6 +2782,7 @@ fn main() -> io::Result<()> {
                 }
                 Overlay::DispatchSlot => render_dispatch_overlay(f, full, &app),
                 Overlay::Rename => render_rename_overlay(f, full, &app),
+                Overlay::RepoSelect => render_repo_select_overlay(f, full, &app),
             }
         })?;
 
@@ -2696,8 +2846,10 @@ fn main() -> io::Result<()> {
                                             break 'main;
                                         }
                                         for i in 0..MAX_SLOTS {
+                                            let slot_repo = app.slots[i].as_ref().map(|s| s.repo_root.clone());
                                             if let Some(task_id) = terminate_slot(&mut app.slots[i]) {
-                                                update_task_in_file(&app.repo_root, &task_id, ' ', None);
+                                                let repo = slot_repo.unwrap_or_else(|| app.default_repo_root().to_string());
+                                                update_task_in_file(&repo, &task_id, ' ', None);
                                             }
                                         }
                                         quit_requested = true;
@@ -2710,11 +2862,12 @@ fn main() -> io::Result<()> {
                                     KeyCode::Char('y') | KeyCode::Char('Y') => {
                                         let target_g = app.target_global();
                                         let callsign = app.slots[target_g].as_ref().map(|s| s.display_name().to_string()).unwrap_or_default();
+                                        let slot_repo = app.slots[target_g].as_ref().map(|s| s.repo_root.clone()).unwrap_or_else(|| app.default_repo_root().to_string());
                                         if !callsign.is_empty() {
                                             app.push_orch(OrchestratorEventKind::Terminated { agent: callsign.clone(), slot: target_g + 1 });
                                         }
                                         if let Some(task_id) = terminate_slot(&mut app.slots[target_g]) {
-                                            update_task_in_file(&app.repo_root, &task_id, ' ', None);
+                                            update_task_in_file(&slot_repo, &task_id, ' ', None);
                                             app.push_ticker(format!("TERMINATED: {} (slot {}) — task {} reopened", callsign, target_g + 1, task_id));
                                         } else if !callsign.is_empty() {
                                             app.push_ticker(format!("TERMINATED: {} (slot {})", callsign, target_g + 1));
@@ -2739,10 +2892,11 @@ fn main() -> io::Result<()> {
                                                 app.current_page = page;
                                                 app.target = local;
                                                 if app.slots[g].is_none() {
+                                                    let target_repo = app.default_repo_root().to_string();
                                                     let cmd = app.tool_cmd("claude-code").to_string();
-                                                    let rn = repo_name_from_path(&app.repo_root).to_string();
                                                     if let Some(slot) = dispatch_slot(
-                                                        g, "claude-code", &cmd, app.pane_rows, app.pane_cols, None, app.scrollback_lines, &rn,
+                                                        g, "claude-code", &cmd, app.pane_rows, app.pane_cols, None,
+                                                        app.scrollback_lines, repo_name_from_path(&target_repo), &target_repo,
                                                     ) {
                                                         let name = slot.display_name().to_string();
                                                         app.push_orch(OrchestratorEventKind::Dispatched { agent: name.clone(), slot: g + 1, tool: "claude-code".to_string() });
@@ -2786,6 +2940,62 @@ fn main() -> io::Result<()> {
                                     KeyCode::Char(c) if !c.is_control() => {
                                         if app.input_buf.len() < 20 {
                                             app.input_buf.push(c);
+                                        }
+                                    }
+                                    _ => {}
+                                },
+
+                                // Repo selection overlay (dispatch-sa1)
+                                Overlay::RepoSelect => match key.code {
+                                    KeyCode::Esc => {
+                                        app.overlay = Overlay::None;
+                                    }
+                                    KeyCode::Char('j') | KeyCode::Down => {
+                                        let count = app.repo_list().len();
+                                        if count > 0 && app.repo_select_idx < count - 1 {
+                                            app.repo_select_idx += 1;
+                                        }
+                                    }
+                                    KeyCode::Char('k') | KeyCode::Up => {
+                                        if app.repo_select_idx > 0 {
+                                            app.repo_select_idx -= 1;
+                                        }
+                                    }
+                                    KeyCode::Char('r') => {
+                                        // Re-scan child directories for repos.
+                                        app.rescan_repos();
+                                        app.repo_select_idx = 0;
+                                    }
+                                    KeyCode::Enter => {
+                                        let repos = app.repo_list().iter().map(|s| s.to_string()).collect::<Vec<_>>();
+                                        if let Some(selected_repo) = repos.get(app.repo_select_idx).cloned() {
+                                            app.overlay = Overlay::None;
+                                            // Dispatch into the first empty slot, targeting the selected repo.
+                                            if let Some(g) = app.slots.iter().position(|s| s.is_none()) {
+                                                let cmd = app.tool_cmd("claude-code").to_string();
+                                                if let Some(slot) = dispatch_slot(
+                                                    g, "claude-code", &cmd, app.pane_rows, app.pane_cols,
+                                                    Some(&selected_repo), app.scrollback_lines,
+                                                    repo_name_from_path(&selected_repo), &selected_repo,
+                                                ) {
+                                                    let page = g / SLOTS_PER_PAGE;
+                                                    let local = g % SLOTS_PER_PAGE;
+                                                    let name = slot.display_name().to_string();
+                                                    app.push_orch(OrchestratorEventKind::Dispatched { agent: name.clone(), slot: g + 1, tool: "claude-code".to_string() });
+                                                    app.push_ticker(format!("DISPATCH: {} launched in slot {} — repo {}", name, g + 1, repo_name_from_path(&selected_repo)));
+                                                    app.slots[g] = Some(slot);
+                                                    app.current_page = page;
+                                                    app.target = local;
+                                                }
+                                            }
+                                        }
+                                    }
+                                    KeyCode::Char(c) if c.is_ascii_digit() => {
+                                        // Quick-select by number.
+                                        let n = c.to_digit(10).unwrap_or(0) as usize;
+                                        let repos = app.repo_list();
+                                        if n >= 1 && n <= repos.len() {
+                                            app.repo_select_idx = n - 1;
                                         }
                                     }
                                     _ => {}
@@ -2859,21 +3069,28 @@ fn main() -> io::Result<()> {
                                 }
 
                                 // Dispatch into first empty slot (dispatch-bgz.6)
+                                // dispatch-sa1: in multi-repo mode, open repo selector first.
                                 KeyCode::Char('n') => {
-                                    if let Some(g) = app.slots.iter().position(|s| s.is_none()) {
-                                        let cmd = app.tool_cmd("claude-code").to_string();
-                                        let rn = repo_name_from_path(&app.repo_root).to_string();
-                                        if let Some(slot) = dispatch_slot(
-                                            g, "claude-code", &cmd, app.pane_rows, app.pane_cols, None, app.scrollback_lines, &rn,
-                                        ) {
-                                            let page = g / SLOTS_PER_PAGE;
-                                            let local = g % SLOTS_PER_PAGE;
-                                            let name = slot.display_name().to_string();
-                                            app.push_orch(OrchestratorEventKind::Dispatched { agent: name.clone(), slot: g + 1, tool: "claude-code".to_string() });
-                                            app.push_ticker(format!("DISPATCH: {} launched in slot {}", name, g + 1));
-                                            app.slots[g] = Some(slot);
-                                            app.current_page = page;
-                                            app.target = local;
+                                    if app.is_multi_repo() {
+                                        app.repo_select_idx = 0;
+                                        app.overlay = Overlay::RepoSelect;
+                                    } else {
+                                        let target_repo = app.default_repo_root().to_string();
+                                        if let Some(g) = app.slots.iter().position(|s| s.is_none()) {
+                                            let cmd = app.tool_cmd("claude-code").to_string();
+                                            if let Some(slot) = dispatch_slot(
+                                                g, "claude-code", &cmd, app.pane_rows, app.pane_cols, None,
+                                                app.scrollback_lines, repo_name_from_path(&target_repo), &target_repo,
+                                            ) {
+                                                let page = g / SLOTS_PER_PAGE;
+                                                let local = g % SLOTS_PER_PAGE;
+                                                let name = slot.display_name().to_string();
+                                                app.push_orch(OrchestratorEventKind::Dispatched { agent: name.clone(), slot: g + 1, tool: "claude-code".to_string() });
+                                                app.push_ticker(format!("DISPATCH: {} launched in slot {}", name, g + 1));
+                                                app.slots[g] = Some(slot);
+                                                app.current_page = page;
+                                                app.target = local;
+                                            }
                                         }
                                     }
                                 }
@@ -2901,7 +3118,11 @@ fn main() -> io::Result<()> {
                                 }
 
                                 KeyCode::Char('t') => {
-                                    app.task_list_data = fetch_task_list_from_file(&app.repo_root, &app.slots);
+                                    // dispatch-sa1: aggregate tasks from all repos in multi-repo mode.
+                                    app.task_list_data = Vec::new();
+                                    for repo in &app.repo_list().iter().map(|s| s.to_string()).collect::<Vec<_>>() {
+                                        app.task_list_data.extend(fetch_task_list_from_file(repo, &app.slots));
+                                    }
                                     app.overlay = Overlay::TaskList;
                                 }
                                 KeyCode::Char('p') => app.psk_expanded = !app.psk_expanded,
@@ -2915,6 +3136,14 @@ fn main() -> io::Result<()> {
                                         ViewMode::Orchestrator => ViewMode::Agents,
                                     };
                                     app.orch_scroll = 0;
+                                }
+
+                                // Rescan repos in multi-repo mode (dispatch-sa1)
+                                KeyCode::Char('S') if app.is_multi_repo() => {
+                                    let old_count = app.repo_list().len();
+                                    app.rescan_repos();
+                                    let new_count = app.repo_list().len();
+                                    app.push_ticker(format!("RESCAN: {} repos detected (was {})", new_count, old_count));
                                 }
 
                                 // Orchestrator scroll (dispatch-6nm)
