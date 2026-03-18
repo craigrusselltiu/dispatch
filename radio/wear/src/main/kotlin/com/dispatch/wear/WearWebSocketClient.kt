@@ -8,17 +8,26 @@ import okhttp3.Response
 import okhttp3.WebSocket
 import okhttp3.WebSocketListener
 import okio.ByteString
+import java.security.MessageDigest
+import java.security.cert.X509Certificate
 import java.util.concurrent.TimeUnit
+import javax.net.ssl.SSLContext
+import javax.net.ssl.X509TrustManager
 
 /**
  * WebSocket client for the Dispatch Wear companion.
- * Same protocol as the phone radio — connects to ws://host:port/?psk=<key>.
+ * Same protocol as the phone radio -- connects to wss://host:port/?psk=<key>.
+ *
+ * TLS: When a cert fingerprint is provided, pins to that specific certificate.
+ * When no fingerprint is provided, trusts all certificates (encrypted but no
+ * pinning -- the PSK still authenticates the connection).
  */
 class WearWebSocketClient(
     private val host: String,
     private val port: Int,
     private val psk: String,
     private val listener: Listener,
+    private val certFingerprint: String? = null,
 ) {
     interface Listener {
         fun onConnected()
@@ -26,9 +35,7 @@ class WearWebSocketClient(
         fun onDisconnected()
     }
 
-    private val httpClient = OkHttpClient.Builder()
-        .pingInterval(PING_INTERVAL_SECONDS, TimeUnit.SECONDS)
-        .build()
+    private val httpClient: OkHttpClient = buildClient(certFingerprint)
 
     private val mainHandler = Handler(Looper.getMainLooper())
 
@@ -58,7 +65,7 @@ class WearWebSocketClient(
     }
 
     private fun openConnection() {
-        val url = "ws://$host:$port/?psk=$psk"
+        val url = "wss://$host:$port/?psk=$psk"
         val request = Request.Builder().url(url).build()
         webSocket = httpClient.newWebSocket(request, socketListener)
     }
@@ -118,5 +125,37 @@ class WearWebSocketClient(
         private const val MAX_DELAY_MS = 30_000L
         private const val CLOSE_NORMAL = 1000
         private const val MSG_LIST_AGENTS = """{"type":"list_agents"}"""
+
+        /**
+         * Build an OkHttpClient that trusts the console's self-signed certificate.
+         * If [fingerprint] is non-null, only certs matching that SHA-256 fingerprint
+         * are accepted. Otherwise, all certs are trusted (encryption without pinning).
+         */
+        fun buildClient(fingerprint: String?): OkHttpClient {
+            val trustManager = object : X509TrustManager {
+                override fun checkClientTrusted(chain: Array<out X509Certificate>?, authType: String?) {}
+                override fun checkServerTrusted(chain: Array<out X509Certificate>?, authType: String?) {
+                    if (fingerprint == null || chain.isNullOrEmpty()) return
+                    val cert = chain[0]
+                    val sha256 = MessageDigest.getInstance("SHA-256").digest(cert.encoded)
+                    val hex = sha256.joinToString("") { "%02x".format(it) }
+                    if (hex != fingerprint) {
+                        throw java.security.cert.CertificateException(
+                            "Certificate fingerprint mismatch: expected $fingerprint, got $hex"
+                        )
+                    }
+                }
+                override fun getAcceptedIssuers(): Array<X509Certificate> = arrayOf()
+            }
+
+            val sslContext = SSLContext.getInstance("TLS")
+            sslContext.init(null, arrayOf(trustManager), null)
+
+            return OkHttpClient.Builder()
+                .pingInterval(PING_INTERVAL_SECONDS, TimeUnit.SECONDS)
+                .sslSocketFactory(sslContext.socketFactory, trustManager)
+                .hostnameVerifier { _, _ -> true }
+                .build()
+        }
     }
 }

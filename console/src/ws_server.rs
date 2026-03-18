@@ -9,7 +9,9 @@ use std::net::SocketAddr;
 use std::sync::{mpsc, Arc, Mutex};
 
 use futures_util::{SinkExt, StreamExt};
-use tokio::net::{TcpListener, TcpStream};
+use tokio::io::{AsyncRead, AsyncWrite};
+use tokio::net::TcpListener;
+use tokio_rustls::TlsAcceptor;
 use tokio_tungstenite::{
     accept_hdr_async,
     tungstenite::{
@@ -139,9 +141,9 @@ pub type SharedState = Arc<Mutex<ConsoleState>>;
 
 // --- Server entry point --------------------------------------------------
 
-/// Start the WebSocket server on `0.0.0.0:{port}`.
+/// Start the WebSocket server on `0.0.0.0:{port}` with TLS.
 /// Accepts connections only when the `?psk=<key>` query parameter matches.
-pub async fn run_server(state: SharedState, port: u16, psk: String) {
+pub async fn run_server(state: SharedState, port: u16, psk: String, tls: TlsAcceptor) {
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr)
         .await
@@ -154,8 +156,16 @@ pub async fn run_server(state: SharedState, port: u16, psk: String) {
         };
         let state = Arc::clone(&state);
         let psk = psk.clone();
+        let tls = tls.clone();
         tokio::spawn(async move {
-            if let Err(e) = handle_connection(stream, peer_addr, state, psk).await {
+            let tls_stream = match tls.accept(stream).await {
+                Ok(s) => s,
+                Err(e) => {
+                    eprintln!("ws: TLS handshake failed from {peer_addr}: {e}");
+                    return;
+                }
+            };
+            if let Err(e) = handle_connection(tls_stream, peer_addr, state, psk).await {
                 eprintln!("ws: connection error from {peer_addr}: {e}");
             }
         });
@@ -164,8 +174,8 @@ pub async fn run_server(state: SharedState, port: u16, psk: String) {
 
 // --- Connection handler --------------------------------------------------
 
-async fn handle_connection(
-    stream: TcpStream,
+async fn handle_connection<S: AsyncRead + AsyncWrite + Unpin>(
+    stream: S,
     peer_addr: SocketAddr,
     state: SharedState,
     psk: String,

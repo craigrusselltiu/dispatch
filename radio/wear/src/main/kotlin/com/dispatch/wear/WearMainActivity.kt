@@ -71,7 +71,8 @@ class WearMainActivity : FragmentActivity() {
                 override fun onConnected() = setConnected(true)
                 override fun onDisconnected() = setConnected(false)
                 override fun onMessage(text: String) = handleMessage(text)
-            }
+            },
+            certFingerprint = settings.certFingerprint,
         )
         wsClient.connect()
     }

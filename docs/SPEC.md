@@ -14,7 +14,7 @@ The system has two components:
 Both components live in a single monorepo.
 
 ```
-┌──────────────┐     WebSocket (LAN, PSK)     ┌──────────────────┐
+┌──────────────┐    WebSocket TLS (LAN, PSK)   ┌──────────────────┐
 │  Dispatch    │  ◄────────────────────────►  │  Dispatch        │
 │  Radio       │                               │  Console         │
 │  (Android)   │                               │  (PC TUI)        │
@@ -357,17 +357,23 @@ The console advertises itself on the local network via mDNS (DNS-SD) as a `_disp
 
 Manual IP/port entry remains available as a fallback.
 
+### TLS
+
+The WebSocket server uses TLS (`wss://`) for encrypted transport. On first run, the console generates a self-signed certificate and private key, stored as DER files in the config directory (`~/.config/dispatch/cert.der` and `key.der`). The certificate covers the SANs `dispatch.local` and `localhost`.
+
+The radio pins the certificate by its SHA-256 fingerprint (provided via QR code pairing) rather than relying on a CA chain. When no fingerprint is available (manual connection), the radio trusts any certificate -- the PSK still authenticates the connection, and TLS provides encryption.
+
 ### Authentication
 
 The WebSocket handshake includes a pre-shared key as a query parameter:
 
 ```
-ws://192.168.1.x:9800/?psk=<key>
+wss://192.168.1.x:9800/?psk=<key>
 ```
 
 The console generates a random PSK on first run and stores it in `~/.config/dispatch/config.toml`. The key is displayed on the console's header bar (truncated, expandable with `p`). Any connection attempt with an invalid or missing PSK is rejected with a 401 before the WebSocket upgrade completes.
 
-**QR code pairing:** Press `Q` in command mode to display a QR code overlay encoding the full WebSocket URL (`ws://host:port/?psk=key`). The host is auto-detected from the machine's local network interface. The radio scans this QR code via its camera (Settings > Scan QR) to configure the connection without manual entry. The scanned URL populates host, port, and PSK fields automatically.
+**QR code pairing:** Press `Q` in command mode to display a QR code overlay encoding the full WebSocket URL (`wss://host:port/?psk=key&fp=<sha256>`). The host is auto-detected from the machine's local network interface. The `fp` parameter is the SHA-256 fingerprint of the console's TLS certificate. The radio scans this QR code via its camera (Settings > Scan QR) to configure the connection without manual entry. The scanned URL populates host, port, PSK, and cert fingerprint fields automatically.
 
 ### Message Types
 
@@ -1027,8 +1033,13 @@ Radio:
 - ~~Continuous listening mode with voice-activity detection.~~ (done)
 - ~~Terminal scrollback in panes.~~ (done)
 - Agent busy/idle detection: refine idle prompt patterns and completion timeout per tool as edge cases surface in testing.
+<<<<<<< HEAD
 - TLS on the WebSocket.
 - ~~AccessibilityService for screen-off volume button capture.~~ (done)
+=======
+- ~~TLS on the WebSocket.~~ (done)
+- AccessibilityService for screen-off volume button capture.
+>>>>>>> dispatch-ct2.6
 - Console prompt history and logging.
 - `.dispatch/tasks.md` pruning for long-running projects (archive completed tasks).
 - Wear OS companion: minimal wrist app (`radio/wear/` module) with status glance (connection state, current target, active agents), crown rotation for target cycling, and tap-to-dispatch trigger. Standalone APK, same WebSocket protocol as the phone radio. Settings (host, port, PSK) via long-press.

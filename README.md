@@ -13,7 +13,7 @@ Dispatch has three components:
 - **Dispatch Watch** (Wear OS) -- a minimal wrist companion for status glances and quick actions. Shows connection state, current target, and active agents. Crown rotation cycles targets; tap to dispatch a new agent. Same WebSocket protocol as the radio.
 
 ```
-┌──────────────┐     WebSocket (LAN, PSK)     ┌──────────────────┐
+┌──────────────┐    WebSocket TLS (LAN, PSK)   ┌──────────────────┐
 │  Dispatch    │  <-------------------------> │  Dispatch        │
 │  Radio       │                              │  Console         │
 │  (Android)   │                              │  (PC TUI)        │
@@ -174,6 +174,7 @@ Simple one-off prompts skip the planning step and dispatch directly.
 - **Paged layout** -- up to 26 agents across 7 pages. Off-screen agents keep running and are still addressable.
 - **Clean target repo** -- all dispatch artifacts live in `.dispatch/` (gitignored). Your repo stays untouched.
 - **mDNS discovery** -- the console advertises itself on the LAN via Zeroconf. The radio can find it automatically without manual IP entry.
+- **TLS encryption** -- WebSocket connections are wrapped in TLS (wss://) with a self-signed certificate. The radio pins the cert fingerprint via QR code pairing.
 - **PSK authentication** -- all WebSocket connections require a pre-shared key. Auto-generated on first run.
 - **Cross-platform** -- console runs on Windows (ConPTY), macOS, and Linux.
 

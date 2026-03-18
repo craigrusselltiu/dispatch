@@ -277,6 +277,8 @@ struct App {
     view_mode: ViewMode,
     orch_log: Vec<OrchestratorEvent>,
     orch_scroll: usize, // scroll offset from bottom
+    // TLS cert fingerprint for QR pairing (dispatch-ct2.6)
+    tls_fingerprint: String,
 }
 
 impl App {
@@ -290,6 +292,7 @@ impl App {
         completion_timeout: Duration,
         repo_root: String,
         scrollback_lines: u32,
+        tls_fingerprint: String,
     ) -> Self {
         App {
             slots: std::array::from_fn(|_| None),
@@ -321,6 +324,7 @@ impl App {
             view_mode: ViewMode::Agents,
             orch_log: Vec::new(),
             orch_scroll: 0,
+            tls_fingerprint,
         }
     }
 
@@ -926,7 +930,11 @@ fn dispatch_plan_tasks(app: &mut App) -> usize {
             let worktree = create_worktree(&task.id, &repo_root);
             if let Some(slot) = dispatch_slot(
                 slot_idx, "claude-code", &tool_cmd, pane_rows, pane_cols,
+<<<<<<< HEAD
                 worktree.as_deref(), scrollback,
+=======
+                worktree.as_deref(), app.scrollback_lines,
+>>>>>>> dispatch-ct2.6
             ) {
                 app.slots[slot_idx] = Some(slot);
             } else {
@@ -1709,10 +1717,13 @@ fn local_ip() -> Option<String> {
     socket.local_addr().ok().map(|a| a.ip().to_string())
 }
 
-/// Render a QR code overlay encoding the console connection URL + PSK (dispatch-ct2.2).
+/// Render a QR code overlay encoding the console connection URL + PSK (dispatch-ct2.2, dispatch-ct2.6).
 fn render_qr_overlay(f: &mut Frame, area: Rect, app: &App) {
     let host = local_ip().unwrap_or_else(|| "127.0.0.1".to_string());
-    let url = format!("ws://{}:{}/?psk={}", host, app.port, app.psk);
+    let url = format!(
+        "wss://{}:{}/?psk={}&fp={}",
+        host, app.port, app.psk, app.tls_fingerprint
+    );
 
     let qr = match qrcode::QrCode::new(url.as_bytes()) {
         Ok(q) => q,
@@ -2209,16 +2220,21 @@ fn main() -> io::Result<()> {
 
     let cfg = config::load_or_create();
 
-    // Start the WebSocket server (dispatch-bgz.7).
+    // Load or generate TLS certificate (dispatch-ct2.6).
+    let tls = config::load_or_create_tls();
+    let tls_fingerprint = tls.fingerprint.clone();
+
+    // Start the WebSocket server with TLS (dispatch-bgz.7, dispatch-ct2.6).
     let ws_state: ws_server::SharedState = Arc::new(Mutex::new(ws_server::ConsoleState::new()));
     {
         let state = Arc::clone(&ws_state);
         let psk = cfg.auth.psk.clone();
         let port = cfg.server.port;
+        let acceptor = tls.acceptor;
         thread::spawn(move || {
             tokio::runtime::Runtime::new()
                 .expect("tokio runtime")
-                .block_on(ws_server::run_server(state, port, psk));
+                .block_on(ws_server::run_server(state, port, psk, acceptor));
         });
     }
 
@@ -2253,6 +2269,7 @@ fn main() -> io::Result<()> {
         completion_timeout,
         repo_root.clone(),
         cfg.terminal.scrollback_lines,
+        tls_fingerprint,
     );
 
     // Dispatch slot 0 (Alpha) with claude on startup (dispatch-bgz.6).

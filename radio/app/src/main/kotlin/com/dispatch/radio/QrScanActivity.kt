@@ -33,6 +33,7 @@ class QrScanActivity : AppCompatActivity() {
         const val EXTRA_PSK = "extra_psk"
         const val EXTRA_HOST = "extra_host"
         const val EXTRA_PORT = "extra_port"
+        const val EXTRA_CERT_FP = "extra_cert_fp"
         private const val TAG = "QrScan"
     }
 
@@ -97,7 +98,8 @@ class QrScanActivity : AppCompatActivity() {
     }
 
     /**
-     * Parse scanned QR value. Expected format: ws://host:port/?psk=<key>
+     * Parse scanned QR value. Expected format: wss://host:port/?psk=<key>&fp=<sha256>
+     * Also accepts legacy ws:// URLs.
      */
     private fun handleQrValue(value: String) {
         if (scanned) return
@@ -108,12 +110,14 @@ class QrScanActivity : AppCompatActivity() {
             val host = uri.host
             val port = uri.port
             val psk = uri.getQueryParameter("psk")
+            val fp = uri.getQueryParameter("fp")
 
             if (host != null && port > 0 && !psk.isNullOrEmpty()) {
                 val data = Intent().apply {
                     putExtra(EXTRA_HOST, host)
                     putExtra(EXTRA_PORT, port)
                     putExtra(EXTRA_PSK, psk)
+                    if (!fp.isNullOrEmpty()) putExtra(EXTRA_CERT_FP, fp)
                 }
                 setResult(Activity.RESULT_OK, data)
                 finish()

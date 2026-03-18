@@ -56,6 +56,10 @@ class SettingsActivity : AppCompatActivity() {
             val port = data.getIntExtra(QrScanActivity.EXTRA_PORT, -1)
             if (port > 0) etPort.setText(port.toString())
             data.getStringExtra(QrScanActivity.EXTRA_PSK)?.let { etPsk.setText(it) }
+            // Store TLS cert fingerprint from QR (dispatch-ct2.6)
+            data.getStringExtra(QrScanActivity.EXTRA_CERT_FP)?.let {
+                settings.certFingerprint = it
+            }
         }
     }
 

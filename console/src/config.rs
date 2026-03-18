@@ -1,6 +1,7 @@
 use rand::Rng;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, fs, path::PathBuf};
+use sha2::{Digest, Sha256};
+use std::{collections::HashMap, fs, path::PathBuf, sync::Arc};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct ServerConfig {
@@ -103,6 +104,67 @@ pub fn regenerate_psk() -> String {
     let raw = to_toml_with_comments(&cfg);
     fs::write(&path, &raw).expect("failed to write config");
     cfg.auth.psk
+}
+
+/// TLS certificate and key paths within the config directory.
+pub struct TlsIdentity {
+    pub acceptor: tokio_rustls::TlsAcceptor,
+    /// SHA-256 fingerprint of the DER-encoded certificate (lowercase hex).
+    pub fingerprint: String,
+}
+
+/// Ensures a self-signed TLS certificate exists in the config directory and
+/// returns a TlsAcceptor ready for use. Generates cert + key on first run.
+pub fn load_or_create_tls() -> TlsIdentity {
+    let base = dirs::config_dir().expect("cannot determine config directory");
+    let dir = base.join("dispatch");
+    fs::create_dir_all(&dir).expect("failed to create config directory");
+
+    let cert_path = dir.join("cert.der");
+    let key_path = dir.join("key.der");
+
+    // Generate self-signed cert if missing.
+    if !cert_path.exists() || !key_path.exists() {
+        let certified = rcgen::generate_simple_self_signed(vec![
+            "dispatch.local".to_string(),
+            "localhost".to_string(),
+        ])
+        .expect("failed to generate TLS certificate");
+        fs::write(&cert_path, certified.cert.der()).expect("failed to write cert.der");
+        fs::write(&key_path, certified.key_pair.serialize_der())
+            .expect("failed to write key.der");
+    }
+
+    let cert_der = fs::read(&cert_path).expect("failed to read cert.der");
+    let key_der = fs::read(&key_path).expect("failed to read key.der");
+
+    let certs = vec![rustls::pki_types::CertificateDer::from(cert_der.clone())];
+    let key = rustls::pki_types::PrivateKeyDer::from(
+        rustls::pki_types::PrivatePkcs8KeyDer::from(key_der),
+    );
+
+    // Compute SHA-256 fingerprint of the DER certificate.
+    let fingerprint = {
+        let mut hasher = Sha256::new();
+        hasher.update(&cert_der);
+        let hash = hasher.finalize();
+        hash.iter().map(|b| format!("{b:02x}")).collect::<String>()
+    };
+
+    let config = rustls::ServerConfig::builder()
+        .with_no_client_auth()
+        .with_single_cert(
+            certs,
+            rustls::pki_types::PrivateKeyDer::from(key),
+        )
+        .expect("invalid TLS certificate/key");
+
+    let acceptor = tokio_rustls::TlsAcceptor::from(Arc::new(config));
+
+    TlsIdentity {
+        acceptor,
+        fingerprint,
+    }
 }
 
 /// Serialises config to TOML with comments matching the SPEC.
