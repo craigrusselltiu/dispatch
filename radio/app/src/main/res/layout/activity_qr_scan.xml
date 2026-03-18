@@ -4,28 +4,37 @@
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical"
-    android:gravity="center"
-    android:background="@color/background"
-    android:padding="32dp">
+    android:background="@color/background">
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="QR SCAN"
+        android:text="SCAN QR CODE"
         android:textColor="@color/cyan"
         android:textSize="20sp"
         android:fontFamily="monospace"
-        android:layout_marginBottom="16dp" />
+        android:layout_gravity="center_horizontal"
+        android:layout_marginTop="16dp"
+        android:layout_marginBottom="8dp" />
 
     <TextView
         android:layout_width="wrap_content"
         android:layout_height="wrap_content"
-        android:text="QR scanning not yet implemented.\nEnter the pre-shared key manually."
+        android:text="Point camera at the QR code shown\nin the console TUI (press Q)."
         android:textColor="@color/dim_grey"
         android:textSize="13sp"
         android:fontFamily="monospace"
         android:gravity="center"
-        android:layout_marginBottom="32dp" />
+        android:layout_gravity="center_horizontal"
+        android:layout_marginBottom="16dp" />
+
+    <androidx.camera.view.PreviewView
+        android:id="@+id/preview_view"
+        android:layout_width="match_parent"
+        android:layout_height="0dp"
+        android:layout_weight="1"
+        android:layout_marginStart="16dp"
+        android:layout_marginEnd="16dp" />
 
     <Button
         android:id="@+id/btn_cancel"
@@ -35,6 +44,7 @@
         android:textColor="@color/background"
         android:backgroundTint="@color/dim_grey"
         android:fontFamily="monospace"
-        android:textSize="14sp" />
+        android:textSize="14sp"
+        android:layout_margin="16dp" />
 
 </LinearLayout>

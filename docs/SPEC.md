@@ -349,6 +349,8 @@ ws://192.168.1.x:9800/?psk=<key>
 
 The console generates a random PSK on first run and stores it in `~/.config/dispatch/config.toml`. The key is displayed on the console's header bar (truncated, expandable with `p`). Any connection attempt with an invalid or missing PSK is rejected with a 401 before the WebSocket upgrade completes.
 
+**QR code pairing:** Press `Q` in command mode to display a QR code overlay encoding the full WebSocket URL (`ws://host:port/?psk=key`). The host is auto-detected from the machine's local network interface. The radio scans this QR code via its camera (Settings > Scan QR) to configure the connection without manual entry. The scanned URL populates host, port, and PSK fields automatically.
+
 ### Message Types
 
 **List agents**
@@ -643,6 +645,7 @@ While in input mode, `Escape` is the only key intercepted by the console. Everyt
 | `R`               | Rename agent in currently targeted slot                      |
 | `t`               | Show task list overlay (plan, active, queued, completed)             |
 | `p`               | Show/hide full PSK                                           |
+| `Q`               | Show QR code overlay for radio pairing                       |
 | `q`               | Quit (confirms if agents are running)                        |
 | `?`               | Toggle help overlay                                          |
 

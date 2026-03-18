@@ -124,6 +124,7 @@ enum Overlay {
     None,
     Help,
     TaskList,
+    QrCode,
     ConfirmQuit,
     ConfirmTerminate,
     DispatchSlot,
@@ -197,6 +198,7 @@ struct App {
     last_was_escape: bool,
     radio_state: RadioState,
     psk: String,
+    port: u16,
     psk_expanded: bool,
     overlay: Overlay,
     /// Shared input buffer for DispatchSlot and Rename overlays.
@@ -225,6 +227,7 @@ struct App {
 impl App {
     fn new(
         psk: String,
+        port: u16,
         ws_state: ws_server::SharedState,
         pane_rows: u16,
         pane_cols: u16,
@@ -240,6 +243,7 @@ impl App {
             last_was_escape: false,
             radio_state: RadioState::Disconnected,
             psk,
+            port,
             psk_expanded: false,
             overlay: Overlay::None,
             input_buf: String::new(),
@@ -1401,7 +1405,7 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
 }
 
 fn render_help_overlay(f: &mut Frame, area: Rect) {
-    let r = centered_rect(52, 22, area);
+    let r = centered_rect(52, 23, area);
     f.render_widget(Clear, r);
     let lines = vec![
         Line::from(Span::styled(
@@ -1421,6 +1425,7 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         Line::from(Span::raw("  R            Rename target agent")),
         Line::from(Span::raw("  t            Task list overlay")),
         Line::from(Span::raw("  p            Toggle PSK visibility")),
+        Line::from(Span::raw("  Q            Show QR code for radio pairing")),
         Line::from(Span::raw("  q            Quit (confirms if agents running)")),
         Line::from(Span::raw("  ?            This help screen")),
         Line::default(),
@@ -1440,6 +1445,99 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         Paragraph::new(Text::from(lines)).block(
             Block::default()
                 .title(" HELP ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Green)),
+        ),
+        r,
+    );
+}
+
+/// Detect the machine's local network IP by connecting a UDP socket.
+/// No data is sent; this just determines the outgoing interface address.
+fn local_ip() -> Option<String> {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    socket.local_addr().ok().map(|a| a.ip().to_string())
+}
+
+/// Render a QR code overlay encoding the console connection URL + PSK (dispatch-ct2.2).
+fn render_qr_overlay(f: &mut Frame, area: Rect, app: &App) {
+    let host = local_ip().unwrap_or_else(|| "127.0.0.1".to_string());
+    let url = format!("ws://{}:{}/?psk={}", host, app.port, app.psk);
+
+    let qr = match qrcode::QrCode::new(url.as_bytes()) {
+        Ok(q) => q,
+        Err(_) => return,
+    };
+    let matrix = qr.to_colors();
+    let qr_width = qr.width();
+
+    // Build lines using Unicode half-block characters.
+    // Each terminal row encodes 2 QR rows. Each module is 2 chars wide for squareness.
+    let dark = Color::Black;
+    let light = Color::White;
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Title
+    lines.push(Line::from(Span::styled(
+        " QR CODE — SCAN TO PAIR ",
+        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::default());
+
+    // Render QR matrix with 1-module quiet zone on each side
+    let total_w = qr_width + 2; // 1 quiet zone each side
+    let row_count = qr_width + 2; // 1 quiet zone top and bottom
+
+    let is_dark = |r: usize, c: usize| -> bool {
+        if r == 0 || r == row_count - 1 || c == 0 || c == total_w - 1 {
+            return false; // quiet zone = light
+        }
+        let qr_r = r - 1;
+        let qr_c = c - 1;
+        matrix[qr_r * qr_width + qr_c] == qrcode::Color::Dark
+    };
+
+    let mut row = 0;
+    while row < row_count {
+        let has_bot = row + 1 < row_count;
+        let mut spans: Vec<Span> = Vec::new();
+        for col in 0..total_w {
+            let top = is_dark(row, col);
+            let bot = if has_bot { is_dark(row + 1, col) } else { false };
+            let (ch, fg, bg) = match (top, bot) {
+                (true, true) => ('\u{2588}', dark, dark),   // █
+                (true, false) => ('\u{2580}', dark, light),  // ▀
+                (false, true) => ('\u{2584}', light, dark),  // ▄
+                (false, false) => (' ', light, light),
+            };
+            let s = format!("{ch}{ch}"); // 2 chars wide for square modules
+            spans.push(Span::styled(s, Style::default().fg(fg).bg(bg)));
+        }
+        lines.push(Line::from(spans));
+        row += 2;
+    }
+
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        format!("  {url}"),
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        "  Press any key to close",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let content_width = (total_w as u16 * 2) + 4; // 2 chars per module + border padding
+    let content_height = lines.len() as u16 + 2; // +2 for border
+    let r = centered_rect(content_width, content_height, area);
+    f.render_widget(Clear, r);
+    f.render_widget(
+        Paragraph::new(Text::from(lines)).block(
+            Block::default()
+                .title(" PAIR ")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Green)),
         ),
@@ -1898,6 +1996,7 @@ fn main() -> io::Result<()> {
 
     let mut app = App::new(
         cfg.auth.psk.clone(),
+        cfg.server.port,
         ws_state,
         pane_rows,
         pane_cols,
@@ -2212,6 +2311,7 @@ fn main() -> io::Result<()> {
                 Overlay::None => {}
                 Overlay::Help => render_help_overlay(f, full),
                 Overlay::TaskList => render_task_list_overlay(f, full, &app),
+                Overlay::QrCode => render_qr_overlay(f, full, &app),
                 Overlay::ConfirmQuit => render_confirm_overlay(
                     f, full, "QUIT", "Agents are running. Really quit?",
                 ),
@@ -2278,7 +2378,7 @@ fn main() -> io::Result<()> {
                     Mode::Command => {
                         if app.overlay != Overlay::None {
                             match app.overlay {
-                                Overlay::Help | Overlay::TaskList => {
+                                Overlay::Help | Overlay::TaskList | Overlay::QrCode => {
                                     app.overlay = Overlay::None;
                                 }
 
@@ -2485,6 +2585,7 @@ fn main() -> io::Result<()> {
                                     app.overlay = Overlay::TaskList;
                                 }
                                 KeyCode::Char('p') => app.psk_expanded = !app.psk_expanded,
+                                KeyCode::Char('Q') => app.overlay = Overlay::QrCode,
                                 KeyCode::Char('?') => app.overlay = Overlay::Help,
 
                                 _ => {}
