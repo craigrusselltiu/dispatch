@@ -1,10 +1,13 @@
 package com.dispatch.radio
 
 import android.Manifest
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.provider.Settings
 import android.view.WindowManager
+import android.view.accessibility.AccessibilityManager
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
@@ -41,6 +44,8 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var btnScanQr: Button
     private lateinit var btnDiscover: Button
     private lateinit var tvDiscoverStatus: TextView
+    private lateinit var btnAccessibility: Button
+    private lateinit var tvAccessibilityStatus: TextView
 
     private val qrScanLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -79,12 +84,37 @@ class SettingsActivity : AppCompatActivity() {
         btnScanQr = findViewById(R.id.btn_scan_qr)
         btnDiscover = findViewById(R.id.btn_discover)
         tvDiscoverStatus = findViewById(R.id.tv_discover_status)
+        btnAccessibility = findViewById(R.id.btn_accessibility)
+        tvAccessibilityStatus = findViewById(R.id.tv_accessibility_status)
 
         loadSettings()
+        refreshAccessibilityStatus()
 
         btnSave.setOnClickListener { saveSettings() }
         btnScanQr.setOnClickListener { onScanQrClicked() }
         btnDiscover.setOnClickListener { onDiscoverClicked() }
+        btnAccessibility.setOnClickListener {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshAccessibilityStatus()
+    }
+
+    private fun isAccessibilityServiceEnabled(): Boolean {
+        val am = getSystemService(ACCESSIBILITY_SERVICE) as AccessibilityManager
+        return am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_GENERIC)
+            .any { it.resolveInfo.serviceInfo.name == VolumeKeyAccessibilityService::class.java.name }
+    }
+
+    private fun refreshAccessibilityStatus() {
+        val enabled = isAccessibilityServiceEnabled()
+        tvAccessibilityStatus.text = if (enabled) "ENABLED" else "DISABLED"
+        tvAccessibilityStatus.setTextColor(
+            getColor(if (enabled) R.color.green else R.color.dim_grey)
+        )
     }
 
     private fun onDiscoverClicked() {
