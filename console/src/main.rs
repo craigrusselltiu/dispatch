@@ -21,6 +21,8 @@
 // dispatch-xje: git worktree-per-task isolation
 // dispatch-1lc.3: task dependencies — -> arrow syntax in .dispatch/tasks.md, file-based task ops
 // dispatch-1lc.4: task list overlay — full-screen plan view with status groups and agent assignments
+// dispatch-1lc.3: task dependencies — -> arrow syntax in .dispatch/tasks.md, dependency-aware dispatch
+// dispatch-fnx: headless planner — spawns claude -p to decompose complex prompts into task plans
 //
 // Layout:
 //   Header bar  : DISPATCH title, radio state, PSK, agent count, PAGE X/Y, clock
@@ -180,6 +182,12 @@ struct TaskEntry {
     deps: Vec<String>,     // dependency IDs from -> arrows (dispatch-1lc.3)
 }
 
+/// State for a running headless planner (dispatch-fnx).
+struct PlannerState {
+    prompt: String,
+    receiver: mpsc::Receiver<Option<String>>,
+}
+
 struct App {
     slots: [Option<SlotState>; MAX_SLOTS],
     current_page: usize,
@@ -210,6 +218,8 @@ struct App {
     repo_root: String,
     // Task list overlay cache (dispatch-1lc.4): loaded when overlay opens
     task_list_data: Vec<TaskEntry>,
+    // Headless planner (dispatch-fnx)
+    planner: Option<PlannerState>,
 }
 
 impl App {
@@ -246,6 +256,7 @@ impl App {
             conflict_tasks: Vec::new(),
             repo_root,
             task_list_data: Vec::new(),
+            planner: None,
         }
     }
 
@@ -733,6 +744,138 @@ fn fetch_task_list_from_file(
             }
         })
         .collect()
+}
+
+
+// ── headless planner (dispatch-fnx) ───────────────────────────────────────────
+
+const PLANNER_PROMPT: &str = r#"You are the Dispatch task planner. Decompose the following task into a structured plan.
+
+Output ONLY a markdown task list in this exact format (no other text, no code fences):
+
+# Short plan title
+
+- [ ] t1: First task description
+- [ ] t2: Second task that depends on t1 -> t1
+  - [ ] t2.1: Subtask of t2
+  - [ ] t2.2: Another subtask that depends on t2.1 -> t2.1
+- [ ] t3: Third task that depends on t1 and t2 -> t1, t2
+
+Rules:
+- Use t1, t2, t3 for top-level tasks. Use t1.1, t1.2 for subtasks.
+- Add -> id1, id2 when a task depends on other tasks being done first.
+- No arrow means the task can start immediately (no blockers).
+- Keep each task small: one agent should complete it in one session.
+- If the request is simple enough for one agent, output just one task entry.
+- Output ONLY the markdown. No explanation, no commentary.
+
+Task to plan:
+"#;
+
+/// Spawn a headless planner agent in a background thread. Returns a receiver
+/// that delivers the plan text (or None on failure) when the planner exits.
+fn spawn_planner(
+    prompt: &str,
+    tool_cmd: &str,
+    repo_root: &str,
+) -> mpsc::Receiver<Option<String>> {
+    let (tx, rx) = mpsc::channel();
+    let parts: Vec<String> = tool_cmd.split_whitespace().map(|s| s.to_string()).collect();
+    let full_prompt = format!("{}{}", PLANNER_PROMPT, prompt);
+    let repo_root = repo_root.to_string();
+
+    thread::spawn(move || {
+        let result = if parts.is_empty() {
+            None
+        } else {
+            let mut cmd = Command::new(&parts[0]);
+            for arg in &parts[1..] {
+                cmd.arg(arg);
+            }
+            cmd.arg("-p").arg(&full_prompt);
+            cmd.current_dir(&repo_root);
+
+            cmd.output().ok().and_then(|o| {
+                if o.status.success() {
+                    let text = String::from_utf8_lossy(&o.stdout).to_string();
+                    let stripped = text.trim();
+                    // Strip code fences if the LLM wrapped the output
+                    let stripped = stripped
+                        .strip_prefix("```markdown")
+                        .or_else(|| stripped.strip_prefix("```md"))
+                        .or_else(|| stripped.strip_prefix("```"))
+                        .unwrap_or(stripped);
+                    let stripped = stripped.strip_suffix("```").unwrap_or(stripped);
+                    Some(stripped.trim().to_string())
+                } else {
+                    None
+                }
+            })
+        };
+        let _ = tx.send(result);
+    });
+
+    rx
+}
+
+/// Dispatch ready plan tasks to available agents. Returns the number dispatched.
+fn dispatch_plan_tasks(app: &mut App) -> usize {
+    let ready = fetch_ready_tasks(&app.repo_root);
+    let pane_rows = app.pane_rows;
+    let pane_cols = app.pane_cols;
+    let repo_root = app.repo_root.clone();
+    let tool_cmd = app.tool_cmd("claude-code").to_string();
+    let mut dispatched = 0;
+
+    for task in ready {
+        // Find an idle slot (has PTY but no task) or an empty slot.
+        let slot_idx = app.slots.iter().enumerate().find_map(|(i, s)| {
+            match s {
+                Some(slot) if slot.task_id.is_none() => Some(i),
+                _ => None,
+            }
+        }).or_else(|| {
+            app.slots.iter().position(|s| s.is_none())
+        });
+
+        let slot_idx = match slot_idx {
+            Some(i) => i,
+            None => break, // No available slots; remaining tasks stay queued.
+        };
+
+        // Spawn PTY if slot is empty.
+        if app.slots[slot_idx].is_none() {
+            let worktree = create_worktree(&task.id, &repo_root);
+            if let Some(slot) = dispatch_slot(
+                slot_idx, "claude-code", &tool_cmd, pane_rows, pane_cols,
+                worktree.as_deref(),
+            ) {
+                app.slots[slot_idx] = Some(slot);
+            } else {
+                continue;
+            }
+        }
+
+        // Assign the task to the slot.
+        let display_name = {
+            let slot = app.slots[slot_idx].as_mut().unwrap();
+            update_task_in_file(&repo_root, &task.id, '~', Some(&slot.callsign));
+            let worktree = create_worktree(&task.id, &repo_root);
+            slot.task_id = Some(task.id.clone());
+            slot.worktree_path = worktree;
+            let prefixed = format!("[Dispatch task {}] {}\r", task.id, task.title);
+            let _ = slot.writer.write_all(prefixed.as_bytes());
+            let _ = slot.writer.flush();
+            slot.last_output_at = Instant::now();
+            slot.display_name().to_string()
+        };
+        app.push_ticker(format!(
+            "PLAN DISPATCH: {} -> {} (slot {})",
+            task.id, display_name, slot_idx + 1
+        ));
+        dispatched += 1;
+    }
+    dispatched
 }
 
 // ── task completion detection (dispatch-1lc.2) ────────────────────────────────
@@ -1589,6 +1732,115 @@ fn compute_pane_size(term_rows: u16, term_cols: u16) -> (u16, u16) {
     (rows, cols)
 }
 
+// ── tests for tasks.md parsing (dispatch-1lc.3) ──────────────────────────────
+
+#[cfg(test)]
+mod plan_tests {
+    use super::*;
+
+    #[test]
+    fn parse_basic_tasks() {
+        let lines = vec![
+            "# Plan title",
+            "",
+            "- [ ] t1: First task",
+            "- [ ] t2: Second task -> t1",
+            "- [x] t3: Done task",
+            "- [~] t4: In progress task | agent: Alpha",
+        ];
+        let tasks: Vec<ParsedTask> = lines.iter().enumerate()
+            .filter_map(|(i, l)| parse_task_line(l, i))
+            .collect();
+        assert_eq!(tasks.len(), 4);
+
+        assert_eq!(tasks[0].id, "t1");
+        assert_eq!(tasks[0].title, "First task");
+        assert_eq!(tasks[0].status, ' ');
+        assert!(tasks[0].deps.is_empty());
+
+        assert_eq!(tasks[1].id, "t2");
+        assert_eq!(tasks[1].deps, vec!["t1"]);
+
+        assert_eq!(tasks[2].status, 'x');
+
+        assert_eq!(tasks[3].status, '~');
+        assert_eq!(tasks[3].agent.as_deref(), Some("Alpha"));
+    }
+
+    #[test]
+    fn parse_multiple_deps() {
+        let task = parse_task_line("- [ ] t3: Update imports -> t1.1, t1.2", 0).unwrap();
+        assert_eq!(task.deps, vec!["t1.1", "t1.2"]);
+    }
+
+    #[test]
+    fn parse_indented_subtasks() {
+        let lines = vec![
+            "- [ ] t1: Parent task",
+            "  - [ ] t1.1: Subtask one",
+            "  - [ ] t1.2: Subtask two -> t1.1",
+        ];
+        let tasks: Vec<ParsedTask> = lines.iter().enumerate()
+            .filter_map(|(i, l)| parse_task_line(l, i))
+            .collect();
+        assert_eq!(tasks.len(), 3);
+        assert_eq!(tasks[1].id, "t1.1");
+        assert_eq!(tasks[2].deps, vec!["t1.1"]);
+    }
+
+    /// Helper: given ParsedTasks, find open tasks whose deps are all done.
+    fn find_ready(tasks: &[ParsedTask]) -> Vec<&ParsedTask> {
+        let done: std::collections::HashSet<&str> = tasks.iter()
+            .filter(|t| t.status == 'x')
+            .map(|t| t.id.as_str())
+            .collect();
+        tasks.iter()
+            .filter(|t| t.status == ' ' && t.deps.iter().all(|d| done.contains(d.as_str())))
+            .collect()
+    }
+
+    fn task(id: &str, status: char, deps: Vec<&str>) -> ParsedTask {
+        ParsedTask {
+            id: id.into(), title: "".into(), status, deps: deps.into_iter().map(|s| s.into()).collect(),
+            agent: None, line_idx: 0, prefix: String::new(),
+        }
+    }
+
+    #[test]
+    fn find_ready_no_deps() {
+        let tasks = vec![task("t1", ' ', vec![]), task("t2", ' ', vec!["t1"])];
+        let ready = find_ready(&tasks);
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].id, "t1");
+    }
+
+    #[test]
+    fn find_ready_after_completion() {
+        let tasks = vec![
+            task("t1", 'x', vec![]),
+            task("t2", ' ', vec!["t1"]),
+            task("t3", ' ', vec!["t1", "t2"]),
+        ];
+        let ready = find_ready(&tasks);
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].id, "t2");
+    }
+
+    #[test]
+    fn find_ready_skips_in_progress() {
+        let tasks = vec![task("t1", '~', vec![])];
+        let ready = find_ready(&tasks);
+        assert!(ready.is_empty());
+    }
+
+    #[test]
+    fn parse_deps_with_agent_annotation() {
+        let task = parse_task_line("- [~] t2: Task B -> t1 | agent: Bravo", 0).unwrap();
+        assert_eq!(task.deps, vec!["t1"]);
+        assert_eq!(task.agent.as_deref(), Some("Bravo"));
+    }
+}
+
 fn main() -> io::Result<()> {
     let cli = Cli::parse();
 
@@ -1725,6 +1977,8 @@ fn main() -> io::Result<()> {
                             app.push_ticker(format!("TASK COMPLETE: {} closed {} — slot {} now standby", callsign, id, i + 1));
                         }
                         update_task_in_file(&app.repo_root, &id, 'x', None);
+                        // dispatch-fnx: dispatch newly unblocked plan tasks after completion.
+                        dispatch_plan_tasks(&mut app);
                     } else {
                         app.push_ticker(format!("AGENT EXITED: {} (slot {}) — standby", callsign, i + 1));
                     }
@@ -1787,6 +2041,9 @@ fn main() -> io::Result<()> {
             }
             update_task_in_file(&app.repo_root, &task_id, 'x', None);
 
+            // dispatch-fnx: dispatch newly unblocked plan tasks after completion.
+            dispatch_plan_tasks(&mut app);
+
             // Pick up next available queued task and assign it to the idle slot.
             let next = fetch_ready_tasks(&app.repo_root).into_iter().next();
             if let Some(qt) = next {
@@ -1816,6 +2073,52 @@ fn main() -> io::Result<()> {
                 app.push_ticker(format!("PLANNER: {} new task{} queued — {} total ready", added, if added == 1 { "" } else { "s" }, new_count));
             }
             app.queued_tasks = tasks;
+        }
+
+        // Check headless planner completion (dispatch-fnx).
+        if app.planner.is_some() {
+            let finished = app.planner.as_ref()
+                .and_then(|p| p.receiver.try_recv().ok());
+            if let Some(result) = finished {
+                let prompt = app.planner.take().unwrap().prompt;
+                if let Some(plan_text) = result {
+                    // Write the plan to .dispatch/tasks.md.
+                    let dir = format!("{}/.dispatch", app.repo_root);
+                    let _ = std::fs::create_dir_all(&dir);
+                    let _ = std::fs::write(tasks_md_path(&app.repo_root), &plan_text);
+                    let (_, tasks) = parse_tasks_md(&app.repo_root);
+                    let total = tasks.len();
+                    let dispatched = dispatch_plan_tasks(&mut app);
+                    app.push_ticker(format!(
+                        "PLAN READY: {} tasks from '{}' — {} dispatched now",
+                        total,
+                        if prompt.len() > 40 { format!("{}...", &prompt[..37]) } else { prompt },
+                        dispatched
+                    ));
+                } else {
+                    // Planner failed: fall back to direct single-task dispatch.
+                    app.push_ticker("PLANNER FAILED: falling back to direct dispatch".to_string());
+                    if let Some(id) = create_task_in_file(&app.repo_root, &prompt) {
+                        // Try to dispatch directly to the first available slot.
+                        if let Some(g) = app.slots.iter().position(|s| s.is_none()) {
+                            let cmd = app.tool_cmd("claude-code").to_string();
+                            let worktree = create_worktree(&id, &app.repo_root);
+                            if let Some(mut slot) = dispatch_slot(
+                                g, "claude-code", &cmd, app.pane_rows, app.pane_cols,
+                                worktree.as_deref(),
+                            ) {
+                                update_task_in_file(&app.repo_root, &id, '~', Some(&slot.callsign));
+                                let prefixed = format!("[Dispatch task {id}] {prompt}\r");
+                                let _ = slot.writer.write_all(prefixed.as_bytes());
+                                let _ = slot.writer.flush();
+                                slot.task_id = Some(id);
+                                slot.worktree_path = worktree;
+                                app.slots[g] = Some(slot);
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // Advance ticker animation each frame (dispatch-ami).
@@ -1864,6 +2167,25 @@ fn main() -> io::Result<()> {
                     // surface in the next poll and be picked up when a slot frees.
                     if let Some(id) = create_task_in_file(&app.repo_root, &prompt) {
                         app.push_ticker(format!("QUEUED: all agents busy — task {} waiting", id));
+                    }
+                }
+                ws_server::WsEvent::PlanRequest { prompt } => {
+                    // dispatch-fnx: spawn a headless planner for complex prompts.
+                    if app.planner.is_none() {
+                        let cmd = app.tool_cmd("claude-code").to_string();
+                        let rx = spawn_planner(&prompt, &cmd, &app.repo_root);
+                        app.planner = Some(PlannerState { prompt: prompt.clone(), receiver: rx });
+                        let display = if prompt.len() > 60 {
+                            format!("{}...", &prompt[..57])
+                        } else {
+                            prompt
+                        };
+                        app.push_ticker(format!("PLANNING: {}", display));
+                    } else {
+                        // Planner already running; queue as a direct task.
+                        if let Some(id) = create_task_in_file(&app.repo_root, &prompt) {
+                            app.push_ticker(format!("QUEUED: planner busy — task {} waiting", id));
+                        }
                     }
                 }
             }

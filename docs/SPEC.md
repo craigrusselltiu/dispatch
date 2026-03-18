@@ -257,7 +257,7 @@ Voice: "Alpha, fix the login bug"
 
 When a prompt arrives without a specified agent:
 
-1. The console creates a task (or triggers planning if the prompt is complex).
+1. The console creates a task (or triggers planning if the prompt is complex -- currently prompts with more than 15 words are considered complex and routed to the headless planner).
 2. It checks agent states:
    - If an idle agent exists, assign the task to it.
    - If all agents are busy and an empty slot exists, dispatch a new agent (default tool: `claude-code`) and assign the task.
