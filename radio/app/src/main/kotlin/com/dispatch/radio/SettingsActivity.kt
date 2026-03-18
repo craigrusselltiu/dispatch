@@ -40,10 +40,11 @@ class SettingsActivity : AppCompatActivity() {
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == RESULT_OK) {
-            val scanned = result.data?.getStringExtra(QrScanActivity.EXTRA_PSK)
-            if (!scanned.isNullOrEmpty()) {
-                etPsk.setText(scanned)
-            }
+            val data = result.data ?: return@registerForActivityResult
+            data.getStringExtra(QrScanActivity.EXTRA_HOST)?.let { etHost.setText(it) }
+            val port = data.getIntExtra(QrScanActivity.EXTRA_PORT, -1)
+            if (port > 0) etPort.setText(port.toString())
+            data.getStringExtra(QrScanActivity.EXTRA_PSK)?.let { etPsk.setText(it) }
         }
     }
 

@@ -76,7 +76,7 @@ The PSK is displayed in the console header bar. You'll need it to connect the ra
 
 1. Open the `radio/` directory in Android Studio.
 2. Build and install the app on your Android device.
-3. Enter the console's IP address and PSK in the radio's settings screen.
+3. Connect the radio: press `Q` in the console to show a QR code, then scan it from the radio's settings screen. Or enter the console's IP address and PSK manually.
 
 ## Usage
 
@@ -99,6 +99,7 @@ The console displays four agent panes at a time in a 2x2 grid with a scrolling t
 | `R`               | Rename agent in targeted slot                       |
 | `t`               | Show task list overlay                              |
 | `p`               | Show/hide full PSK                                  |
+| `Q`               | Show QR code for radio pairing                      |
 | `q`               | Quit                                                |
 | `?`               | Toggle help overlay                                 |
 
