@@ -15,9 +15,11 @@
 // dispatch-bgz.10: pane info strip and header bar
 // dispatch-bgz.11: standby pane (empty slot display + queued task list)
 // dispatch-bgz.12: config file and CLI subcommands
+// dispatch-ami: LED-style scrolling ticker line between header and panes
 //
 // Layout:
 //   Header bar  : DISPATCH title, radio state, PSK, agent count, PAGE X/Y, clock
+//   Ticker bar  : single-line LED marquee scrolling right-to-left (dispatch-ami)
 //   Quad pane   : 2x2 grid; each pane has info strip + terminal area
 //   Footer bar  : mode indicator, target, navigation hints
 //
@@ -173,6 +175,11 @@ struct App {
     pane_rows: u16,
     pane_cols: u16,
     tools: std::collections::HashMap<String, String>,
+    // Ticker (dispatch-ami): LED-style scrolling marquee
+    ticker_queue: std::collections::VecDeque<String>,
+    ticker_current: String,
+    ticker_offset: usize,
+    ticker_frame_counter: u8,
 }
 
 impl App {
@@ -199,6 +206,10 @@ impl App {
             pane_rows,
             pane_cols,
             tools,
+            ticker_queue: std::collections::VecDeque::new(),
+            ticker_current: String::new(),
+            ticker_offset: 0,
+            ticker_frame_counter: 0,
         }
     }
 
@@ -266,6 +277,66 @@ impl App {
             .get(tool_key)
             .map(|s| s.as_str())
             .unwrap_or("claude")
+    }
+
+    /// Queue a message on the ticker (dispatch-ami).
+    fn push_ticker(&mut self, msg: impl Into<String>) {
+        self.ticker_queue.push_back(msg.into());
+    }
+
+    /// Advance the ticker state by one frame (dispatch-ami).
+    /// Call once per render loop iteration (~16ms). Scrolls one character every 3 frames (~50ms).
+    fn tick_ticker(&mut self) {
+        self.ticker_frame_counter = self.ticker_frame_counter.wrapping_add(1);
+        let advance = self.ticker_frame_counter % 3 == 0;
+
+        if self.ticker_current.is_empty() {
+            // Load next message from queue if available.
+            if let Some(msg) = self.ticker_queue.pop_front() {
+                self.ticker_current = msg;
+                self.ticker_offset = 0;
+                self.ticker_frame_counter = 0;
+            }
+            return;
+        }
+
+        if advance {
+            // Count display characters (not bytes) for offset tracking.
+            let char_len = self.ticker_current.chars().count();
+            self.ticker_offset += 1;
+            // Message is fully scrolled off when offset > char_len + display_width.
+            // Use 200 as a conservative maximum terminal width estimate.
+            if self.ticker_offset > char_len + 200 {
+                self.ticker_current = String::new();
+                self.ticker_offset = 0;
+                // Load next message immediately if queued.
+                if let Some(msg) = self.ticker_queue.pop_front() {
+                    self.ticker_current = msg;
+                    self.ticker_frame_counter = 0;
+                }
+            }
+        }
+    }
+
+    /// Build the visible ticker string for a display width (dispatch-ami).
+    /// The message scrolls right-to-left: starts fully off the right edge, moves left.
+    fn ticker_display(&self, width: usize) -> String {
+        if self.ticker_current.is_empty() {
+            return " ".repeat(width);
+        }
+        let chars: Vec<char> = self.ticker_current.chars().collect();
+        // Total virtual width: display area + message length (message starts off right edge).
+        // offset 0 = message starts just off-screen to the right.
+        // offset N = message has moved N chars to the left.
+        let virtual_start = width as isize - self.ticker_offset as isize;
+        let mut line = vec![' '; width];
+        for (i, &ch) in chars.iter().enumerate() {
+            let pos = virtual_start + i as isize;
+            if pos >= 0 && (pos as usize) < width {
+                line[pos as usize] = ch;
+            }
+        }
+        line.into_iter().collect()
     }
 }
 
@@ -576,6 +647,14 @@ fn screen_to_lines(screen: &vt100::Screen) -> Vec<Line<'static>> {
 }
 
 // ── rendering ─────────────────────────────────────────────────────────────────
+
+/// Render the LED-style scrolling ticker line (dispatch-ami).
+fn render_ticker(f: &mut Frame, area: Rect, app: &App) {
+    let width = area.width as usize;
+    let text = app.ticker_display(width);
+    let style = Style::default().fg(Color::Yellow);
+    f.render_widget(Paragraph::new(Line::from(Span::styled(text, style))), area);
+}
 
 fn render_header(f: &mut Frame, area: Rect, app: &App) {
     let radio_span = match app.radio_state {
@@ -1057,9 +1136,9 @@ fn render_rename_overlay(f: &mut Frame, area: Rect, app: &App) {
 
 /// Compute PTY dimensions from terminal size.
 fn compute_pane_size(term_rows: u16, term_cols: u16) -> (u16, u16) {
-    // 3-row header + 1-row footer = 4 fixed rows; remaining split 2 ways vertically.
+    // 3-row header + 1-row ticker + 1-row footer = 5 fixed rows; remaining split 2 ways vertically.
     // Each pane: 2 border rows + 4 info strip rows = 6 overhead.
-    let pane_h = term_rows.saturating_sub(4) / 2;
+    let pane_h = term_rows.saturating_sub(5) / 2;
     let rows = pane_h.saturating_sub(6).max(10);
     // Each pane is half the terminal width minus 2 for borders.
     let cols = (term_cols / 2).saturating_sub(2).max(20);
@@ -1125,6 +1204,8 @@ fn main() -> io::Result<()> {
             let _ = slot.writer.flush();
             slot.task_id = task_id;
         }
+        let name = slot.display_name().to_string();
+        app.push_ticker(format!("DISPATCH: {} launched in slot 1 — claude-code ready", name));
         app.slots[0] = Some(slot);
     }
 
@@ -1148,10 +1229,14 @@ fn main() -> io::Result<()> {
         for i in 0..MAX_SLOTS {
             if let Some(s) = &app.slots[i] {
                 if s.child_exited.load(Ordering::Relaxed) {
+                    let callsign = s.display_name().to_string();
                     let task_id = s.task_id.clone();
                     app.slots[i] = None;
-                    if let Some(id) = task_id {
-                        bd_close_task(&id);
+                    if let Some(id) = &task_id {
+                        bd_close_task(id);
+                        app.push_ticker(format!("TASK COMPLETE: {} closed {} — slot {} now standby", callsign, id, i + 1));
+                    } else {
+                        app.push_ticker(format!("AGENT EXITED: {} (slot {}) — standby", callsign, i + 1));
                     }
                 }
             }
@@ -1162,8 +1247,17 @@ fn main() -> io::Result<()> {
         }
 
         while let Ok(tasks) = tasks_rx.try_recv() {
+            let prev_count = app.queued_tasks.len();
+            let new_count = tasks.len();
+            if new_count > prev_count {
+                let added = new_count - prev_count;
+                app.push_ticker(format!("PLANNER: {} new task{} queued — {} total ready", added, if added == 1 { "" } else { "s" }, new_count));
+            }
             app.queued_tasks = tasks;
         }
+
+        // Advance ticker animation each frame (dispatch-ami).
+        app.tick_ticker();
 
         terminal.draw(|f| {
             let full = f.area();
@@ -1171,14 +1265,16 @@ fn main() -> io::Result<()> {
                 .direction(Direction::Vertical)
                 .constraints([
                     Constraint::Length(3),
+                    Constraint::Length(1),
                     Constraint::Min(0),
                     Constraint::Length(1),
                 ])
                 .split(full);
 
             render_header(f, chunks[0], &app);
-            render_panes(f, chunks[1], &app);
-            render_footer(f, chunks[2], &app);
+            render_ticker(f, chunks[1], &app);
+            render_panes(f, chunks[2], &app);
+            render_footer(f, chunks[3], &app);
 
             match app.overlay {
                 Overlay::None => {}
@@ -1273,8 +1369,12 @@ fn main() -> io::Result<()> {
                                 Overlay::ConfirmTerminate => match key.code {
                                     KeyCode::Char('y') | KeyCode::Char('Y') => {
                                         let target_g = app.target_global();
+                                        let callsign = app.slots[target_g].as_ref().map(|s| s.display_name().to_string()).unwrap_or_default();
                                         if let Some(task_id) = terminate_slot(&mut app.slots[target_g]) {
                                             bd_reopen_task(&task_id);
+                                            app.push_ticker(format!("TERMINATED: {} (slot {}) — task {} reopened", callsign, target_g + 1, task_id));
+                                        } else if !callsign.is_empty() {
+                                            app.push_ticker(format!("TERMINATED: {} (slot {})", callsign, target_g + 1));
                                         }
                                         app.overlay = Overlay::None;
                                     }
@@ -1300,6 +1400,8 @@ fn main() -> io::Result<()> {
                                                     if let Some(slot) = dispatch_slot(
                                                         g, "claude-code", &cmd, app.pane_rows, app.pane_cols,
                                                     ) {
+                                                        let name = slot.display_name().to_string();
+                                                        app.push_ticker(format!("DISPATCH: {} launched in slot {}", name, g + 1));
                                                         app.slots[g] = Some(slot);
                                                     }
                                                 }
@@ -1415,6 +1517,8 @@ fn main() -> io::Result<()> {
                                         ) {
                                             let page = g / SLOTS_PER_PAGE;
                                             let local = g % SLOTS_PER_PAGE;
+                                            let name = slot.display_name().to_string();
+                                            app.push_ticker(format!("DISPATCH: {} launched in slot {}", name, g + 1));
                                             app.slots[g] = Some(slot);
                                             app.current_page = page;
                                             app.target = local;
