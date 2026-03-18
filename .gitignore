@@ -1,3 +1,5 @@
+# Dispatch runtime artifacts (created in target repos)
+.dispatch/
 
 # Dolt database files (added by bd init)
 .dolt/
