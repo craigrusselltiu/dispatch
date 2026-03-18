@@ -54,6 +54,8 @@ pub struct AgentSlot {
     pub status: AgentStatus,
     /// Current beads task ID, if busy.
     pub task: Option<String>,
+    /// Short repo directory name (dispatch-2dc).
+    pub repo: Option<String>,
 }
 
 pub struct ConsoleState {
@@ -93,6 +95,7 @@ impl ConsoleState {
                 tool: None,
                 status: "empty",
                 task: None,
+                repo: None,
             },
             Some(a) => SlotInfo {
                 slot,
@@ -100,6 +103,7 @@ impl ConsoleState {
                 tool: Some(a.tool.clone()),
                 status: if a.status == AgentStatus::Busy { "busy" } else { "idle" },
                 task: a.task.clone(),
+                repo: a.repo.clone(),
             },
         }
     }
@@ -304,6 +308,7 @@ fn handle_message(raw: RawInbound, state: &SharedState) -> Option<OutboundMsg> {
                         tool: "claude-code".to_string(),
                         status: AgentStatus::Idle,
                         task: None,
+                        repo: None,
                     });
                     (Some(empty), true)
                 } else {
@@ -402,6 +407,7 @@ fn handle_message(raw: RawInbound, state: &SharedState) -> Option<OutboundMsg> {
                 tool: tool.clone(),
                 status: AgentStatus::Idle,
                 task: None,
+                repo: None,
             });
 
             Some(OutboundMsg::Dispatched { slot, callsign, tool, seq })
@@ -667,6 +673,7 @@ mod tests {
                 tool: "claude-code".to_string(),
                 status: AgentStatus::Busy,
                 task: Some(format!("t{i}")),
+                repo: None,
             });
         }
         let (tx, rx) = std::sync::mpsc::channel();

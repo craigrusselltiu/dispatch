@@ -112,4 +112,7 @@ pub struct SlotInfo {
     /// "busy" | "idle" | "empty"
     pub status: &'static str,
     pub task: Option<String>,
+    /// Short repo directory name (dispatch-2dc).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub repo: Option<String>,
 }
