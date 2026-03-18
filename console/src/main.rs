@@ -1,5 +1,6 @@
 // dispatch: Console TUI for Dispatch
 //
+// dispatch-bgz.2: embedded terminal per slot (portable-pty + vt100)
 // dispatch-e0k.1: PTY with claude via portable-pty + vt100 + ratatui
 // dispatch-e0k.2: keyboard input forwarding to PTY
 // dispatch-e0k.3: bd create integration from Rust
@@ -39,7 +40,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
-use portable_pty::{native_pty_system, CommandBuilder, PtySize};
+use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use ratatui::{
     backend::CrosstermBackend,
     layout::{Constraint, Direction, Layout, Rect},
@@ -221,6 +222,83 @@ impl App {
             }
         }
         true
+    }
+}
+
+// ── per-slot PTY (dispatch-bgz.2) ─────────────────────────────────────────────
+
+/// One PTY per dispatched agent: master handle for resize, writer for input,
+/// shared screen for render, and an exit flag set by the reader thread.
+struct SlotPty {
+    master: Box<dyn MasterPty + Send>,
+    writer: Box<dyn Write + Send>,
+    screen: Arc<Mutex<vt100::Parser>>,
+    child_exited: Arc<AtomicBool>,
+    rows: u16,
+    cols: u16,
+}
+
+impl SlotPty {
+    /// Open a PTY and spawn `cmd`; falls back to shell if `cmd` is not found.
+    fn spawn(rows: u16, cols: u16, cmd: &str) -> Option<Self> {
+        let pty_system = native_pty_system();
+        let pair = pty_system
+            .openpty(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 })
+            .ok()?;
+
+        let _ = pair
+            .slave
+            .spawn_command(CommandBuilder::new(cmd))
+            .or_else(|_| {
+                let shell = if cfg!(windows) { "cmd" } else { "bash" };
+                pair.slave.spawn_command(CommandBuilder::new(shell))
+            })
+            .ok()?;
+
+        let screen = Arc::new(Mutex::new(vt100::Parser::new(rows, cols, 0)));
+        let screen_w = Arc::clone(&screen);
+        let mut reader = pair.master.try_clone_reader().ok()?;
+        let exited = Arc::new(AtomicBool::new(false));
+        let exited_w = Arc::clone(&exited);
+
+        thread::spawn(move || {
+            let mut buf = [0u8; 4096];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) | Err(_) => break,
+                    Ok(n) => {
+                        screen_w.lock().unwrap().process(&buf[..n]);
+                    }
+                }
+            }
+            exited_w.store(true, Ordering::Relaxed);
+        });
+
+        let writer = pair.master.take_writer().ok()?;
+        let master = pair.master;
+        Some(SlotPty { master, writer, screen, child_exited: exited, rows, cols })
+    }
+
+    fn screen_lines(&self) -> Vec<Line<'static>> {
+        let parser = self.screen.lock().unwrap();
+        screen_to_lines(parser.screen())
+    }
+
+    fn is_exited(&self) -> bool {
+        self.child_exited.load(Ordering::Relaxed)
+    }
+
+    /// Resize the PTY and update the vt100 parser dimensions.
+    fn resize(&mut self, rows: u16, cols: u16) {
+        let _ = self.master.resize(PtySize { rows, cols, pixel_width: 0, pixel_height: 0 });
+        self.screen.lock().unwrap().set_size(rows, cols);
+        self.rows = rows;
+        self.cols = cols;
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        let _ = self.writer.write_all(bytes);
+        let _ = self.writer.flush();
     }
 }
 
@@ -638,7 +716,12 @@ fn render_pane(
     }
 }
 
-fn render_panes(f: &mut Frame, area: Rect, app: &App, vt_lines: Vec<Line<'static>>) {
+fn render_panes(
+    f: &mut Frame,
+    area: Rect,
+    app: &App,
+    vt_lines: Vec<Option<Vec<Line<'static>>>>,
+) {
     let cols = Layout::default()
         .direction(Direction::Horizontal)
         .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
@@ -654,16 +737,13 @@ fn render_panes(f: &mut Frame, area: Rect, app: &App, vt_lines: Vec<Line<'static
         .split(cols[1]);
 
     // top-left=local0, top-right=local1, bottom-left=local2, bottom-right=local3
-    // global_idx = current_page * 4 + local_idx
+    // global_idx = current_page * 4 + local_idx (dispatch-bgz.2)
     let page_start = app.current_page * 4;
-    // PTY is only wired to slot 0 (Alpha); other slots are standby
-    let pty_slot = |global: usize| -> Option<Vec<Line<'static>>> {
-        if global == 0 { Some(vt_lines.clone()) } else { None }
-    };
-    render_pane(f, left_rows[0], 0, page_start,     app, pty_slot(page_start));
-    render_pane(f, right_rows[0], 1, page_start + 1, app, pty_slot(page_start + 1));
-    render_pane(f, left_rows[1], 2, page_start + 2, app, pty_slot(page_start + 2));
-    render_pane(f, right_rows[1], 3, page_start + 3, app, pty_slot(page_start + 3));
+    let vl = |g: usize| vt_lines.get(g).and_then(|v| v.clone());
+    render_pane(f, left_rows[0],  0, page_start,     app, vl(page_start));
+    render_pane(f, right_rows[0], 1, page_start + 1, app, vl(page_start + 1));
+    render_pane(f, left_rows[1],  2, page_start + 2, app, vl(page_start + 2));
+    render_pane(f, right_rows[1], 3, page_start + 3, app, vl(page_start + 3));
 }
 
 fn render_footer(f: &mut Frame, area: Rect, app: &App) {
@@ -930,61 +1010,17 @@ fn main() -> io::Result<()> {
         bd_assign_task(id, CALLSIGN);
     }
 
-    // Create the PTY for slot 0 (Alpha)
-    let pty_system = native_pty_system();
-    let pair = pty_system
-        .openpty(PtySize {
-            rows: PTY_ROWS,
-            cols: PTY_COLS,
-            pixel_width: 0,
-            pixel_height: 0,
-        })
-        .expect("failed to open PTY");
+    // dispatch-bgz.2: per-slot PTY Vec (one entry per slot in app.slots); slot 0 gets a PTY on startup
+    let max_agents = cfg.terminal.max_agents as usize;
+    let mut ptys: Vec<Option<SlotPty>> = (0..max_agents).map(|_| None).collect();
+    ptys[0] = SlotPty::spawn(PTY_ROWS, PTY_COLS, "claude");
 
-    let cmd = CommandBuilder::new("claude");
-    let _child = pair
-        .slave
-        .spawn_command(cmd)
-        .or_else(|_| {
-            // Fallback: open a shell for testing without claude installed
-            let shell = if cfg!(windows) { "cmd" } else { "bash" };
-            pair.slave.spawn_command(CommandBuilder::new(shell))
-        })
-        .expect("failed to spawn process");
-
-    // PTY reader thread: feed bytes into vt100 parser; signal when PTY closes
-    let screen: Arc<Mutex<vt100::Parser>> = Arc::new(Mutex::new(vt100::Parser::new(
-        PTY_ROWS,
-        PTY_COLS,
-        0, // scrollback
-    )));
-    let screen_writer = Arc::clone(&screen);
-    let mut pty_reader = pair.master.try_clone_reader().expect("clone reader");
-    let child_exited = Arc::new(AtomicBool::new(false));
-    let child_exited_writer = Arc::clone(&child_exited);
-
-    thread::spawn(move || {
-        let mut buf = [0u8; 4096];
-        loop {
-            match pty_reader.read(&mut buf) {
-                Ok(0) | Err(_) => break,
-                Ok(n) => {
-                    screen_writer.lock().unwrap().process(&buf[..n]);
-                }
-            }
-        }
-        child_exited_writer.store(true, Ordering::Relaxed);
-    });
-
-    // PTY writer (dispatch-e0k.2): keyboard input forwarding
-    let mut pty_writer = pair.master.take_writer().expect("take writer");
-
-    // 3. Deliver prefixed prompt to the agent
-    // Format: "[Dispatch task {id}] {prompt_text}\r"
+    // 3. Deliver prefixed prompt to slot 0's agent
     if let Some(id) = &task_id {
-        let prefixed = format!("[Dispatch task {id}] {PROMPT}\r");
-        let _ = pty_writer.write_all(prefixed.as_bytes());
-        let _ = pty_writer.flush();
+        if let Some(pty) = ptys[0].as_mut() {
+            let prefixed = format!("[Dispatch task {id}] {PROMPT}\r");
+            pty.write(prefixed.as_bytes());
+        }
     }
 
     // Background thread: periodically fetch queued tasks from beads (dispatch-bgz.11)
@@ -1013,8 +1049,21 @@ fn main() -> io::Result<()> {
     let mut agent_terminated = false;
 
     loop {
-        // Break if the child process exited (agent completed its work)
-        if child_exited.load(Ordering::Relaxed) {
+        // dispatch-bgz.2: check for exited PTY slots; clear slot when done
+        let mut slot0_exited = false;
+        for i in 0..ptys.len() {
+            if ptys[i].as_ref().map(|p| p.is_exited()).unwrap_or(false) {
+                ptys[i] = None;
+                app.slots[i] = None;
+                if app.active_count > 0 {
+                    app.active_count -= 1;
+                }
+                if i == 0 {
+                    slot0_exited = true;
+                }
+            }
+        }
+        if slot0_exited {
             break;
         }
 
@@ -1023,11 +1072,9 @@ fn main() -> io::Result<()> {
             app.queued_tasks = tasks;
         }
 
-        // Snapshot VT screen for slot 0 (Alpha's PTY)
-        let vt_lines = {
-            let parser = screen.lock().unwrap();
-            screen_to_lines(parser.screen())
-        };
+        // dispatch-bgz.2: snapshot VT screen for each active slot
+        let vt_lines: Vec<Option<Vec<Line<'static>>>> =
+            ptys.iter().map(|p| p.as_ref().map(|p| p.screen_lines())).collect();
 
         terminal.draw(|f| {
             let full = f.area();
@@ -1041,7 +1088,7 @@ fn main() -> io::Result<()> {
                 .split(full);
 
             render_header(f, chunks[0], &app);
-            render_panes(f, chunks[1], &app, vt_lines.clone());
+            render_panes(f, chunks[1], &app, vt_lines);
             render_footer(f, chunks[2], &app);
 
             // Overlays rendered on top of everything (dispatch-bgz.5)
@@ -1073,8 +1120,20 @@ fn main() -> io::Result<()> {
         })?;
 
         if event::poll(Duration::from_millis(16))? {
-            if let Event::Key(key) = event::read()? {
-                match app.mode {
+            match event::read()? {
+                // ----------------------------------------------------------------
+                // dispatch-bgz.2: resize all active PTYs when the terminal resizes
+                // ----------------------------------------------------------------
+                Event::Resize(cols, rows) => {
+                    // Each pane is ~half the terminal width/height minus borders and info strip
+                    let pane_cols = (cols / 2).saturating_sub(2).max(20);
+                    let pane_rows = (rows.saturating_sub(4) / 2).saturating_sub(6).max(5);
+                    for pty in ptys.iter_mut().flatten() {
+                        pty.resize(pane_rows, pane_cols);
+                    }
+                }
+
+                Event::Key(key) => match app.mode {
                     // ----------------------------------------------------------------
                     // Input mode: keystrokes go to the PTY.
                     // Escape is the only key the console intercepts.
@@ -1084,9 +1143,8 @@ fn main() -> io::Result<()> {
                         if key.code == KeyCode::Esc {
                             if app.last_was_escape {
                                 // Double-Escape: send one literal Escape to PTY, stay in Input mode.
-                                if app.global_target() == 0 {
-                                    let _ = pty_writer.write_all(b"\x1b");
-                                    let _ = pty_writer.flush();
+                                if let Some(pty) = ptys[app.global_target()].as_mut() {
+                                    pty.write(b"\x1b");
                                 }
                                 app.last_was_escape = false;
                             } else {
@@ -1103,12 +1161,11 @@ fn main() -> io::Result<()> {
                             continue;
                         }
 
-                        // Forward to PTY only for slot 0 (the only slot with a PTY in PoC)
-                        if app.global_target() == 0 {
+                        // dispatch-bgz.2: forward input to the targeted slot's PTY
+                        if let Some(pty) = ptys[app.global_target()].as_mut() {
                             let bytes = key_to_pty_bytes(&key);
                             if !bytes.is_empty() {
-                                let _ = pty_writer.write_all(&bytes);
-                                let _ = pty_writer.flush();
+                                pty.write(&bytes);
                             }
                         }
                     }
@@ -1135,8 +1192,9 @@ fn main() -> io::Result<()> {
                                 },
                                 Overlay::ConfirmTerminate => match key.code {
                                     KeyCode::Char('y') | KeyCode::Char('Y') => {
-                                        // Terminate the targeted slot.
+                                        // dispatch-bgz.2: drop the slot's PTY on terminate
                                         let global = app.global_target();
+                                        ptys[global] = None;
                                         app.slots[global] = None;
                                         if app.active_count > 0 {
                                             app.active_count -= 1;
@@ -1179,6 +1237,8 @@ fn main() -> io::Result<()> {
                                                         dispatch_wall_str: wall,
                                                     });
                                                     app.active_count += 1;
+                                                    // dispatch-bgz.2: spawn PTY for the new slot
+                                                    ptys[global] = SlotPty::spawn(PTY_ROWS, PTY_COLS, "claude");
                                                 }
                                             }
                                         }
@@ -1281,6 +1341,8 @@ fn main() -> io::Result<()> {
                                         // Auto-navigate to the page containing the new slot
                                         app.current_page = global / 4;
                                         app.target = global % 4;
+                                        // dispatch-bgz.2: spawn PTY for the new slot
+                                        ptys[global] = SlotPty::spawn(PTY_ROWS, PTY_COLS, "claude");
                                     }
                                 }
 
@@ -1321,7 +1383,9 @@ fn main() -> io::Result<()> {
                             }
                         }
                     }
-                }
+                },
+
+                _ => {}
             }
         }
     }
