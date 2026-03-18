@@ -17,6 +17,7 @@
 // dispatch-bgz.12: config file and CLI subcommands
 // dispatch-ami: LED-style scrolling ticker line between header and panes
 // dispatch-1lc.2: idle agent pickup — idle prompt detection, inactivity timeout, auto task pickup
+// dispatch-xje: git worktree-per-task isolation
 //
 // Layout:
 //   Header bar  : DISPATCH title, radio state, PSK, agent count, PAGE X/Y, clock
@@ -136,6 +137,7 @@ struct SlotState {
     custom_name: Option<String>, // user rename (dispatch-bgz.3)
     tool: String,
     task_id: Option<String>,
+    worktree_path: Option<String>, // git worktree path for this task (dispatch-xje)
     dispatch_time: Instant,
     dispatch_wall_str: String,
     // PTY
@@ -188,6 +190,10 @@ struct App {
     ticker_current: String,
     ticker_offset: usize,
     ticker_frame_counter: u8,
+    /// Task IDs with unresolved merge conflicts (dispatch-xje).
+    conflict_tasks: Vec<String>,
+    /// Absolute path to the target repo root (dispatch-xje).
+    repo_root: String,
 }
 
 impl App {
@@ -198,6 +204,7 @@ impl App {
         pane_cols: u16,
         tools: std::collections::HashMap<String, String>,
         completion_timeout: Duration,
+        repo_root: String,
     ) -> Self {
         App {
             slots: std::array::from_fn(|_| None),
@@ -220,6 +227,8 @@ impl App {
             ticker_current: String::new(),
             ticker_offset: 0,
             ticker_frame_counter: 0,
+            conflict_tasks: Vec::new(),
+            repo_root,
         }
     }
 
@@ -353,12 +362,14 @@ impl App {
 // ── PTY helpers (dispatch-bgz.2, dispatch-bgz.6) ──────────────────────────────
 
 /// Open a PTY and spawn a process. Returns a SlotState on success.
+/// `cwd` sets the working directory for the PTY (dispatch-xje: worktree path).
 fn dispatch_slot(
     global_idx: usize,
     tool_key: &str,
     tool_cmd: &str,
     pane_rows: u16,
     pane_cols: u16,
+    cwd: Option<&str>,
 ) -> Option<SlotState> {
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -371,7 +382,7 @@ fn dispatch_slot(
         .ok()?;
 
     let parts: Vec<&str> = tool_cmd.split_whitespace().collect();
-    let cmd = if parts.is_empty() {
+    let mut cmd = if parts.is_empty() {
         CommandBuilder::new("claude")
     } else {
         let mut c = CommandBuilder::new(parts[0]);
@@ -380,6 +391,9 @@ fn dispatch_slot(
         }
         c
     };
+    if let Some(dir) = cwd {
+        cmd.cwd(dir);
+    }
 
     let child = pair
         .slave
@@ -423,6 +437,7 @@ fn dispatch_slot(
         custom_name: None,
         tool: tool_key.to_string(),
         task_id: None,
+        worktree_path: None,
         dispatch_time: now,
         dispatch_wall_str: wall,
         screen,
@@ -595,6 +610,64 @@ fn is_idle_prompt(screen: &vt100::Screen, tool: &str) -> bool {
         }
     }
     false
+}
+
+// ── worktree helpers (dispatch-xje) ───────────────────────────────────────────
+
+/// Create a git worktree for `task_id` at `.dispatch/.worktrees/{task_id}` on
+/// branch `task/{task_id}`. Returns the absolute worktree path on success.
+/// If the worktree already exists (task reassignment), returns the existing path.
+fn create_worktree(task_id: &str, repo_root: &str) -> Option<String> {
+    let worktrees_dir = format!("{}/.dispatch/.worktrees", repo_root);
+    let worktree_path = format!("{}/{}", worktrees_dir, task_id);
+    let branch = format!("task/{}", task_id);
+
+    let _ = std::fs::create_dir_all(&worktrees_dir);
+
+    // Reuse existing worktree on reassignment.
+    if std::path::Path::new(&worktree_path).exists() {
+        return Some(worktree_path);
+    }
+
+    let status = Command::new("git")
+        .args(["worktree", "add", &worktree_path, "-b", &branch, "HEAD"])
+        .current_dir(repo_root)
+        .status()
+        .ok()?;
+
+    if status.success() { Some(worktree_path) } else { None }
+}
+
+/// Merge `task/{task_id}` into the current branch. On success, removes the
+/// worktree and branch and returns true. On conflict, aborts and returns false.
+fn merge_worktree(task_id: &str, repo_root: &str) -> bool {
+    let branch = format!("task/{}", task_id);
+    let worktree_path = format!("{}/.dispatch/.worktrees/{}", repo_root, task_id);
+
+    let merged = Command::new("git")
+        .args(["merge", &branch, "--no-ff", "-m", &format!("merge {}", branch)])
+        .current_dir(repo_root)
+        .status()
+        .map(|s| s.success())
+        .unwrap_or(false);
+
+    if merged {
+        let _ = Command::new("git")
+            .args(["worktree", "remove", &worktree_path, "--force"])
+            .current_dir(repo_root)
+            .status();
+        let _ = Command::new("git")
+            .args(["branch", "-d", &branch])
+            .current_dir(repo_root)
+            .status();
+        true
+    } else {
+        let _ = Command::new("git")
+            .args(["merge", "--abort"])
+            .current_dir(repo_root)
+            .status();
+        false
+    }
 }
 
 fn key_to_pty_bytes(key: &KeyEvent) -> Vec<u8> {
@@ -950,6 +1023,24 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
         .map(|a| a.display_name().to_string())
         .unwrap_or_else(|| format!("[{}]", target_g + 1));
 
+    // dispatch-xje: show merge conflict notice when present.
+    if !app.conflict_tasks.is_empty() {
+        let ids = app.conflict_tasks.join(", ");
+        let line = Line::from(vec![
+            Span::styled(
+                " MERGE CONFLICT: ",
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
+            ),
+            Span::styled(ids, Style::default().fg(Color::Yellow)),
+            Span::styled(
+                " -- resolve manually, then run: git worktree remove .dispatch/.worktrees/<id>",
+                Style::default().fg(Color::DarkGray),
+            ),
+        ]);
+        f.render_widget(Paragraph::new(line), area);
+        return;
+    }
+
     let content = match app.mode {
         Mode::Command => {
             let radio_label = match app.radio_state {
@@ -1239,6 +1330,19 @@ fn main() -> io::Result<()> {
     let (pane_rows, pane_cols) = compute_pane_size(term_rows, term_cols);
 
     let completion_timeout = Duration::from_secs(cfg.beads.completion_timeout_secs as u64);
+
+    // Resolve repo root for worktree operations (dispatch-xje).
+    let repo_root = Command::new("git")
+        .args(["rev-parse", "--show-toplevel"])
+        .output()
+        .ok()
+        .and_then(|o| if o.status.success() {
+            String::from_utf8(o.stdout).ok().map(|s| s.trim().to_string())
+        } else {
+            None
+        })
+        .unwrap_or_else(|| ".".to_string());
+
     let mut app = App::new(
         cfg.auth.psk.clone(),
         ws_state,
@@ -1246,20 +1350,29 @@ fn main() -> io::Result<()> {
         pane_cols,
         cfg.tools.clone(),
         completion_timeout,
+        repo_root.clone(),
     );
 
     // Dispatch slot 0 (Alpha) with claude on startup (dispatch-bgz.6).
+    // dispatch-xje: create task and worktree before spawning PTY so cwd is set.
+    const PROMPT: &str = "PoC session: validate PTY + vt100 + ratatui";
+    let startup_task_id = bd_create_task(PROMPT);
+    let startup_worktree = startup_task_id
+        .as_deref()
+        .and_then(|id| create_worktree(id, &repo_root));
     let claude_cmd = app.tool_cmd("claude-code").to_string();
-    if let Some(mut slot) = dispatch_slot(0, "claude-code", &claude_cmd, pane_rows, pane_cols) {
+    if let Some(mut slot) = dispatch_slot(
+        0, "claude-code", &claude_cmd, pane_rows, pane_cols,
+        startup_worktree.as_deref(),
+    ) {
         // dispatch-bgz.9: beads task lifecycle on startup
-        const PROMPT: &str = "PoC session: validate PTY + vt100 + ratatui";
-        let task_id = bd_create_task(PROMPT);
-        if let Some(id) = &task_id {
+        if let Some(id) = &startup_task_id {
             bd_assign_task(id, &slot.callsign);
             let prefixed = format!("[Dispatch task {id}] {PROMPT}\r");
             let _ = slot.writer.write_all(prefixed.as_bytes());
             let _ = slot.writer.flush();
-            slot.task_id = task_id;
+            slot.task_id = startup_task_id;
+            slot.worktree_path = startup_worktree;
         }
         let name = slot.display_name().to_string();
         app.push_ticker(format!("DISPATCH: {} launched in slot 1 — claude-code ready", name));
@@ -1282,16 +1395,27 @@ fn main() -> io::Result<()> {
     let mut quit_requested = false;
 
     'main: loop {
-        // Close any slots whose child exited naturally (dispatch-bgz.9).
+        // Close any slots whose child exited naturally (dispatch-bgz.9, dispatch-xje).
         for i in 0..MAX_SLOTS {
             if let Some(s) = &app.slots[i] {
                 if s.child_exited.load(Ordering::Relaxed) {
                     let callsign = s.display_name().to_string();
                     let task_id = s.task_id.clone();
+                    let worktree_path = s.worktree_path.clone();
                     app.slots[i] = None;
-                    if let Some(id) = &task_id {
-                        bd_close_task(id);
-                        app.push_ticker(format!("TASK COMPLETE: {} closed {} — slot {} now standby", callsign, id, i + 1));
+                    if let Some(id) = task_id {
+                        // dispatch-xje: merge worktree before closing; flag on conflict.
+                        if worktree_path.is_some() {
+                            if merge_worktree(&id, &app.repo_root) {
+                                app.push_ticker(format!("TASK COMPLETE: {} merged {} — slot {} now standby", callsign, id, i + 1));
+                            } else {
+                                app.conflict_tasks.push(id.clone());
+                                app.push_ticker(format!("MERGE CONFLICT: {} in {} — resolve manually", id, callsign));
+                            }
+                        } else {
+                            app.push_ticker(format!("TASK COMPLETE: {} closed {} — slot {} now standby", callsign, id, i + 1));
+                        }
+                        bd_close_task(&id);
                     } else {
                         app.push_ticker(format!("AGENT EXITED: {} (slot {}) — standby", callsign, i + 1));
                     }
@@ -1527,7 +1651,7 @@ fn main() -> io::Result<()> {
                                                 if app.slots[g].is_none() {
                                                     let cmd = app.tool_cmd("claude-code").to_string();
                                                     if let Some(slot) = dispatch_slot(
-                                                        g, "claude-code", &cmd, app.pane_rows, app.pane_cols,
+                                                        g, "claude-code", &cmd, app.pane_rows, app.pane_cols, None,
                                                     ) {
                                                         let name = slot.display_name().to_string();
                                                         app.push_ticker(format!("DISPATCH: {} launched in slot {}", name, g + 1));
@@ -1642,7 +1766,7 @@ fn main() -> io::Result<()> {
                                     if let Some(g) = app.slots.iter().position(|s| s.is_none()) {
                                         let cmd = app.tool_cmd("claude-code").to_string();
                                         if let Some(slot) = dispatch_slot(
-                                            g, "claude-code", &cmd, app.pane_rows, app.pane_cols,
+                                            g, "claude-code", &cmd, app.pane_rows, app.pane_cols, None,
                                         ) {
                                             let page = g / SLOTS_PER_PAGE;
                                             let local = g % SLOTS_PER_PAGE;
