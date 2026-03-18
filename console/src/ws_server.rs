@@ -6,7 +6,7 @@
 // ignored. Responses carry the optional `seq` from the request for correlation.
 
 use std::net::SocketAddr;
-use std::sync::{Arc, Mutex};
+use std::sync::{mpsc, Arc, Mutex};
 
 use futures_util::{SinkExt, StreamExt};
 use tokio::net::{TcpListener, TcpStream};
@@ -21,6 +21,20 @@ use tokio_tungstenite::{
 use crate::protocol::{default_callsign, OutboundMsg, RawInbound, SlotInfo};
 
 pub const MAX_SLOTS: usize = 26;
+
+// --- Event channel -------------------------------------------------------
+
+/// Events sent from the WebSocket handler to the main TUI thread so that
+/// PTY operations (which must happen on the main thread) can be executed.
+pub enum WsEvent {
+    /// Auto-dispatch: the radio sent an unaddressed prompt. The main thread
+    /// should ensure a PTY exists at `slot`, create a beads task, and
+    /// forward the prompt to the agent.
+    AutoDispatch { slot: u32, prompt: String },
+    /// All agent slots were full. The main thread should create an open
+    /// beads task so it appears in the queued-task list.
+    QueueTask { prompt: String },
+}
 
 // --- Agent state ---------------------------------------------------------
 
@@ -47,6 +61,8 @@ pub struct ConsoleState {
     pub queued_tasks: Vec<String>,
     /// Monotonic counter used to generate stub task IDs.
     task_counter: u64,
+    /// Sender for PTY events; set by the main thread after startup.
+    pub event_tx: Option<mpsc::Sender<WsEvent>>,
 }
 
 impl ConsoleState {
@@ -56,6 +72,7 @@ impl ConsoleState {
             target: None,
             queued_tasks: Vec::new(),
             task_counter: 0,
+            event_tx: None,
         }
     }
 
@@ -275,6 +292,9 @@ fn handle_message(raw: RawInbound, state: &SharedState) -> Option<OutboundMsg> {
                     let task_id = st.next_task_id();
                     let msg = format!("all agents busy, task queued as {task_id}");
                     st.queued_tasks.push(task_id);
+                    if let Some(tx) = &st.event_tx {
+                        let _ = tx.send(WsEvent::QueueTask { prompt: text });
+                    }
                     return Some(OutboundMsg::Error { message: msg, seq });
                 }
             } else {
@@ -308,13 +328,20 @@ fn handle_message(raw: RawInbound, state: &SharedState) -> Option<OutboundMsg> {
                 });
             }
 
-            // Stub task ID — real integration creates a beads task via bd.
+            // Stub task ID — real beads task created by the main thread via bd.
             let task_id = st.next_task_id();
-            let _ = text; // prompt text forwarded to PTY by console core
             let agent = st.slots[idx].as_mut().unwrap();
             agent.status = AgentStatus::Busy;
             agent.task = Some(task_id.clone());
             let callsign = agent.callsign.clone();
+
+            // For auto-dispatched prompts, notify the main thread to spawn
+            // the PTY (if needed) and forward the prompt.
+            if auto {
+                if let Some(tx) = &st.event_tx {
+                    let _ = tx.send(WsEvent::AutoDispatch { slot, prompt: text });
+                }
+            }
 
             Some(OutboundMsg::Ack {
                 slot,
@@ -588,5 +615,58 @@ mod tests {
         let resp = handle_message(msg, &state).unwrap();
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("\"type\":\"error\""));
+    }
+
+    #[test]
+    fn auto_dispatch_sends_ws_event() {
+        let state = make_state();
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.lock().unwrap().event_tx = Some(tx);
+
+        let mut s = raw("send");
+        s.text = Some("implement feature X".to_string());
+        s.auto = Some(true);
+        let resp = handle_message(s, &state).unwrap();
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"type\":\"ack\""));
+
+        // Main thread should receive an AutoDispatch event with the prompt.
+        match rx.try_recv().unwrap() {
+            WsEvent::AutoDispatch { slot: _, prompt } => {
+                assert_eq!(prompt, "implement feature X");
+            }
+            _ => panic!("expected AutoDispatch event"),
+        }
+    }
+
+    #[test]
+    fn queue_task_sends_ws_event() {
+        let state = make_state();
+        // Fill all slots so auto-dispatch falls through to queue.
+        for i in 0..MAX_SLOTS {
+            state.lock().unwrap().slots[i] = Some(AgentSlot {
+                callsign: format!("Agent{i}"),
+                tool: "claude-code".to_string(),
+                status: AgentStatus::Busy,
+                task: Some(format!("t{i}")),
+            });
+        }
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.lock().unwrap().event_tx = Some(tx);
+
+        let mut s = raw("send");
+        s.text = Some("a big new task".to_string());
+        s.auto = Some(true);
+        let resp = handle_message(s, &state).unwrap();
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"type\":\"error\""));
+        assert!(json.contains("all agents busy"));
+
+        match rx.try_recv().unwrap() {
+            WsEvent::QueueTask { prompt } => {
+                assert_eq!(prompt, "a big new task");
+            }
+            _ => panic!("expected QueueTask event"),
+        }
     }
 }

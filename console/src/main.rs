@@ -16,6 +16,7 @@
 // dispatch-bgz.11: standby pane (empty slot display + queued task list)
 // dispatch-bgz.12: config file and CLI subcommands
 // dispatch-ami: LED-style scrolling ticker line between header and panes
+// dispatch-1lc.1: task queuing — auto-dispatch unaddressed prompts from radio
 // dispatch-1lc.2: idle agent pickup — idle prompt detection, inactivity timeout, auto task pickup
 //
 // Layout:
@@ -1266,6 +1267,13 @@ fn main() -> io::Result<()> {
         app.slots[0] = Some(slot);
     }
 
+    // Channel for WsEvents from the WebSocket thread (dispatch-1lc.1).
+    let (ws_event_tx, ws_event_rx) = mpsc::channel::<ws_server::WsEvent>();
+    {
+        let mut st = app.ws_state.lock().unwrap();
+        st.event_tx = Some(ws_event_tx);
+    }
+
     // Background thread: fetch queued tasks every TASK_POLL_SECS (dispatch-bgz.11).
     let (tasks_tx, tasks_rx) = mpsc::channel::<Vec<QueuedTask>>();
     thread::spawn(move || loop {
@@ -1387,6 +1395,54 @@ fn main() -> io::Result<()> {
 
         // Advance ticker animation each frame (dispatch-ami).
         app.tick_ticker();
+
+        // Process auto-dispatch events from the WebSocket thread (dispatch-1lc.1).
+        while let Ok(event) = ws_event_rx.try_recv() {
+            match event {
+                ws_server::WsEvent::AutoDispatch { slot, prompt } => {
+                    let g = (slot as usize).saturating_sub(1);
+                    if g < MAX_SLOTS {
+                        // Spawn a PTY if the slot is empty.
+                        if app.slots[g].is_none() {
+                            let cmd = app.tool_cmd("claude-code").to_string();
+                            if let Some(s) = dispatch_slot(
+                                g, "claude-code", &cmd, app.pane_rows, app.pane_cols,
+                            ) {
+                                let name = s.display_name().to_string();
+                                app.slots[g] = Some(s);
+                                app.push_ticker(format!("AUTO-DISPATCH: {} launched in slot {}", name, g + 1));
+                            }
+                        }
+                        let task_id = bd_create_task(&prompt);
+                        let mut ticker_msg: Option<String> = None;
+                        if let Some(slot_state) = app.slots[g].as_mut() {
+                            if let Some(ref id) = task_id {
+                                bd_assign_task(id, &slot_state.callsign);
+                                let prefixed = format!("[Dispatch task {id}] {prompt}\r");
+                                let _ = slot_state.writer.write_all(prefixed.as_bytes());
+                                let _ = slot_state.writer.flush();
+                                ticker_msg = Some(format!("AUTO-DISPATCH: task {} assigned to {}", id, slot_state.callsign));
+                            } else {
+                                let with_enter = format!("{prompt}\r");
+                                let _ = slot_state.writer.write_all(with_enter.as_bytes());
+                                let _ = slot_state.writer.flush();
+                            }
+                            slot_state.task_id = task_id;
+                        }
+                        if let Some(msg) = ticker_msg {
+                            app.push_ticker(msg);
+                        }
+                    }
+                }
+                ws_server::WsEvent::QueueTask { prompt } => {
+                    // Create an open beads task; it will surface in the next
+                    // queued-task poll and can be picked up when a slot frees.
+                    if let Some(id) = bd_create_task(&prompt) {
+                        app.push_ticker(format!("QUEUED: all agents busy — task {} waiting", id));
+                    }
+                }
+            }
+        }
 
         terminal.draw(|f| {
             let full = f.area();
