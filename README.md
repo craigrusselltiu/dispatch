@@ -6,10 +6,11 @@ Turn your Android phone into a push-to-talk radio that dispatches tasks to AI co
 
 ## Overview
 
-Dispatch has two components:
+Dispatch has three components:
 
 - **Dispatch Radio** (Android) -- a minimal push-to-talk app controlled via hardware volume buttons. Hold Volume Down to speak; the app transcribes speech, parses voice commands, and sends structured messages to the console over a local WebSocket connection.
 - **Dispatch Console** (PC) -- a TUI command center with up to 26 embedded terminal panes, each running a live AI agent session. Receives voice commands from the radio, plans and decomposes tasks, dispatches agents into git worktrees, tracks progress in `.dispatch/tasks.md`, and merges completed work. Supports direct keyboard input into any agent pane via a vim-style modal interface.
+- **Dispatch Watch** (Wear OS) -- a minimal wrist companion for status glances and quick actions. Shows connection state, current target, and active agents. Crown rotation cycles targets; tap to dispatch a new agent. Same WebSocket protocol as the radio.
 
 ```
 ┌──────────────┐     WebSocket (LAN, PSK)     ┌──────────────────┐
@@ -28,7 +29,9 @@ Dispatch has two components:
 
 ```
 dispatch/
-  radio/               # Android app (Kotlin, Gradle)
+  radio/               # Android phone app (Kotlin, Gradle)
+    app/               # Phone radio module
+    wear/              # Wear OS companion module
   console/             # PC TUI (Rust, Cargo)
   docs/
     SPEC.md            # Full system specification
@@ -78,6 +81,12 @@ The PSK is displayed in the console header bar. You'll need it to connect the ra
 2. Build and install the app on your Android device.
 3. Enter the console's IP address and PSK in the radio's settings screen.
 
+### Watch (Wear OS)
+
+1. Open the `radio/` directory in Android Studio -- the `wear` module is included.
+2. Build and install on a Wear OS 3+ device (API 30+).
+3. Long-press the main screen to open settings and enter the console's IP address, port, and PSK.
+
 ## Usage
 
 `cd` into any git repo and run `dispatch`. The console creates `.dispatch/` in the repo and starts listening for voice commands.
@@ -112,6 +121,14 @@ The console displays four agent panes at a time in a 2x2 grid with a scrolling t
 | Volume Down (release)  | Send transcript to console                          |
 | Volume Up              | Cycle to next active agent                          |
 | Volume Up (hold >1s)   | Quick dispatch: pick and launch a new agent type    |
+
+### Watch
+
+| Control              | Action                                              |
+|----------------------|-----------------------------------------------------|
+| Crown rotation       | Cycle through active agents                         |
+| Tap "TAP TO DISPATCH"| Pick and launch a new agent type                    |
+| Long press           | Open settings (host, port, PSK)                     |
 
 ### Voice Commands
 

@@ -964,7 +964,7 @@ Radio:
 - AccessibilityService for screen-off volume button capture.
 - Console prompt history and logging.
 - `.dispatch/tasks.md` pruning for long-running projects (archive completed tasks).
-- Wear OS companion.
+- Wear OS companion: minimal wrist app (`radio/wear/` module) with status glance (connection state, current target, active agents), crown rotation for target cycling, and tap-to-dispatch trigger. Standalone APK, same WebSocket protocol as the phone radio. Settings (host, port, PSK) via long-press.
 
 ---
 
