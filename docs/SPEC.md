@@ -863,6 +863,7 @@ Minimal, high-contrast, dark theme. Uppercase labels, monospaced accents.
 - **Keep screen on**: toggle (default on).
 - **Language**: speech recognition locale (default `en-AU`).
 - **Continuous listening**: toggle (default off). When enabled, Volume Down toggles continuous listening on/off instead of push-to-talk. Uses SpeechRecognizer's built-in silence detection as VAD.
+- **Background volume keys**: opens Android Accessibility Settings to enable `VolumeKeyAccessibilityService`. Shows ENABLED/DISABLED status.
 
 ### Speech Recognition
 
@@ -885,6 +886,21 @@ When the "Continuous Listening (VAD)" setting is enabled:
 - The listening panel shows "CONTINUOUS" instead of "LISTENING" to indicate the mode.
 - `onRmsChanged` drives the `AudioLevelView` bar with real audio levels.
 - No-speech timeouts and errors trigger automatic restart rather than stopping.
+
+### Background Volume Key Capture (AccessibilityService)
+
+When the activity is in the foreground, volume key events are handled by `MainActivity.onKeyDown` / `onKeyUp` as normal. When the activity is backgrounded or the screen is off, an Android `AccessibilityService` intercepts volume key events and forwards them through a static `VolumeKeyBridge` singleton so PTT and target cycling continue to work hands-free.
+
+**Architecture:**
+
+- `VolumeKeyAccessibilityService` extends `AccessibilityService` with `flagRequestFilterKeyEvents`.
+- `VolumeKeyBridge` singleton holds a foreground flag and a key event callback registered by `MainActivity`.
+- `MainActivity` sets `isActivityInForeground = true` in `onResume`, `false` in `onPause`.
+- When the service receives a volume key event and the activity is NOT in the foreground, it invokes the bridge callback, which calls the activity's existing `onKeyDown` / `onKeyUp`.
+- When the activity IS in the foreground, the service returns `false` to let normal dispatch handle it.
+- Volume Up long press (Quick Dispatch overlay) is suppressed when backgrounded since a dialog cannot be shown without a foreground activity. Short press (target cycling) works in both states.
+
+**Setup:** The user must enable the service in Android Settings > Accessibility. The settings screen provides a shortcut button and shows the current status (ENABLED / DISABLED).
 
 ### Code Vocabulary Accuracy
 
@@ -993,7 +1009,7 @@ Radio:
 - ~~Terminal scrollback in panes.~~ (done)
 - Agent busy/idle detection: refine idle prompt patterns and completion timeout per tool as edge cases surface in testing.
 - TLS on the WebSocket.
-- AccessibilityService for screen-off volume button capture.
+- ~~AccessibilityService for screen-off volume button capture.~~ (done)
 - Console prompt history and logging.
 - `.dispatch/tasks.md` pruning for long-running projects (archive completed tasks).
 - Wear OS companion: minimal wrist app (`radio/wear/` module) with status glance (connection state, current target, active agents), crown rotation for target cycling, and tap-to-dispatch trigger. Standalone APK, same WebSocket protocol as the phone radio. Settings (host, port, PSK) via long-press.

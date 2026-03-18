@@ -127,6 +127,8 @@ The console displays four agent panes at a time in a 2x2 grid with a scrolling t
 
 **Continuous listening mode** -- enable in settings to stay in listen mode without holding Volume Down. Uses voice-activity detection to automatically detect speech start and end. Volume Down becomes a toggle instead of push-to-talk.
 
+**Background volume keys** -- enable the Dispatch Radio accessibility service in Android Settings > Accessibility to use volume buttons for PTT and target cycling even when the screen is off or the app is in the background. A shortcut button in the radio's settings screen opens the Android accessibility settings.
+
 ### Watch
 
 | Control              | Action                                              |

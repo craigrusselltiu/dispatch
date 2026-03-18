@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
     <string name="app_name">Dispatch Radio</string>
+    <string name="accessibility_service_description">Captures volume button presses when the screen is off or the app is in the background, enabling hands-free push-to-talk and target cycling.</string>
 </resources>
