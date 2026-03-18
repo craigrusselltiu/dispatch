@@ -41,7 +41,7 @@ dispatch/
   README.md
 ```
 
-When you run `dispatch` in a target repo, it creates a `.dispatch/` directory:
+When agents are first dispatched in a target repo, Dispatch creates a `.dispatch/` directory:
 
 ```
 sample-repo/
@@ -89,7 +89,7 @@ The PSK is displayed in the console header bar. You'll need it to connect the ra
 
 ## Usage
 
-`cd` into any git repo and run `dispatch`. The console creates `.dispatch/` in the repo and starts listening for voice commands.
+`cd` into any git repo and run `dispatch`. The console starts listening for voice commands. A `.dispatch/` directory is created in the repo when the first agent is dispatched.
 
 ### Console
 
