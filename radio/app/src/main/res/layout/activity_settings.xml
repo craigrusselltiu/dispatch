@@ -29,6 +29,28 @@
             android:fontFamily="monospace"
             android:layout_marginBottom="32dp" />
 
+        <!-- Discover Console -->
+        <Button
+            android:id="@+id/btn_discover"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="DISCOVER CONSOLE"
+            android:textColor="@color/background"
+            android:backgroundTint="@color/dim_grey"
+            android:fontFamily="monospace"
+            android:textSize="12sp"
+            android:layout_marginBottom="8dp" />
+
+        <TextView
+            android:id="@+id/tv_discover_status"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text=""
+            android:textColor="@color/dim_grey"
+            android:textSize="11sp"
+            android:fontFamily="monospace"
+            android:layout_marginBottom="16dp" />
+
         <!-- Console Address -->
         <TextView
             android:layout_width="wrap_content"
@@ -171,6 +193,37 @@
             android:textColor="@color/white"
             android:fontFamily="monospace"
             android:buttonTint="@color/cyan"
+            android:layout_marginBottom="24dp" />
+
+        <!-- Accessibility Service -->
+        <TextView
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text="BACKGROUND VOLUME KEYS"
+            android:textColor="@color/dim_grey"
+            android:textSize="11sp"
+            android:fontFamily="monospace"
+            android:layout_marginBottom="4dp" />
+
+        <Button
+            android:id="@+id/btn_accessibility"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:text="ENABLE ACCESSIBILITY SERVICE"
+            android:textColor="@color/background"
+            android:backgroundTint="@color/dim_grey"
+            android:fontFamily="monospace"
+            android:textSize="12sp"
+            android:layout_marginBottom="4dp" />
+
+        <TextView
+            android:id="@+id/tv_accessibility_status"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:text=""
+            android:textColor="@color/dim_grey"
+            android:textSize="11sp"
+            android:fontFamily="monospace"
             android:layout_marginBottom="32dp" />
 
         <Button

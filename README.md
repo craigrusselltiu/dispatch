@@ -79,7 +79,7 @@ The PSK is displayed in the console header bar. You'll need it to connect the ra
 
 1. Open the `radio/` directory in Android Studio.
 2. Build and install the app on your Android device.
-3. Enter the console's IP address and PSK in the radio's settings screen.
+3. Connect the radio: press `Q` in the console to show a QR code, then scan it from the radio's settings screen. Or tap **DISCOVER CONSOLE** to auto-detect via mDNS, or enter the IP address and PSK manually.
 
 ### Watch (Wear OS)
 
@@ -103,8 +103,8 @@ The console displays four agent panes at a time in a 2x2 grid with a scrolling t
 | `1`-`4`           | Select target slot on current page                  |
 | `Tab`             | Cycle target forward across all agents              |
 | `]` / `[`         | Next / previous page                                |
-| `k` / `Up`        | Scroll up half a page (scrollback history)          |
-| `j` / `Down`      | Scroll down half a page toward live output          |
+| `k` / `Up` / `PgUp` | Scroll up half a page (scrollback history)         |
+| `j` / `Down` / `PgDn` | Scroll down half a page toward live output       |
 | `G`               | Snap to live output                                 |
 | `n`               | Dispatch new agent into first empty slot            |
 | `x`               | Terminate agent in targeted slot                    |
@@ -112,6 +112,7 @@ The console displays four agent panes at a time in a 2x2 grid with a scrolling t
 | `t`               | Show task list overlay                              |
 | `P`               | Prune completed tasks from tasks.md                 |
 | `p`               | Show/hide full PSK                                  |
+| `Q`               | Show QR code for radio pairing                      |
 | `q`               | Quit                                                |
 | `?`               | Toggle help overlay                                 |
 
@@ -128,6 +129,8 @@ The console displays four agent panes at a time in a 2x2 grid with a scrolling t
 | Volume Up (hold >1s)   | Quick dispatch: pick and launch a new agent type    |
 
 **Continuous listening mode** -- enable in settings to stay in listen mode without holding Volume Down. Uses voice-activity detection to automatically detect speech start and end. Volume Down becomes a toggle instead of push-to-talk.
+
+**Background volume keys** -- enable the Dispatch Radio accessibility service in Android Settings > Accessibility to use volume buttons for PTT and target cycling even when the screen is off or the app is in the background. A shortcut button in the radio's settings screen opens the Android accessibility settings.
 
 ### Watch
 
@@ -172,6 +175,7 @@ Simple one-off prompts skip the planning step and dispatch directly.
 - **NATO callsigns** -- agents are assigned Alpha, Bravo, Charlie, ... in dispatch order. Addressable by voice from any page.
 - **Paged layout** -- up to 26 agents across 7 pages. Off-screen agents keep running and are still addressable.
 - **Clean target repo** -- all dispatch artifacts live in `.dispatch/` (gitignored). Your repo stays untouched.
+- **mDNS discovery** -- the console advertises itself on the LAN via Zeroconf. The radio can find it automatically without manual IP entry.
 - **PSK authentication** -- all WebSocket connections require a pre-shared key. Auto-generated on first run.
 - **Cross-platform** -- console runs on Windows (ConPTY), macOS, and Linux.
 

@@ -34,8 +34,11 @@ class VolumeUpHandler(
 
     private val longPressRunnable = Runnable {
         longPressTriggered = true
-        QuickDispatchOverlay(context).show { tool ->
-            onQuickDispatch(tool)
+        // Overlay requires a foreground activity — skip when backgrounded (dispatch-ct2.7)
+        if (VolumeKeyBridge.isActivityInForeground) {
+            QuickDispatchOverlay(context).show { tool ->
+                onQuickDispatch(tool)
+            }
         }
     }
 

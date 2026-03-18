@@ -21,7 +21,9 @@
 // dispatch-xje: git worktree-per-task isolation
 // dispatch-1lc.3: task dependencies — -> arrow syntax in .dispatch/tasks.md, file-based task ops
 // dispatch-1lc.4: task list overlay — full-screen plan view with status groups and agent assignments
-// dispatch-ct2.4: terminal scrollback — k/j/G scroll, configurable scrollback_lines, auto-snap on output
+// dispatch-1lc.3: task dependencies — -> arrow syntax in .dispatch/tasks.md, dependency-aware dispatch
+// dispatch-fnx: headless planner — spawns claude -p to decompose complex prompts into task plans
+// dispatch-ct2.4: terminal scrollback in panes — PgUp/PgDn/k/j/G in command mode, configurable buffer
 // dispatch-ct2.5: idle detection refinement — patterns for copilot, shell, and generic tools
 // dispatch-ct2.9: TASKS.md pruning — P key removes completed [x] tasks from tasks.md
 //
@@ -35,6 +37,7 @@
 // All PTYs run regardless of visible page. Each slot owns its own PTY.
 
 mod config;
+mod mdns;
 mod protocol;
 mod ws_server;
 
@@ -124,6 +127,7 @@ enum Overlay {
     None,
     Help,
     TaskList,
+    QrCode,
     ConfirmQuit,
     ConfirmTerminate,
     DispatchSlot,
@@ -157,8 +161,8 @@ struct SlotState {
     last_output_at: Instant,     // when screen content last changed
     last_screen_hash: u64,       // hash of screen to detect changes
     idle_since: Option<Instant>, // when idle prompt was first seen (for 500ms debounce)
-    // Scrollback (dispatch-ct2.4)
-    scroll_offset: usize,       // 0 = live view, >0 = scrolled back N lines
+    // Scrollback (dispatch-ct2.4): lines scrolled back from bottom
+    scroll_offset: usize,
 }
 
 impl SlotState {
@@ -184,6 +188,12 @@ struct TaskEntry {
     deps: Vec<String>,     // dependency IDs from -> arrows (dispatch-1lc.3)
 }
 
+/// State for a running headless planner (dispatch-fnx).
+struct PlannerState {
+    prompt: String,
+    receiver: mpsc::Receiver<Option<String>>,
+}
+
 struct App {
     slots: [Option<SlotState>; MAX_SLOTS],
     current_page: usize,
@@ -193,6 +203,7 @@ struct App {
     last_was_escape: bool,
     radio_state: RadioState,
     psk: String,
+    port: u16,
     psk_expanded: bool,
     overlay: Overlay,
     /// Shared input buffer for DispatchSlot and Rename overlays.
@@ -214,20 +225,23 @@ struct App {
     repo_root: String,
     // Task list overlay cache (dispatch-1lc.4): loaded when overlay opens
     task_list_data: Vec<TaskEntry>,
+    // Headless planner (dispatch-fnx)
+    planner: Option<PlannerState>,
     // Scrollback config (dispatch-ct2.4)
-    scrollback_lines: usize,
+    scrollback_lines: u32,
 }
 
 impl App {
     fn new(
         psk: String,
+        port: u16,
         ws_state: ws_server::SharedState,
         pane_rows: u16,
         pane_cols: u16,
         tools: std::collections::HashMap<String, String>,
         completion_timeout: Duration,
         repo_root: String,
-        scrollback_lines: usize,
+        scrollback_lines: u32,
     ) -> Self {
         App {
             slots: std::array::from_fn(|_| None),
@@ -237,6 +251,7 @@ impl App {
             last_was_escape: false,
             radio_state: RadioState::Disconnected,
             psk,
+            port,
             psk_expanded: false,
             overlay: Overlay::None,
             input_buf: String::new(),
@@ -253,6 +268,7 @@ impl App {
             conflict_tasks: Vec::new(),
             repo_root,
             task_list_data: Vec::new(),
+            planner: None,
             scrollback_lines,
         }
     }
@@ -395,7 +411,7 @@ fn dispatch_slot(
     pane_rows: u16,
     pane_cols: u16,
     cwd: Option<&str>,
-    scrollback_lines: usize,
+    scrollback_lines: u32,
 ) -> Option<SlotState> {
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -432,7 +448,7 @@ fn dispatch_slot(
 
     let child_pid = child.process_id();
 
-    let screen = Arc::new(Mutex::new(vt100::Parser::new(pane_rows, pane_cols, scrollback_lines)));
+    let screen = Arc::new(Mutex::new(vt100::Parser::new(pane_rows, pane_cols, scrollback_lines as usize)));
     let screen_w = Arc::clone(&screen);
     let child_exited = Arc::new(AtomicBool::new(false));
     let child_exited_w = Arc::clone(&child_exited);
@@ -507,12 +523,11 @@ fn terminate_slot(slot: &mut Option<SlotState>) -> Option<String> {
 }
 
 /// Resize all active PTYs to the new pane size (dispatch-bgz.6).
-fn resize_all_slots(slots: &mut [Option<SlotState>; MAX_SLOTS], new_size: PtySize, scrollback_lines: usize) {
+fn resize_all_slots(slots: &mut [Option<SlotState>; MAX_SLOTS], new_size: PtySize) {
     for slot in slots.iter_mut().flatten() {
         let _ = slot.master.resize(new_size);
         let mut parser = slot.screen.lock().unwrap();
-        *parser = vt100::Parser::new(new_size.rows, new_size.cols, scrollback_lines);
-        slot.scroll_offset = 0;
+        *parser = vt100::Parser::new(new_size.rows, new_size.cols, 0);
     }
 }
 
@@ -744,6 +759,138 @@ fn fetch_task_list_from_file(
             }
         })
         .collect()
+}
+
+
+// ── headless planner (dispatch-fnx) ───────────────────────────────────────────
+
+const PLANNER_PROMPT: &str = r#"You are the Dispatch task planner. Decompose the following task into a structured plan.
+
+Output ONLY a markdown task list in this exact format (no other text, no code fences):
+
+# Short plan title
+
+- [ ] t1: First task description
+- [ ] t2: Second task that depends on t1 -> t1
+  - [ ] t2.1: Subtask of t2
+  - [ ] t2.2: Another subtask that depends on t2.1 -> t2.1
+- [ ] t3: Third task that depends on t1 and t2 -> t1, t2
+
+Rules:
+- Use t1, t2, t3 for top-level tasks. Use t1.1, t1.2 for subtasks.
+- Add -> id1, id2 when a task depends on other tasks being done first.
+- No arrow means the task can start immediately (no blockers).
+- Keep each task small: one agent should complete it in one session.
+- If the request is simple enough for one agent, output just one task entry.
+- Output ONLY the markdown. No explanation, no commentary.
+
+Task to plan:
+"#;
+
+/// Spawn a headless planner agent in a background thread. Returns a receiver
+/// that delivers the plan text (or None on failure) when the planner exits.
+fn spawn_planner(
+    prompt: &str,
+    tool_cmd: &str,
+    repo_root: &str,
+) -> mpsc::Receiver<Option<String>> {
+    let (tx, rx) = mpsc::channel();
+    let parts: Vec<String> = tool_cmd.split_whitespace().map(|s| s.to_string()).collect();
+    let full_prompt = format!("{}{}", PLANNER_PROMPT, prompt);
+    let repo_root = repo_root.to_string();
+
+    thread::spawn(move || {
+        let result = if parts.is_empty() {
+            None
+        } else {
+            let mut cmd = Command::new(&parts[0]);
+            for arg in &parts[1..] {
+                cmd.arg(arg);
+            }
+            cmd.arg("-p").arg(&full_prompt);
+            cmd.current_dir(&repo_root);
+
+            cmd.output().ok().and_then(|o| {
+                if o.status.success() {
+                    let text = String::from_utf8_lossy(&o.stdout).to_string();
+                    let stripped = text.trim();
+                    // Strip code fences if the LLM wrapped the output
+                    let stripped = stripped
+                        .strip_prefix("```markdown")
+                        .or_else(|| stripped.strip_prefix("```md"))
+                        .or_else(|| stripped.strip_prefix("```"))
+                        .unwrap_or(stripped);
+                    let stripped = stripped.strip_suffix("```").unwrap_or(stripped);
+                    Some(stripped.trim().to_string())
+                } else {
+                    None
+                }
+            })
+        };
+        let _ = tx.send(result);
+    });
+
+    rx
+}
+
+/// Dispatch ready plan tasks to available agents. Returns the number dispatched.
+fn dispatch_plan_tasks(app: &mut App) -> usize {
+    let ready = fetch_ready_tasks(&app.repo_root);
+    let pane_rows = app.pane_rows;
+    let pane_cols = app.pane_cols;
+    let repo_root = app.repo_root.clone();
+    let tool_cmd = app.tool_cmd("claude-code").to_string();
+    let mut dispatched = 0;
+
+    for task in ready {
+        // Find an idle slot (has PTY but no task) or an empty slot.
+        let slot_idx = app.slots.iter().enumerate().find_map(|(i, s)| {
+            match s {
+                Some(slot) if slot.task_id.is_none() => Some(i),
+                _ => None,
+            }
+        }).or_else(|| {
+            app.slots.iter().position(|s| s.is_none())
+        });
+
+        let slot_idx = match slot_idx {
+            Some(i) => i,
+            None => break, // No available slots; remaining tasks stay queued.
+        };
+
+        // Spawn PTY if slot is empty.
+        if app.slots[slot_idx].is_none() {
+            let worktree = create_worktree(&task.id, &repo_root);
+            if let Some(slot) = dispatch_slot(
+                slot_idx, "claude-code", &tool_cmd, pane_rows, pane_cols,
+                worktree.as_deref(), app.scrollback_lines,
+            ) {
+                app.slots[slot_idx] = Some(slot);
+            } else {
+                continue;
+            }
+        }
+
+        // Assign the task to the slot.
+        let display_name = {
+            let slot = app.slots[slot_idx].as_mut().unwrap();
+            update_task_in_file(&repo_root, &task.id, '~', Some(&slot.callsign));
+            let worktree = create_worktree(&task.id, &repo_root);
+            slot.task_id = Some(task.id.clone());
+            slot.worktree_path = worktree;
+            let prefixed = format!("[Dispatch task {}] {}\r", task.id, task.title);
+            let _ = slot.writer.write_all(prefixed.as_bytes());
+            let _ = slot.writer.flush();
+            slot.last_output_at = Instant::now();
+            slot.display_name().to_string()
+        };
+        app.push_ticker(format!(
+            "PLAN DISPATCH: {} -> {} (slot {})",
+            task.id, display_name, slot_idx + 1
+        ));
+        dispatched += 1;
+    }
+    dispatched
 }
 
 /// Remove completed [x] tasks from .dispatch/tasks.md (dispatch-ct2.9).
@@ -1143,6 +1290,7 @@ fn render_pane(
     global_idx: usize,
     app: &App,
     vt_lines: Option<Vec<Line<'static>>>,
+    scrolled: bool,
 ) {
     let is_target = app.target == local_idx;
     let border_style = if is_target {
@@ -1170,20 +1318,16 @@ fn render_pane(
 
     if let Some(lines) = vt_lines {
         f.render_widget(Paragraph::new(Text::from(lines)), chunks[1]);
-        // dispatch-ct2.4: show scroll indicator when not at live view.
-        if let Some(Some(slot)) = app.slots.get(global_idx) {
-            if slot.scroll_offset > 0 {
-                let label = format!(" SCROLL +{} ", slot.scroll_offset);
-                let label_w = label.len() as u16;
-                let x = chunks[1].x + chunks[1].width.saturating_sub(label_w);
-                let indicator = Rect { x, y: chunks[1].y, width: label_w, height: 1 };
-                f.render_widget(
-                    Paragraph::new(Span::styled(
-                        label,
-                        Style::default().fg(Color::Black).bg(Color::Yellow),
-                    )),
-                    indicator,
-                );
+        // dispatch-ct2.4: show scroll indicator when not at bottom
+        if scrolled {
+            let indicator = Span::styled(
+                " SCROLL ",
+                Style::default().fg(Color::Black).bg(Color::Yellow),
+            );
+            let x = chunks[1].right().saturating_sub(9);
+            let y = chunks[1].bottom().saturating_sub(1);
+            if x >= chunks[1].x && y >= chunks[1].y {
+                f.render_widget(Paragraph::new(Line::from(indicator)), Rect::new(x, y, 8, 1));
             }
         }
     } else {
@@ -1196,9 +1340,10 @@ fn render_panes(f: &mut Frame, area: Rect, app: &App) {
     let page_start = app.current_page * SLOTS_PER_PAGE;
 
     // Pre-compute vt lines for each visible slot (hold locks briefly, then release).
-    // dispatch-ct2.4: apply scroll_offset via parser.set_scrollback().
+    // dispatch-ct2.4: set scrollback offset before reading, then restore to 0.
     let mut page_lines: [Option<Vec<Line<'static>>>; SLOTS_PER_PAGE] =
         [None, None, None, None];
+    let mut page_scrolled: [bool; SLOTS_PER_PAGE] = [false; SLOTS_PER_PAGE];
     for local in 0..SLOTS_PER_PAGE {
         let g = page_start + local;
         if g < MAX_SLOTS {
@@ -1206,7 +1351,8 @@ fn render_panes(f: &mut Frame, area: Rect, app: &App) {
                 let mut parser = slot.screen.lock().unwrap();
                 parser.set_scrollback(slot.scroll_offset);
                 page_lines[local] = Some(screen_to_lines(parser.screen()));
-                parser.set_scrollback(0); // restore live view for output processing
+                page_scrolled[local] = slot.scroll_offset > 0;
+                parser.set_scrollback(0);
             }
         }
     }
@@ -1230,7 +1376,7 @@ fn render_panes(f: &mut Frame, area: Rect, app: &App) {
     for local in 0..SLOTS_PER_PAGE {
         let g = page_start + local;
         if g < MAX_SLOTS {
-            render_pane(f, areas[local], local, g, app, page_lines[local].take());
+            render_pane(f, areas[local], local, g, app, page_lines[local].take(), page_scrolled[local]);
         }
     }
 }
@@ -1281,7 +1427,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
                 ),
                 Span::styled(ws_target_str, Style::default().fg(Color::Cyan)),
                 Span::styled(
-                    "│ i/Enter input │ 1-4 slot │ Tab cycle │ k/j scroll │ n/N dispatch │ x term │ t tasks │ P prune │ ? help",
+                    "│ i/Enter input │ 1-4 slot │ Tab cycle │ k/j scroll │ n/N dispatch │ x term │ t tasks │ P prune │ Q qr │ ? help",
                     Style::default().fg(Color::DarkGray),
                 ),
             ])
@@ -1315,7 +1461,7 @@ fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
 }
 
 fn render_help_overlay(f: &mut Frame, area: Rect) {
-    let r = centered_rect(52, 26, area);
+    let r = centered_rect(52, 28, area);
     f.render_widget(Clear, r);
     let lines = vec![
         Line::from(Span::styled(
@@ -1329,8 +1475,8 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         Line::from(Span::raw("  Shift+Tab    Prev slot (all pages)")),
         Line::from(Span::raw("  ] / Shift+→  Next page")),
         Line::from(Span::raw("  [ / Shift+←  Prev page")),
-        Line::from(Span::raw("  k / Up       Scroll up (half page)")),
-        Line::from(Span::raw("  j / Down     Scroll down (half page)")),
+        Line::from(Span::raw("  k / Up / PgUp  Scroll up (half page)")),
+        Line::from(Span::raw("  j / Dn / PgDn  Scroll down (half page)")),
         Line::from(Span::raw("  G            Snap to live output")),
         Line::from(Span::raw("  n            Dispatch into first empty slot")),
         Line::from(Span::raw("  N            Dispatch into specific slot")),
@@ -1339,6 +1485,7 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         Line::from(Span::raw("  t            Task list overlay")),
         Line::from(Span::raw("  P            Prune completed tasks")),
         Line::from(Span::raw("  p            Toggle PSK visibility")),
+        Line::from(Span::raw("  Q            Show QR code for radio pairing")),
         Line::from(Span::raw("  q            Quit (confirms if agents running)")),
         Line::from(Span::raw("  ?            This help screen")),
         Line::default(),
@@ -1358,6 +1505,99 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         Paragraph::new(Text::from(lines)).block(
             Block::default()
                 .title(" HELP ")
+                .borders(Borders::ALL)
+                .border_style(Style::default().fg(Color::Green)),
+        ),
+        r,
+    );
+}
+
+/// Detect the machine's local network IP by connecting a UDP socket.
+/// No data is sent; this just determines the outgoing interface address.
+fn local_ip() -> Option<String> {
+    let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
+    socket.connect("8.8.8.8:80").ok()?;
+    socket.local_addr().ok().map(|a| a.ip().to_string())
+}
+
+/// Render a QR code overlay encoding the console connection URL + PSK (dispatch-ct2.2).
+fn render_qr_overlay(f: &mut Frame, area: Rect, app: &App) {
+    let host = local_ip().unwrap_or_else(|| "127.0.0.1".to_string());
+    let url = format!("ws://{}:{}/?psk={}", host, app.port, app.psk);
+
+    let qr = match qrcode::QrCode::new(url.as_bytes()) {
+        Ok(q) => q,
+        Err(_) => return,
+    };
+    let matrix = qr.to_colors();
+    let qr_width = qr.width();
+
+    // Build lines using Unicode half-block characters.
+    // Each terminal row encodes 2 QR rows. Each module is 2 chars wide for squareness.
+    let dark = Color::Black;
+    let light = Color::White;
+
+    let mut lines: Vec<Line> = Vec::new();
+
+    // Title
+    lines.push(Line::from(Span::styled(
+        " QR CODE — SCAN TO PAIR ",
+        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+    )));
+    lines.push(Line::default());
+
+    // Render QR matrix with 1-module quiet zone on each side
+    let total_w = qr_width + 2; // 1 quiet zone each side
+    let row_count = qr_width + 2; // 1 quiet zone top and bottom
+
+    let is_dark = |r: usize, c: usize| -> bool {
+        if r == 0 || r == row_count - 1 || c == 0 || c == total_w - 1 {
+            return false; // quiet zone = light
+        }
+        let qr_r = r - 1;
+        let qr_c = c - 1;
+        matrix[qr_r * qr_width + qr_c] == qrcode::Color::Dark
+    };
+
+    let mut row = 0;
+    while row < row_count {
+        let has_bot = row + 1 < row_count;
+        let mut spans: Vec<Span> = Vec::new();
+        for col in 0..total_w {
+            let top = is_dark(row, col);
+            let bot = if has_bot { is_dark(row + 1, col) } else { false };
+            let (ch, fg, bg) = match (top, bot) {
+                (true, true) => ('\u{2588}', dark, dark),   // █
+                (true, false) => ('\u{2580}', dark, light),  // ▀
+                (false, true) => ('\u{2584}', light, dark),  // ▄
+                (false, false) => (' ', light, light),
+            };
+            let s = format!("{ch}{ch}"); // 2 chars wide for square modules
+            spans.push(Span::styled(s, Style::default().fg(fg).bg(bg)));
+        }
+        lines.push(Line::from(spans));
+        row += 2;
+    }
+
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        format!("  {url}"),
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::default());
+    lines.push(Line::from(Span::styled(
+        "  Press any key to close",
+        Style::default().fg(Color::DarkGray),
+    )));
+
+    let content_width = (total_w as u16 * 2) + 4; // 2 chars per module + border padding
+    let content_height = lines.len() as u16 + 2; // +2 for border
+    let r = centered_rect(content_width, content_height, area);
+    f.render_widget(Clear, r);
+    f.render_widget(
+        Paragraph::new(Text::from(lines)).block(
+            Block::default()
+                .title(" PAIR ")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Green)),
         ),
@@ -1650,6 +1890,115 @@ fn compute_pane_size(term_rows: u16, term_cols: u16) -> (u16, u16) {
     (rows, cols)
 }
 
+// ── tests for tasks.md parsing (dispatch-1lc.3) ──────────────────────────────
+
+#[cfg(test)]
+mod plan_tests {
+    use super::*;
+
+    #[test]
+    fn parse_basic_tasks() {
+        let lines = vec![
+            "# Plan title",
+            "",
+            "- [ ] t1: First task",
+            "- [ ] t2: Second task -> t1",
+            "- [x] t3: Done task",
+            "- [~] t4: In progress task | agent: Alpha",
+        ];
+        let tasks: Vec<ParsedTask> = lines.iter().enumerate()
+            .filter_map(|(i, l)| parse_task_line(l, i))
+            .collect();
+        assert_eq!(tasks.len(), 4);
+
+        assert_eq!(tasks[0].id, "t1");
+        assert_eq!(tasks[0].title, "First task");
+        assert_eq!(tasks[0].status, ' ');
+        assert!(tasks[0].deps.is_empty());
+
+        assert_eq!(tasks[1].id, "t2");
+        assert_eq!(tasks[1].deps, vec!["t1"]);
+
+        assert_eq!(tasks[2].status, 'x');
+
+        assert_eq!(tasks[3].status, '~');
+        assert_eq!(tasks[3].agent.as_deref(), Some("Alpha"));
+    }
+
+    #[test]
+    fn parse_multiple_deps() {
+        let task = parse_task_line("- [ ] t3: Update imports -> t1.1, t1.2", 0).unwrap();
+        assert_eq!(task.deps, vec!["t1.1", "t1.2"]);
+    }
+
+    #[test]
+    fn parse_indented_subtasks() {
+        let lines = vec![
+            "- [ ] t1: Parent task",
+            "  - [ ] t1.1: Subtask one",
+            "  - [ ] t1.2: Subtask two -> t1.1",
+        ];
+        let tasks: Vec<ParsedTask> = lines.iter().enumerate()
+            .filter_map(|(i, l)| parse_task_line(l, i))
+            .collect();
+        assert_eq!(tasks.len(), 3);
+        assert_eq!(tasks[1].id, "t1.1");
+        assert_eq!(tasks[2].deps, vec!["t1.1"]);
+    }
+
+    /// Helper: given ParsedTasks, find open tasks whose deps are all done.
+    fn find_ready(tasks: &[ParsedTask]) -> Vec<&ParsedTask> {
+        let done: std::collections::HashSet<&str> = tasks.iter()
+            .filter(|t| t.status == 'x')
+            .map(|t| t.id.as_str())
+            .collect();
+        tasks.iter()
+            .filter(|t| t.status == ' ' && t.deps.iter().all(|d| done.contains(d.as_str())))
+            .collect()
+    }
+
+    fn task(id: &str, status: char, deps: Vec<&str>) -> ParsedTask {
+        ParsedTask {
+            id: id.into(), title: "".into(), status, deps: deps.into_iter().map(|s| s.into()).collect(),
+            agent: None, line_idx: 0, prefix: String::new(),
+        }
+    }
+
+    #[test]
+    fn find_ready_no_deps() {
+        let tasks = vec![task("t1", ' ', vec![]), task("t2", ' ', vec!["t1"])];
+        let ready = find_ready(&tasks);
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].id, "t1");
+    }
+
+    #[test]
+    fn find_ready_after_completion() {
+        let tasks = vec![
+            task("t1", 'x', vec![]),
+            task("t2", ' ', vec!["t1"]),
+            task("t3", ' ', vec!["t1", "t2"]),
+        ];
+        let ready = find_ready(&tasks);
+        assert_eq!(ready.len(), 1);
+        assert_eq!(ready[0].id, "t2");
+    }
+
+    #[test]
+    fn find_ready_skips_in_progress() {
+        let tasks = vec![task("t1", '~', vec![])];
+        let ready = find_ready(&tasks);
+        assert!(ready.is_empty());
+    }
+
+    #[test]
+    fn parse_deps_with_agent_annotation() {
+        let task = parse_task_line("- [~] t2: Task B -> t1 | agent: Bravo", 0).unwrap();
+        assert_eq!(task.deps, vec!["t1"]);
+        assert_eq!(task.agent.as_deref(), Some("Bravo"));
+    }
+}
+
 fn main() -> io::Result<()> {
     let cli = Cli::parse();
 
@@ -1684,6 +2033,9 @@ fn main() -> io::Result<()> {
         });
     }
 
+    // Advertise via mDNS so the radio can discover us (dispatch-ct2.1).
+    let _mdns = mdns::advertise(cfg.server.port);
+
     // Determine initial pane size from the terminal.
     let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((160, 40));
     let (pane_rows, pane_cols) = compute_pane_size(term_rows, term_cols);
@@ -1702,16 +2054,16 @@ fn main() -> io::Result<()> {
         })
         .unwrap_or_else(|| ".".to_string());
 
-    let scrollback_lines = cfg.terminal.scrollback_lines as usize;
     let mut app = App::new(
         cfg.auth.psk.clone(),
+        cfg.server.port,
         ws_state,
         pane_rows,
         pane_cols,
         cfg.tools.clone(),
         completion_timeout,
         repo_root.clone(),
-        scrollback_lines,
+        cfg.terminal.scrollback_lines,
     );
 
     // Dispatch slot 0 (Alpha) with claude on startup (dispatch-bgz.6).
@@ -1785,6 +2137,8 @@ fn main() -> io::Result<()> {
                             app.push_ticker(format!("TASK COMPLETE: {} closed {} — slot {} now standby", callsign, id, i + 1));
                         }
                         update_task_in_file(&app.repo_root, &id, 'x', None);
+                        // dispatch-fnx: dispatch newly unblocked plan tasks after completion.
+                        dispatch_plan_tasks(&mut app);
                     } else {
                         app.push_ticker(format!("AGENT EXITED: {} (slot {}) — standby", callsign, i + 1));
                     }
@@ -1811,7 +2165,8 @@ fn main() -> io::Result<()> {
                 slot.last_screen_hash = hash;
                 slot.last_output_at = now;
                 slot.idle_since = None;
-                slot.scroll_offset = 0; // dispatch-ct2.4: snap to live on new output
+                // dispatch-ct2.4: snap back to bottom on new output
+                slot.scroll_offset = 0;
             }
 
             // Layer 1: idle prompt detection with 500ms debounce.
@@ -1848,6 +2203,9 @@ fn main() -> io::Result<()> {
             }
             update_task_in_file(&app.repo_root, &task_id, 'x', None);
 
+            // dispatch-fnx: dispatch newly unblocked plan tasks after completion.
+            dispatch_plan_tasks(&mut app);
+
             // Pick up next available queued task and assign it to the idle slot.
             let next = fetch_ready_tasks(&app.repo_root).into_iter().next();
             if let Some(qt) = next {
@@ -1877,6 +2235,52 @@ fn main() -> io::Result<()> {
                 app.push_ticker(format!("PLANNER: {} new task{} queued — {} total ready", added, if added == 1 { "" } else { "s" }, new_count));
             }
             app.queued_tasks = tasks;
+        }
+
+        // Check headless planner completion (dispatch-fnx).
+        if app.planner.is_some() {
+            let finished = app.planner.as_ref()
+                .and_then(|p| p.receiver.try_recv().ok());
+            if let Some(result) = finished {
+                let prompt = app.planner.take().unwrap().prompt;
+                if let Some(plan_text) = result {
+                    // Write the plan to .dispatch/tasks.md.
+                    let dir = format!("{}/.dispatch", app.repo_root);
+                    let _ = std::fs::create_dir_all(&dir);
+                    let _ = std::fs::write(tasks_md_path(&app.repo_root), &plan_text);
+                    let (_, tasks) = parse_tasks_md(&app.repo_root);
+                    let total = tasks.len();
+                    let dispatched = dispatch_plan_tasks(&mut app);
+                    app.push_ticker(format!(
+                        "PLAN READY: {} tasks from '{}' — {} dispatched now",
+                        total,
+                        if prompt.len() > 40 { format!("{}...", &prompt[..37]) } else { prompt },
+                        dispatched
+                    ));
+                } else {
+                    // Planner failed: fall back to direct single-task dispatch.
+                    app.push_ticker("PLANNER FAILED: falling back to direct dispatch".to_string());
+                    if let Some(id) = create_task_in_file(&app.repo_root, &prompt) {
+                        // Try to dispatch directly to the first available slot.
+                        if let Some(g) = app.slots.iter().position(|s| s.is_none()) {
+                            let cmd = app.tool_cmd("claude-code").to_string();
+                            let worktree = create_worktree(&id, &app.repo_root);
+                            if let Some(mut slot) = dispatch_slot(
+                                g, "claude-code", &cmd, app.pane_rows, app.pane_cols,
+                                worktree.as_deref(), app.scrollback_lines,
+                            ) {
+                                update_task_in_file(&app.repo_root, &id, '~', Some(&slot.callsign));
+                                let prefixed = format!("[Dispatch task {id}] {prompt}\r");
+                                let _ = slot.writer.write_all(prefixed.as_bytes());
+                                let _ = slot.writer.flush();
+                                slot.task_id = Some(id);
+                                slot.worktree_path = worktree;
+                                app.slots[g] = Some(slot);
+                            }
+                        }
+                    }
+                }
+            }
         }
 
         // Advance ticker animation each frame (dispatch-ami).
@@ -1927,6 +2331,25 @@ fn main() -> io::Result<()> {
                         app.push_ticker(format!("QUEUED: all agents busy — task {} waiting", id));
                     }
                 }
+                ws_server::WsEvent::PlanRequest { prompt } => {
+                    // dispatch-fnx: spawn a headless planner for complex prompts.
+                    if app.planner.is_none() {
+                        let cmd = app.tool_cmd("claude-code").to_string();
+                        let rx = spawn_planner(&prompt, &cmd, &app.repo_root);
+                        app.planner = Some(PlannerState { prompt: prompt.clone(), receiver: rx });
+                        let display = if prompt.len() > 60 {
+                            format!("{}...", &prompt[..57])
+                        } else {
+                            prompt
+                        };
+                        app.push_ticker(format!("PLANNING: {}", display));
+                    } else {
+                        // Planner already running; queue as a direct task.
+                        if let Some(id) = create_task_in_file(&app.repo_root, &prompt) {
+                            app.push_ticker(format!("QUEUED: planner busy — task {} waiting", id));
+                        }
+                    }
+                }
             }
         }
 
@@ -1951,6 +2374,7 @@ fn main() -> io::Result<()> {
                 Overlay::None => {}
                 Overlay::Help => render_help_overlay(f, full),
                 Overlay::TaskList => render_task_list_overlay(f, full, &app),
+                Overlay::QrCode => render_qr_overlay(f, full, &app),
                 Overlay::ConfirmQuit => render_confirm_overlay(
                     f, full, "QUIT", "Agents are running. Really quit?",
                 ),
@@ -1977,7 +2401,6 @@ fn main() -> io::Result<()> {
                     resize_all_slots(
                         &mut app.slots,
                         PtySize { rows: new_pane_rows, cols: new_pane_cols, pixel_width: 0, pixel_height: 0 },
-                        app.scrollback_lines,
                     );
                 }
 
@@ -2018,7 +2441,7 @@ fn main() -> io::Result<()> {
                     Mode::Command => {
                         if app.overlay != Overlay::None {
                             match app.overlay {
-                                Overlay::Help | Overlay::TaskList => {
+                                Overlay::Help | Overlay::TaskList | Overlay::QrCode => {
                                     app.overlay = Overlay::None;
                                 }
 
@@ -2131,6 +2554,11 @@ fn main() -> io::Result<()> {
                                 }
 
                                 KeyCode::Enter | KeyCode::Char('i') => {
+                                    // dispatch-ct2.4: reset scroll when entering input mode
+                                    let target_g = app.target_global();
+                                    if let Some(Some(slot)) = app.slots.get_mut(target_g) {
+                                        slot.scroll_offset = 0;
+                                    }
                                     app.mode = Mode::Input;
                                     app.last_was_escape = false;
                                 }
@@ -2220,35 +2648,6 @@ fn main() -> io::Result<()> {
                                     }
                                 }
 
-                                // Scrollback navigation (dispatch-ct2.4)
-                                KeyCode::Char('k') | KeyCode::Up => {
-                                    let target_g = app.target_global();
-                                    if let Some(Some(slot)) = app.slots.get_mut(target_g) {
-                                        let max_scroll = {
-                                            let mut parser = slot.screen.lock().unwrap();
-                                            parser.set_scrollback(usize::MAX);
-                                            let max = parser.screen().scrollback();
-                                            parser.set_scrollback(0);
-                                            max
-                                        };
-                                        let half_page = (app.pane_rows as usize / 2).max(1);
-                                        slot.scroll_offset = (slot.scroll_offset + half_page).min(max_scroll);
-                                    }
-                                }
-                                KeyCode::Char('j') | KeyCode::Down => {
-                                    let target_g = app.target_global();
-                                    if let Some(Some(slot)) = app.slots.get_mut(target_g) {
-                                        let half_page = (app.pane_rows as usize / 2).max(1);
-                                        slot.scroll_offset = slot.scroll_offset.saturating_sub(half_page);
-                                    }
-                                }
-                                KeyCode::Char('G') => {
-                                    let target_g = app.target_global();
-                                    if let Some(Some(slot)) = app.slots.get_mut(target_g) {
-                                        slot.scroll_offset = 0;
-                                    }
-                                }
-
                                 KeyCode::Char('t') => {
                                     app.task_list_data = fetch_task_list_from_file(&app.repo_root, &app.slots);
                                     app.overlay = Overlay::TaskList;
@@ -2263,7 +2662,30 @@ fn main() -> io::Result<()> {
                                     }
                                 }
                                 KeyCode::Char('p') => app.psk_expanded = !app.psk_expanded,
+                                KeyCode::Char('Q') => app.overlay = Overlay::QrCode,
                                 KeyCode::Char('?') => app.overlay = Overlay::Help,
+
+                                // Scrollback (dispatch-ct2.4, dispatch-ct2.5)
+                                KeyCode::PageUp | KeyCode::Char('k') | KeyCode::Up => {
+                                    let target_g = app.target_global();
+                                    if let Some(Some(slot)) = app.slots.get_mut(target_g) {
+                                        let half = (app.pane_rows as usize / 2).max(1);
+                                        slot.scroll_offset = slot.scroll_offset.saturating_add(half);
+                                    }
+                                }
+                                KeyCode::PageDown | KeyCode::Char('j') | KeyCode::Down => {
+                                    let target_g = app.target_global();
+                                    if let Some(Some(slot)) = app.slots.get_mut(target_g) {
+                                        let half = (app.pane_rows as usize / 2).max(1);
+                                        slot.scroll_offset = slot.scroll_offset.saturating_sub(half);
+                                    }
+                                }
+                                KeyCode::Char('G') => {
+                                    let target_g = app.target_global();
+                                    if let Some(Some(slot)) = app.slots.get_mut(target_g) {
+                                        slot.scroll_offset = 0;
+                                    }
+                                }
 
                                 _ => {}
                             }

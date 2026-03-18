@@ -1,13 +1,17 @@
 package com.dispatch.radio
 
 import android.Manifest
+import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
+import android.provider.Settings
 import android.view.WindowManager
+import android.view.accessibility.AccessibilityManager
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
+import android.widget.TextView
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
@@ -15,6 +19,7 @@ import androidx.core.content.ContextCompat
 /**
  * Settings screen (dispatch-88k.7).
  *
+ * - mDNS console discovery (dispatch-ct2.1)
  * - Console IP + port
  * - Pre-shared key (manual entry or QR scan)
  * - Haptic feedback toggle (default on)
@@ -25,6 +30,7 @@ import androidx.core.content.ContextCompat
 class SettingsActivity : AppCompatActivity() {
 
     private lateinit var settings: RadioSettings
+    private lateinit var discovery: ConsoleDiscovery
 
     private lateinit var etHost: EditText
     private lateinit var etPort: EditText
@@ -36,15 +42,20 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var cbContinuous: CheckBox
     private lateinit var btnSave: Button
     private lateinit var btnScanQr: Button
+    private lateinit var btnDiscover: Button
+    private lateinit var tvDiscoverStatus: TextView
+    private lateinit var btnAccessibility: Button
+    private lateinit var tvAccessibilityStatus: TextView
 
     private val qrScanLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
     ) { result ->
         if (result.resultCode == RESULT_OK) {
-            val scanned = result.data?.getStringExtra(QrScanActivity.EXTRA_PSK)
-            if (!scanned.isNullOrEmpty()) {
-                etPsk.setText(scanned)
-            }
+            val data = result.data ?: return@registerForActivityResult
+            data.getStringExtra(QrScanActivity.EXTRA_HOST)?.let { etHost.setText(it) }
+            val port = data.getIntExtra(QrScanActivity.EXTRA_PORT, -1)
+            if (port > 0) etPort.setText(port.toString())
+            data.getStringExtra(QrScanActivity.EXTRA_PSK)?.let { etPsk.setText(it) }
         }
     }
 
@@ -59,6 +70,7 @@ class SettingsActivity : AppCompatActivity() {
         setContentView(R.layout.activity_settings)
 
         settings = RadioSettings(this)
+        discovery = ConsoleDiscovery(this)
 
         etHost = findViewById(R.id.et_host)
         etPort = findViewById(R.id.et_port)
@@ -70,11 +82,66 @@ class SettingsActivity : AppCompatActivity() {
         cbContinuous = findViewById(R.id.cb_continuous)
         btnSave = findViewById(R.id.btn_save)
         btnScanQr = findViewById(R.id.btn_scan_qr)
+        btnDiscover = findViewById(R.id.btn_discover)
+        tvDiscoverStatus = findViewById(R.id.tv_discover_status)
+        btnAccessibility = findViewById(R.id.btn_accessibility)
+        tvAccessibilityStatus = findViewById(R.id.tv_accessibility_status)
 
         loadSettings()
+        refreshAccessibilityStatus()
 
         btnSave.setOnClickListener { saveSettings() }
         btnScanQr.setOnClickListener { onScanQrClicked() }
+        btnDiscover.setOnClickListener { onDiscoverClicked() }
+        btnAccessibility.setOnClickListener {
+            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
+        }
+    }
+
+    override fun onResume() {
+        super.onResume()
+        refreshAccessibilityStatus()
+    }
+
+    private fun isAccessibilityServiceEnabled(): Boolean {
+        val am = getSystemService(ACCESSIBILITY_SERVICE) as AccessibilityManager
+        return am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_GENERIC)
+            .any { it.resolveInfo.serviceInfo.name == VolumeKeyAccessibilityService::class.java.name }
+    }
+
+    private fun refreshAccessibilityStatus() {
+        val enabled = isAccessibilityServiceEnabled()
+        tvAccessibilityStatus.text = if (enabled) "ENABLED" else "DISABLED"
+        tvAccessibilityStatus.setTextColor(
+            getColor(if (enabled) R.color.green else R.color.dim_grey)
+        )
+    }
+
+    private fun onDiscoverClicked() {
+        tvDiscoverStatus.text = "SCANNING..."
+        btnDiscover.isEnabled = false
+        discovery.startDiscovery(object : ConsoleDiscovery.Listener {
+            override fun onConsoleFound(console: ConsoleDiscovery.Console) {
+                discovery.stopDiscovery()
+                etHost.setText(console.host)
+                etPort.setText(console.port.toString())
+                tvDiscoverStatus.text = "FOUND: ${console.name} (${console.host}:${console.port})"
+                btnDiscover.isEnabled = true
+            }
+
+            override fun onDiscoveryStopped() {
+                btnDiscover.isEnabled = true
+            }
+        })
+
+        // Timeout after 5 seconds if nothing found
+        etHost.postDelayed({
+            if (!btnDiscover.isEnabled) {
+                discovery.stopDiscovery()
+                tvDiscoverStatus.text = "NO CONSOLE FOUND"
+                btnDiscover.isEnabled = true
+            }
+        }, 5000)
     }
 
     private fun onScanQrClicked() {
@@ -100,6 +167,11 @@ class SettingsActivity : AppCompatActivity() {
         cbConfirm.isChecked = settings.confirmBeforeSend
         cbScreenOn.isChecked = settings.keepScreenOn
         cbContinuous.isChecked = settings.continuousListening
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        discovery.stopDiscovery()
     }
 
     private fun saveSettings() {

@@ -118,6 +118,16 @@ class MainActivity : AppCompatActivity() {
         findViewById<android.widget.Button>(R.id.btn_settings).setOnClickListener {
             startActivityForResult(Intent(this, SettingsActivity::class.java), SETTINGS_REQUEST)
         }
+
+        // Register bridge so the AccessibilityService can forward volume keys
+        // when the activity is backgrounded or the screen is off (dispatch-ct2.7)
+        VolumeKeyBridge.onKeyEvent = { event ->
+            when (event.action) {
+                KeyEvent.ACTION_DOWN -> onKeyDown(event.keyCode, event)
+                KeyEvent.ACTION_UP -> onKeyUp(event.keyCode, event)
+                else -> false
+            }
+        }
     }
 
     private fun initContinuousManager() {
@@ -187,6 +197,16 @@ class MainActivity : AppCompatActivity() {
             }
         )
         wsClient.connect()
+    }
+
+    override fun onResume() {
+        super.onResume()
+        VolumeKeyBridge.isActivityInForeground = true
+    }
+
+    override fun onPause() {
+        super.onPause()
+        VolumeKeyBridge.isActivityInForeground = false
     }
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
@@ -405,6 +425,8 @@ class MainActivity : AppCompatActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        VolumeKeyBridge.onKeyEvent = null
+        VolumeKeyBridge.isActivityInForeground = false
         pttManager.destroy()
         continuousManager?.destroy()
         wsClient.disconnect()

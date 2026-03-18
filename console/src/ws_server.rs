@@ -34,6 +34,9 @@ pub enum WsEvent {
     /// All agent slots were full. The main thread should create an open
     /// beads task so it appears in the queued-task list.
     QueueTask { prompt: String },
+    /// Complex unaddressed prompt: main thread should spawn a headless
+    /// planner to decompose it before dispatching (dispatch-fnx).
+    PlanRequest { prompt: String },
 }
 
 // --- Agent state ---------------------------------------------------------
@@ -276,6 +279,21 @@ fn handle_message(raw: RawInbound, state: &SharedState) -> Option<OutboundMsg> {
                 // Explicit slot.
                 (Some(s), false)
             } else if auto {
+                // Complex prompt detection: if > 15 words, route to planner
+                // instead of direct dispatch (dispatch-fnx).
+                let word_count = text.split_whitespace().count();
+                if word_count > 15 {
+                    if let Some(tx) = &st.event_tx {
+                        let _ = tx.send(WsEvent::PlanRequest { prompt: text });
+                    }
+                    return Some(OutboundMsg::Ack {
+                        slot: 0,
+                        callsign: "Planner".to_string(),
+                        task: "planning".to_string(),
+                        auto_dispatched: Some(true),
+                        seq,
+                    });
+                }
                 // Auto-dispatch: idle agent → empty slot → error.
                 if let Some(idle) = st.first_idle_slot() {
                     (Some(idle), false)
@@ -667,6 +685,56 @@ mod tests {
                 assert_eq!(prompt, "a big new task");
             }
             _ => panic!("expected QueueTask event"),
+        }
+    }
+
+    #[test]
+    fn complex_prompt_triggers_plan_request() {
+        let state = make_state();
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.lock().unwrap().event_tx = Some(tx);
+
+        // A prompt with >15 words should trigger PlanRequest instead of AutoDispatch.
+        let mut s = raw("send");
+        s.text = Some(
+            "refactor the entire authentication system to use OAuth2 with JWT tokens \
+             and add refresh token rotation plus session management with Redis backend"
+                .to_string(),
+        );
+        s.auto = Some(true);
+        let resp = handle_message(s, &state).unwrap();
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"type\":\"ack\""));
+        assert!(json.contains("\"callsign\":\"Planner\""));
+
+        match rx.try_recv().unwrap() {
+            WsEvent::PlanRequest { prompt } => {
+                assert!(prompt.contains("refactor"));
+            }
+            _ => panic!("expected PlanRequest event"),
+        }
+    }
+
+    #[test]
+    fn short_prompt_uses_auto_dispatch() {
+        let state = make_state();
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.lock().unwrap().event_tx = Some(tx);
+
+        // A short prompt (<=15 words) should use AutoDispatch.
+        let mut s = raw("send");
+        s.text = Some("fix the login bug".to_string());
+        s.auto = Some(true);
+        let resp = handle_message(s, &state).unwrap();
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"type\":\"ack\""));
+        assert!(json.contains("\"auto_dispatched\":true"));
+
+        match rx.try_recv().unwrap() {
+            WsEvent::AutoDispatch { slot: _, prompt } => {
+                assert_eq!(prompt, "fix the login bug");
+            }
+            _ => panic!("expected AutoDispatch event"),
         }
     }
 }

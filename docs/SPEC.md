@@ -257,7 +257,7 @@ Voice: "Alpha, fix the login bug"
 
 When a prompt arrives without a specified agent:
 
-1. The console creates a task (or triggers planning if the prompt is complex).
+1. The console creates a task (or triggers planning if the prompt is complex -- currently prompts with more than 15 words are considered complex and routed to the headless planner).
 2. It checks agent states:
    - If an idle agent exists, assign the task to it.
    - If all agents are busy and an empty slot exists, dispatch a new agent (default tool: `claude-code`) and assign the task.
@@ -330,6 +330,15 @@ The console displays task state across multiple areas:
 
 Communication happens over a single WebSocket connection. Messages are JSON. Either side can initiate messages.
 
+### mDNS / Zeroconf Discovery
+
+The console advertises itself on the local network via mDNS (DNS-SD) as a `_dispatch._tcp.local.` service. The service name is the console's hostname. The radio discovers this service using Android's `NsdManager` API, eliminating the need for manual IP entry.
+
+- **Console**: uses the `mdns-sd` crate to register the service on startup. The service is advertised on all network interfaces with automatic address detection.
+- **Radio**: the Settings screen has a "DISCOVER CONSOLE" button that scans for `_dispatch._tcp.` services for up to 5 seconds. When found, the host and port fields are auto-filled.
+
+Manual IP/port entry remains available as a fallback.
+
 ### Authentication
 
 The WebSocket handshake includes a pre-shared key as a query parameter:
@@ -339,6 +348,8 @@ ws://192.168.1.x:9800/?psk=<key>
 ```
 
 The console generates a random PSK on first run and stores it in `~/.config/dispatch/config.toml`. The key is displayed on the console's header bar (truncated, expandable with `p`). Any connection attempt with an invalid or missing PSK is rejected with a 401 before the WebSocket upgrade completes.
+
+**QR code pairing:** Press `Q` in command mode to display a QR code overlay encoding the full WebSocket URL (`ws://host:port/?psk=key`). The host is auto-detected from the machine's local network interface. The radio scans this QR code via its camera (Settings > Scan QR) to configure the connection without manual entry. The scanned URL populates host, port, and PSK fields automatically.
 
 ### Message Types
 
@@ -441,7 +452,7 @@ Sent to the current target. The console creates a task, assigns it, and returns 
 ### Target
 
 - Rust
-- Dependencies: `ratatui`, `crossterm`, `tokio`, `tokio-tungstenite`, `serde`, `serde_json`, `toml`, `portable-pty`, `vt100`, `dirs`, `notify` (file watcher)
+- Dependencies: `ratatui`, `crossterm`, `tokio`, `tokio-tungstenite`, `serde`, `serde_json`, `toml`, `portable-pty`, `vt100`, `dirs`, `notify` (file watcher), `mdns-sd` (mDNS advertisement), `hostname`
 - Single binary, cross-platform (Windows, macOS, Linux)
 
 ### Embedded Terminals
@@ -628,16 +639,17 @@ While in input mode, `Escape` is the only key intercepted by the console. Everyt
 | `Shift+Tab`       | Cycle target backward across all pages                       |
 | `]` / `Shift+Right` | Next page                                                 |
 | `[` / `Shift+Left`  | Previous page                                             |
-| `k` / `Up`        | Scroll up half a page in targeted pane's scrollback          |
-| `j` / `Down`      | Scroll down half a page toward live output                   |
-| `G`               | Snap to live output (exit scrollback)                        |
 | `n`               | Dispatch new agent (prompts for tool, fills first empty slot across all pages) |
 | `N`               | Dispatch new agent into a specific slot (prompts for slot number) |
 | `x`               | Terminate agent in currently targeted slot (confirms first)  |
 | `R`               | Rename agent in currently targeted slot                      |
+| `k` / `Up` / `PgUp` | Scroll up half a page in targeted pane's scrollback       |
+| `j` / `Down` / `PgDn` | Scroll down half a page toward live output              |
+| `G`               | Snap to live output (exit scrollback)                        |
 | `t`               | Show task list overlay (plan, active, queued, completed)             |
 | `P`               | Prune completed tasks from `.dispatch/tasks.md`              |
 | `p`               | Show/hide full PSK                                           |
+| `Q`               | Show QR code overlay for radio pairing                       |
 | `q`               | Quit (confirms if agents are running)                        |
 | `?`               | Toggle help overlay                                          |
 
@@ -655,12 +667,14 @@ let pty = portable_pty::native_pty_system().open_pty(PtySize { rows: 24, cols: 8
 let child = pty.slave.spawn_command(CommandBuilder::new("claude"))?;
 let reader = pty.master.try_clone_reader()?;
 let writer = pty.master.take_writer()?;
-let vte = vt100::Parser::new(24, 80, scrollback_lines); // rows, cols, scrollback
+let vte = vt100::Parser::new(24, 80, 1000); // rows, cols, scrollback
 ```
 
 **Output processing:**
 
 A tokio task per slot reads from the PTY reader and feeds bytes into the `vt100::Parser`. The parser maintains a `Screen` object representing the current terminal state. The ratatui render loop reads from this screen on each frame.
+
+**Scrollback:** the `vt100::Parser` is initialized with a scrollback buffer (default 1000 lines, configurable via `terminal.scrollback_lines`). In command mode, `k`/`Up`/`PgUp` and `j`/`Down`/`PgDn` scroll the targeted pane by half-page increments; `G` snaps to live output. A `SCROLL` indicator appears when not at the bottom. Scrollback resets to the bottom on new output or when entering input mode.
 
 **Input forwarding (input mode):**
 
@@ -844,13 +858,15 @@ Minimal, high-contrast, dark theme. Uppercase labels, monospaced accents.
 
 ### Settings
 
-- **Console address**: IP and port.
+- **Console discovery**: mDNS scan to auto-fill address and port.
+- **Console address**: IP and port (auto-filled by discovery or manual entry).
 - **Pre-shared key**: manual entry or QR scan.
 - **Haptic feedback**: toggle (default on).
 - **Confirm before send**: toggle (default off).
 - **Keep screen on**: toggle (default on).
 - **Language**: speech recognition locale (default `en-AU`).
 - **Continuous listening**: toggle (default off). When enabled, Volume Down toggles continuous listening on/off instead of push-to-talk. Uses SpeechRecognizer's built-in silence detection as VAD.
+- **Background volume keys**: opens Android Accessibility Settings to enable `VolumeKeyAccessibilityService`. Shows ENABLED/DISABLED status.
 
 ### Speech Recognition
 
@@ -873,6 +889,21 @@ When the "Continuous Listening (VAD)" setting is enabled:
 - The listening panel shows "CONTINUOUS" instead of "LISTENING" to indicate the mode.
 - `onRmsChanged` drives the `AudioLevelView` bar with real audio levels.
 - No-speech timeouts and errors trigger automatic restart rather than stopping.
+
+### Background Volume Key Capture (AccessibilityService)
+
+When the activity is in the foreground, volume key events are handled by `MainActivity.onKeyDown` / `onKeyUp` as normal. When the activity is backgrounded or the screen is off, an Android `AccessibilityService` intercepts volume key events and forwards them through a static `VolumeKeyBridge` singleton so PTT and target cycling continue to work hands-free.
+
+**Architecture:**
+
+- `VolumeKeyAccessibilityService` extends `AccessibilityService` with `flagRequestFilterKeyEvents`.
+- `VolumeKeyBridge` singleton holds a foreground flag and a key event callback registered by `MainActivity`.
+- `MainActivity` sets `isActivityInForeground = true` in `onResume`, `false` in `onPause`.
+- When the service receives a volume key event and the activity is NOT in the foreground, it invokes the bridge callback, which calls the activity's existing `onKeyDown` / `onKeyUp`.
+- When the activity IS in the foreground, the service returns `false` to let normal dispatch handle it.
+- Volume Up long press (Quick Dispatch overlay) is suppressed when backgrounded since a dialog cannot be shown without a foreground activity. Short press (target cycling) works in both states.
+
+**Setup:** The user must enable the service in Android Settings > Accessibility. The settings screen provides a shortcut button and shows the current status (ENABLED / DISABLED).
 
 ### Code Vocabulary Accuracy
 
@@ -958,6 +989,7 @@ Console:
 - Auto-dispatch for unaddressed prompts.
 - Pane info strip: callsign, tool, task ID, dispatch time, runtime.
 - Config file with auto-generation and CLI subcommands.
+- Terminal scrollback in panes (PgUp/PgDn in command mode, configurable buffer size).
 
 Radio:
 - Single Activity with volume button overrides.
@@ -980,7 +1012,7 @@ Radio:
 - ~~Terminal scrollback in panes.~~ (done)
 - ~~Agent busy/idle detection: refine idle prompt patterns and completion timeout per tool as edge cases surface in testing.~~ (done)
 - TLS on the WebSocket.
-- AccessibilityService for screen-off volume button capture.
+- ~~AccessibilityService for screen-off volume button capture.~~ (done)
 - Console prompt history and logging.
 - ~~`.dispatch/tasks.md` pruning for long-running projects (archive completed tasks).~~ (done)
 - Wear OS companion: minimal wrist app (`radio/wear/` module) with status glance (connection state, current target, active agents), crown rotation for target cycling, and tap-to-dispatch trigger. Standalone APK, same WebSocket protocol as the phone radio. Settings (host, port, PSK) via long-press.

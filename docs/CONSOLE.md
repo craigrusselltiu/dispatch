@@ -1,84 +1,104 @@
-# Console Task Management
+# Console Runtime
 
-Reference for how the dispatch console manages tasks. This document describes the task format, planning flow, worktree lifecycle, and completion detection. See SPEC.md for the full system specification.
+Reference for the dispatch console's role and responsibilities. The console is a thin runtime -- it manages the TUI, PTY processes, and tool execution on behalf of the orchestrator. It does not make decisions about what to dispatch, when to plan, or how to interpret voice commands. See ORCHESTRATOR.md for decision-making logic and SPEC.md for the full system specification.
 
-## Task Format
+## Role
 
-The console tracks tasks in `.dispatch/tasks.md` in the target repo. The format:
+The console has three responsibilities:
 
-```markdown
-# Plan title
+1. **Tool executor** -- the orchestrator issues tool calls (dispatch, terminate, merge, etc.) and the console executes them. The console returns results to the orchestrator but never initiates actions on its own.
+2. **WebSocket relay** -- voice transcripts arrive from the radio over WebSocket. The console forwards them to the orchestrator for interpretation. It does not parse or classify commands.
+3. **TUI renderer** -- the console renders the 2x2 agent grid, header, ticker, and overlays. It manages keyboard input routing (command mode vs. input mode) and pane navigation.
 
-- [ ] t1: Task description
-  - [ ] t1.1: Subtask description
-  - [ ] t1.2: Another subtask -> t1.1
-- [ ] t2: Task that depends on t1 -> t1
-```
+## PTY Management
 
-**Status markers:** `[ ]` open, `[~]` in progress, `[x]` done.
+Each agent slot owns one PTY. The console manages the full lifecycle:
 
-**Dependencies:** `-> t1, t2` at the end of a line means "blocked by t1 and t2". No arrow means no blockers.
-
-**Agent annotation:** when assigned, the console appends `| agent: Callsign`:
+**Dispatch** (triggered by orchestrator `dispatch` tool call):
 
 ```
-- [~] t1.1: Create auth module skeleton | agent: Alpha
+1. Create git worktree: git worktree add .dispatch/.worktrees/{task_id} -b task/{task_id}
+2. Open PTY via portable-pty
+3. Spawn tool process (e.g. `claude`) in the worktree directory
+4. Start reader thread: PTY output -> vt100::Parser
+5. Write task prompt to PTY
 ```
 
-Indentation groups subtasks under a parent for readability. The parent is considered done when all subtasks are done.
+**Input forwarding:**
 
-## Planning
+In input mode, keystrokes are written directly to the PTY file descriptor. Voice prompts relayed from the orchestrator are written the same way.
 
-When a voice prompt describes a complex task (e.g. "refactor the auth system"):
+**Resize:**
 
-1. The console spawns a headless planner agent (no pane, no slot consumed).
-2. The planner analyzes the codebase and writes a task breakdown to `.dispatch/tasks.md` with IDs, descriptions, and dependency arrows.
-3. The planner exits.
-4. The console reads the plan and begins dispatching workers for unblocked tasks.
+On terminal resize, PTY dimensions and vt100 parser are updated (debounced 100ms).
 
-Simple one-off prompts (e.g. "Alpha, fix the login bug") skip planning and create a single task directly.
+**Termination** (triggered by orchestrator `terminate` tool call):
 
-## Worktree Lifecycle
-
-Each task runs in an isolated git worktree.
-
-**On task assignment:**
-```
-git worktree add .dispatch/.worktrees/{task_id} -b task/{task_id}
-```
-
-The agent's PTY launches with its working directory set to the worktree path.
-
-**On task completion:**
-1. Merge the task branch to main.
-2. If merge succeeds: clean up worktree, mark `[x]`.
-3. If merge conflicts: flag on ticker, preserve worktree for manual review.
-
-**On agent termination:**
-Worktree and branch are preserved. Task reverts to `[ ]` for reassignment.
+Kill the child process, close the PTY, mark the slot empty. The worktree and branch are preserved.
 
 ## Completion Detection
 
-Two-layer strategy:
+The console monitors agent slots and reports status back to the orchestrator:
 
-1. **Idle prompt detection (primary)** -- watch the vt100 virtual screen for tool-specific idle patterns (e.g. `^> $` for claude-code). Confirmed after 500ms of no new output.
-2. **Inactivity timeout (safety net)** -- if no idle pattern fires within a configurable timeout (default 60s), mark the task complete.
+1. **Idle prompt detection** -- watch the vt100 virtual screen for tool-specific idle patterns (e.g. `^> $` for claude-code). Confirmed after 500ms of no new output.
+2. **Inactivity timeout** -- if no idle pattern fires within a configurable timeout (default 60s), treat the agent as idle.
 
-On completion, the console merges the worktree, marks the task `[x]`, scans for newly unblocked tasks, and dispatches the next one.
+When an agent is detected as idle, the console notifies the orchestrator. The orchestrator decides what happens next (merge, dispatch new task, etc.).
 
-## Dispatch Flow
+## Worktree Lifecycle
+
+Worktree operations are executed by the console on behalf of the orchestrator.
+
+**Creation:** the console creates a worktree when the orchestrator calls the `dispatch` tool.
+
+**Merge:** the console merges a task branch when the orchestrator calls the `merge` tool. It reports success or conflict back to the orchestrator.
+
+**Cleanup:** on successful merge, the worktree is removed. On conflict, the worktree is preserved and the orchestrator is notified.
+
+## WebSocket Server
+
+The console runs a WebSocket server (default port 9800, PSK-authenticated) that accepts connections from the radio.
+
+**Inbound flow:**
 
 ```
-Orchestrator reads .dispatch/tasks.md
-  -> finds [ ] tasks with no unresolved -> dependencies
-  -> picks one, marks [~] with agent annotation
-  -> creates worktree, launches agent PTY inside it
-  -> writes task prompt to PTY
-  -> detects completion
-  -> merges worktree, marks [x]
-  -> checks what's now unblocked
-  -> dispatches next
+Radio -> WebSocket -> Console -> Orchestrator
 ```
+
+Voice transcripts arrive as JSON messages. The console does not interpret them -- it forwards them to the orchestrator as-is. The orchestrator decides whether to dispatch, plan, address a specific agent, or take some other action.
+
+**Outbound flow:**
+
+```
+Orchestrator -> Console -> WebSocket -> Radio
+```
+
+The console relays status updates (agent states, acknowledgments, errors) back to the radio.
+
+## TUI
+
+The console renders the interface and handles all keyboard interaction.
+
+**Layout:**
+
+```
++--------------------------------------------------------------+
+| Header (radio status, PSK, task count, page, clock)          |
+| Ticker (scrolling task events from orchestrator)              |
++-----------------------------+--------------------------------+
+| Pane 1                      | Pane 2                         |
+|                             |                                |
++-----------------------------+--------------------------------+
+| Pane 3                      | Pane 4                         |
+|                             |                                |
++-----------------------------+--------------------------------+
+| Footer (mode, target, keybindings)                           |
++--------------------------------------------------------------+
+```
+
+**Pane rendering:** each pane reads from its slot's `vt100::Screen` and renders via ratatui, mapping terminal colors to ratatui styles.
+
+**Ticker:** receives messages from the orchestrator and displays them as a scrolling marquee. The console does not generate ticker messages itself -- it renders what the orchestrator sends.
 
 ## Configuration
 
@@ -86,9 +106,6 @@ Relevant config keys in `config.toml`:
 
 ```toml
 [tasks]
-dir = ".dispatch"           # Base directory for dispatch artifacts in the target repo
-auto_dispatch = true        # Auto-dispatch agents for unaddressed prompts
-default_tool = "claude-code" # Default tool for auto-dispatched and planner agents
-completion_timeout_secs = 60 # Inactivity timeout (0 to disable)
-auto_merge = true           # Auto-merge completed branches (false = leave for review)
+dir = ".dispatch"              # Base directory for dispatch artifacts in the target repo
+completion_timeout_secs = 60   # Inactivity timeout for idle detection (0 to disable)
 ```
