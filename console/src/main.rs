@@ -19,6 +19,7 @@
 // dispatch-1lc.1: task queuing — auto-dispatch unaddressed prompts from radio
 // dispatch-1lc.2: idle agent pickup — idle prompt detection, inactivity timeout, auto task pickup
 // dispatch-xje: git worktree-per-task isolation
+// dispatch-1lc.4: task list overlay — full-screen plan view with status groups and agent assignments
 //
 // Layout:
 //   Header bar  : DISPATCH title, radio state, PSK, agent count, PAGE X/Y, clock
@@ -167,6 +168,15 @@ struct QueuedTask {
     title: String,
 }
 
+/// A task entry for the task list overlay (dispatch-1lc.4).
+#[derive(Clone)]
+struct TaskEntry {
+    id: String,
+    title: String,
+    status: String,      // "open", "in_progress", "closed"
+    agent: Option<String>, // agent display name if currently in a slot
+}
+
 struct App {
     slots: [Option<SlotState>; MAX_SLOTS],
     current_page: usize,
@@ -195,6 +205,8 @@ struct App {
     conflict_tasks: Vec<String>,
     /// Absolute path to the target repo root (dispatch-xje).
     repo_root: String,
+    // Task list overlay cache (dispatch-1lc.4): loaded when overlay opens
+    task_list_data: Vec<TaskEntry>,
 }
 
 impl App {
@@ -230,6 +242,7 @@ impl App {
             ticker_frame_counter: 0,
             conflict_tasks: Vec::new(),
             repo_root,
+            task_list_data: Vec::new(),
         }
     }
 
@@ -568,6 +581,42 @@ fn bd_fetch_queued() -> Vec<QueuedTask> {
             let id = item.get("id")?.as_str()?.to_owned();
             let title = item.get("title")?.as_str()?.to_owned();
             Some(QueuedTask { id, title })
+        })
+        .collect()
+}
+
+/// Fetch all tasks for the task list overlay (dispatch-1lc.4).
+/// Cross-references with active agent slots to annotate in-progress tasks.
+fn bd_fetch_task_list(slots: &[Option<SlotState>; MAX_SLOTS]) -> Vec<TaskEntry> {
+    // Build a map of task_id -> agent display name from active slots.
+    let mut slot_map: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+    for slot in slots.iter().flatten() {
+        if let Some(id) = &slot.task_id {
+            slot_map.insert(id.clone(), slot.display_name().to_string());
+        }
+    }
+
+    let output = match Command::new("bd").args(["list", "--json"]).output() {
+        Ok(o) => o,
+        Err(_) => return vec![],
+    };
+    if !output.status.success() {
+        return vec![];
+    }
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let v: serde_json::Value = match serde_json::from_str(stdout.trim()) {
+        Ok(v) => v,
+        Err(_) => return vec![],
+    };
+    v.as_array()
+        .unwrap_or(&vec![])
+        .iter()
+        .filter_map(|item| {
+            let id = item.get("id")?.as_str()?.to_owned();
+            let title = item.get("title")?.as_str()?.to_owned();
+            let status = item.get("status")?.as_str()?.to_owned();
+            let agent = slot_map.get(&id).cloned();
+            Some(TaskEntry { id, title, status, agent })
         })
         .collect()
 }
@@ -1142,37 +1191,165 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
 }
 
 fn render_task_list_overlay(f: &mut Frame, area: Rect, app: &App) {
-    let r = centered_rect(54, 14, area);
+    // Full-screen overlay (dispatch-1lc.4)
+    let r = centered_rect(area.width.saturating_sub(2), area.height.saturating_sub(2), area);
     f.render_widget(Clear, r);
-    let mut lines = vec![Line::default()];
-    let page_start = app.current_page * SLOTS_PER_PAGE;
-    for local in 0..SLOTS_PER_PAGE {
-        let g = page_start + local;
-        if g >= MAX_SLOTS {
-            break;
-        }
-        match &app.slots[g] {
-            None => lines.push(Line::from(Span::styled(
-                format!("  [{}]  -- empty --", g + 1),
-                Style::default().fg(Color::DarkGray),
-            ))),
-            Some(a) => {
-                let task = a.task_id.as_deref().unwrap_or("no task");
-                lines.push(Line::from(vec![
-                    Span::styled(
-                        format!("  [{}]  {}", g + 1, a.display_name()),
-                        Style::default().add_modifier(Modifier::BOLD),
-                    ),
-                    Span::styled(format!("  {}", task), Style::default().fg(Color::Yellow)),
-                ]));
-            }
+
+    let in_progress: Vec<&TaskEntry> = app
+        .task_list_data
+        .iter()
+        .filter(|t| t.status == "in_progress")
+        .collect();
+    let queued: Vec<&TaskEntry> = app
+        .task_list_data
+        .iter()
+        .filter(|t| t.status == "open")
+        .collect();
+    let completed: Vec<&TaskEntry> = app
+        .task_list_data
+        .iter()
+        .filter(|t| t.status == "closed")
+        .collect();
+
+    let total = app.task_list_data.len();
+    let done_count = completed.len();
+
+    // Inner width for truncating titles (subtract border + padding).
+    let inner_w = r.width.saturating_sub(4) as usize;
+
+    let mut lines: Vec<Line<'static>> = Vec::new();
+
+    // Progress summary line.
+    lines.push(Line::default());
+    lines.push(Line::from(vec![
+        Span::styled(
+            format!("  Tasks: {}/{} complete", done_count, total),
+            Style::default().fg(Color::White),
+        ),
+        Span::styled(
+            format!(
+                "   {} active  {} queued  {} done",
+                in_progress.len(),
+                queued.len(),
+                done_count
+            ),
+            Style::default().fg(Color::DarkGray),
+        ),
+    ]));
+    lines.push(Line::default());
+
+    // IN PROGRESS section.
+    lines.push(Line::from(Span::styled(
+        "  IN PROGRESS",
+        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+    )));
+    if in_progress.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "    (none)",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        for t in &in_progress {
+            let agent_str = t
+                .agent
+                .as_deref()
+                .map(|a| format!(" <- {}", a))
+                .unwrap_or_default();
+            let prefix = format!("  [~] {}  ", t.id);
+            let avail = inner_w.saturating_sub(prefix.len() + agent_str.len());
+            let title = if t.title.len() > avail && avail > 3 {
+                format!("{}...", &t.title[..avail - 3])
+            } else {
+                t.title.clone()
+            };
+            lines.push(Line::from(vec![
+                Span::styled("[~] ", Style::default().fg(Color::Yellow)),
+                Span::styled(
+                    format!("{}  ", t.id),
+                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(title, Style::default().fg(Color::White)),
+                Span::styled(agent_str, Style::default().fg(Color::Cyan)),
+            ]));
         }
     }
+    lines.push(Line::default());
+
+    // QUEUED section.
+    lines.push(Line::from(Span::styled(
+        "  QUEUED",
+        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+    )));
+    if queued.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "    (none)",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        for t in &queued {
+            let prefix = format!("[ ] {}  ", t.id);
+            let avail = inner_w.saturating_sub(prefix.len());
+            let title = if t.title.len() > avail && avail > 3 {
+                format!("{}...", &t.title[..avail - 3])
+            } else {
+                t.title.clone()
+            };
+            lines.push(Line::from(vec![
+                Span::styled("[ ] ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{}  ", t.id),
+                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+                ),
+                Span::styled(title, Style::default().fg(Color::DarkGray)),
+            ]));
+        }
+    }
+    lines.push(Line::default());
+
+    // COMPLETED section (most recent first, limited to avoid flooding).
+    lines.push(Line::from(Span::styled(
+        "  COMPLETED",
+        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
+    )));
+    let max_completed = (r.height as usize).saturating_sub(lines.len() + 4);
+    let show_completed: Vec<&TaskEntry> = completed.iter().rev().take(max_completed).cloned().collect();
+    if show_completed.is_empty() {
+        lines.push(Line::from(Span::styled(
+            "    (none)",
+            Style::default().fg(Color::DarkGray),
+        )));
+    } else {
+        for t in &show_completed {
+            let prefix = format!("[x] {}  ", t.id);
+            let avail = inner_w.saturating_sub(prefix.len());
+            let title = if t.title.len() > avail && avail > 3 {
+                format!("{}...", &t.title[..avail - 3])
+            } else {
+                t.title.clone()
+            };
+            lines.push(Line::from(vec![
+                Span::styled("[x] ", Style::default().fg(Color::DarkGray)),
+                Span::styled(
+                    format!("{}  ", t.id),
+                    Style::default().fg(Color::DarkGray),
+                ),
+                Span::styled(title, Style::default().fg(Color::DarkGray)),
+            ]));
+        }
+        if done_count > max_completed {
+            lines.push(Line::from(Span::styled(
+                format!("    ... and {} more", done_count - max_completed),
+                Style::default().fg(Color::DarkGray),
+            )));
+        }
+    }
+
     lines.push(Line::default());
     lines.push(Line::from(Span::styled(
         "  Press any key to close",
         Style::default().fg(Color::DarkGray),
     )));
+
     f.render_widget(
         Paragraph::new(Text::from(lines)).block(
             Block::default()
@@ -1530,7 +1707,7 @@ fn main() -> io::Result<()> {
                         if app.slots[g].is_none() {
                             let cmd = app.tool_cmd("claude-code").to_string();
                             if let Some(s) = dispatch_slot(
-                                g, "claude-code", &cmd, app.pane_rows, app.pane_cols,
+                                g, "claude-code", &cmd, app.pane_rows, app.pane_cols, None,
                             ) {
                                 let name = s.display_name().to_string();
                                 app.slots[g] = Some(s);
@@ -1857,7 +2034,10 @@ fn main() -> io::Result<()> {
                                     }
                                 }
 
-                                KeyCode::Char('t') => app.overlay = Overlay::TaskList,
+                                KeyCode::Char('t') => {
+                                    app.task_list_data = bd_fetch_task_list(&app.slots);
+                                    app.overlay = Overlay::TaskList;
+                                }
                                 KeyCode::Char('p') => app.psk_expanded = !app.psk_expanded,
                                 KeyCode::Char('?') => app.overlay = Overlay::Help,
 
