@@ -941,7 +941,7 @@ fn dispatch_plan_tasks(app: &mut App) -> usize {
             let worktree = create_worktree(&task.id, &repo_root);
             if let Some(slot) = dispatch_slot(
                 slot_idx, "claude-code", &tool_cmd, pane_rows, pane_cols,
-                worktree.as_deref(), scrollback,
+                worktree.as_deref(), scrollback, repo_name_from_path(&repo_root),
             ) {
                 app.slots[slot_idx] = Some(slot);
             } else {
@@ -2291,9 +2291,10 @@ fn main() -> io::Result<()> {
         .as_deref()
         .and_then(|id| create_worktree(id, &repo_root));
     let claude_cmd = app.tool_cmd("claude-code").to_string();
+    let short_repo_name = repo_name_from_path(&repo_root).to_string();
     if let Some(mut slot) = dispatch_slot(
         0, "claude-code", &claude_cmd, pane_rows, pane_cols,
-        startup_worktree.as_deref(), app.scrollback_lines,
+        startup_worktree.as_deref(), app.scrollback_lines, &short_repo_name,
     ) {
         // dispatch-1lc.3: task lifecycle via .dispatch/tasks.md
         if let Some(id) = &startup_task_id {
@@ -2502,7 +2503,7 @@ fn main() -> io::Result<()> {
                             let worktree = create_worktree(&id, &app.repo_root);
                             if let Some(mut slot) = dispatch_slot(
                                 g, "claude-code", &cmd, app.pane_rows, app.pane_cols,
-                                worktree.as_deref(), app.scrollback_lines,
+                                worktree.as_deref(), app.scrollback_lines, repo_name_from_path(&app.repo_root),
                             ) {
                                 update_task_in_file(&app.repo_root, &id, '~', Some(&slot.callsign));
                                 let prefixed = format!("[Dispatch task {id}] {prompt}\r");
@@ -2532,7 +2533,8 @@ fn main() -> io::Result<()> {
                         if app.slots[g].is_none() {
                             let cmd = app.tool_cmd("claude-code").to_string();
                             if let Some(s) = dispatch_slot(
-                                g, "claude-code", &cmd, app.pane_rows, app.pane_cols, None, app.scrollback_lines,
+                                g, "claude-code", &cmd, app.pane_rows, app.pane_cols, None,
+                                app.scrollback_lines, repo_name_from_path(&app.repo_root),
                             ) {
                                 let name = s.display_name().to_string();
                                 app.push_orch(OrchestratorEventKind::Dispatched { agent: name.clone(), slot: g + 1, tool: "claude-code".to_string() });
@@ -2750,7 +2752,8 @@ fn main() -> io::Result<()> {
                                                 if app.slots[g].is_none() {
                                                     let cmd = app.tool_cmd("claude-code").to_string();
                                                     if let Some(slot) = dispatch_slot(
-                                                        g, "claude-code", &cmd, app.pane_rows, app.pane_cols, None, app.scrollback_lines,
+                                                        g, "claude-code", &cmd, app.pane_rows, app.pane_cols, None,
+                                                        app.scrollback_lines, repo_name_from_path(&app.repo_root),
                                                     ) {
                                                         let name = slot.display_name().to_string();
                                                         app.push_orch(OrchestratorEventKind::Dispatched { agent: name.clone(), slot: g + 1, tool: "claude-code".to_string() });
@@ -2871,7 +2874,8 @@ fn main() -> io::Result<()> {
                                     if let Some(g) = app.slots.iter().position(|s| s.is_none()) {
                                         let cmd = app.tool_cmd("claude-code").to_string();
                                         if let Some(slot) = dispatch_slot(
-                                            g, "claude-code", &cmd, app.pane_rows, app.pane_cols, None, app.scrollback_lines,
+                                            g, "claude-code", &cmd, app.pane_rows, app.pane_cols, None,
+                                            app.scrollback_lines, repo_name_from_path(&app.repo_root),
                                         ) {
                                             let page = g / SLOTS_PER_PAGE;
                                             let local = g % SLOTS_PER_PAGE;
