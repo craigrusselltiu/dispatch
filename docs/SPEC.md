@@ -281,6 +281,40 @@ When a prompt arrives without a specified agent:
    - If all slots are full and all agents are busy, add the task as `[ ]` (open/queued) and notify the radio: "All agents busy, task queued."
 3. Queued tasks are picked up automatically when an agent becomes idle. The console scans `.dispatch/tasks.md` for `[ ]` tasks with no unresolved `->` dependencies.
 
+### Orchestrator Tool Interface
+
+The console exposes a set of tools that an orchestrator agent (LLM) can call to manage the dispatch system. The console executes these tool calls and returns structured JSON results. Tool calls use a tagged JSON format; results are typed by a `type` discriminant.
+
+**Tool call format:**
+
+```json
+<tool_call>{"name": "dispatch", "input": {"repo": "myrepo", "prompt": "fix the auth bug"}}</tool_call>
+```
+
+**Tool result format:**
+
+```json
+<tool_result>
+{"type": "dispatched", "slot": 1, "callsign": "Alpha", "task_id": "t1"}
+</tool_result>
+```
+
+**Available tools:**
+
+| Tool | Parameters | Description |
+|------|-----------|-------------|
+| `dispatch` | `repo`, `prompt` | Create a task, set up a git worktree, and dispatch an agent. Returns slot, callsign, and task ID. |
+| `terminate` | `agent` | Kill an agent by callsign or slot number. Frees the slot and reopens the task for reassignment. |
+| `merge` | `task_id` | Merge a task's worktree branch into main. Returns success/failure with conflict details. |
+| `list_agents` | _(none)_ | List all active agent slots with callsign, tool, busy/idle status, current task, and repo. |
+| `list_repos` | _(none)_ | List available repositories that agents can work in. |
+| `plan` | `repo`, `prompt` | Spawn a headless planner to decompose a complex prompt into subtasks in `.dispatch/tasks.md`. |
+| `message_agent` | `agent`, `text` | Send text to an agent's terminal (PTY). Use for follow-up instructions or answering agent questions. |
+
+The `agent` parameter accepts either a callsign (e.g. "Alpha") or a slot number (e.g. "1"), case-insensitive.
+
+Tool definitions are also available as a JSON schema array (compatible with Claude/OpenAI function-calling format) for programmatic use by orchestrator agents.
+
 ### Task Completion Detection
 
 Determining when an agent has finished a task is non-trivial. The console uses a three-layer strategy, evaluated in priority order:
