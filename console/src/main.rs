@@ -47,7 +47,7 @@ use std::{
     collections::hash_map::DefaultHasher,
     hash::{Hash, Hasher},
     io::{self, Read, Write},
-    process::Command,
+    process::{Command, Stdio},
     sync::{
         atomic::{AtomicBool, Ordering},
         mpsc, Arc, Mutex,
@@ -611,6 +611,7 @@ impl App {
                         slot_idx, "claude-code", &cmd, self.pane_rows, self.pane_cols,
                         worktree.as_deref(), self.scrollback_lines,
                         repo_name_from_path(&target_repo), &target_repo,
+                        Some(prompt),
                     ) {
                         Some(slot) => { self.slots[slot_idx] = Some(slot); }
                         None => return tools::ToolResult::Error {
@@ -625,9 +626,6 @@ impl App {
                     update_task_in_file(&target_repo, &task_id, '~', Some(&slot.callsign));
                     slot.task_id = Some(task_id.clone());
                     slot.worktree_path = worktree;
-                    let prefixed = format!("[Dispatch task {}] {}\r", task_id, prompt);
-                    let _ = slot.writer.write_all(prefixed.as_bytes());
-                    let _ = slot.writer.flush();
                     slot.last_output_at = Instant::now();
                     slot.display_name().to_string()
                 };
@@ -837,6 +835,7 @@ fn scan_child_repos(parent: &str) -> Vec<String> {
 
 /// Open a PTY and spawn a process. Returns a SlotState on success.
 /// `cwd` sets the working directory for the PTY (dispatch-xje: worktree path).
+/// `initial_prompt` is passed as a CLI argument so the agent starts working immediately.
 fn dispatch_slot(
     global_idx: usize,
     tool_key: &str,
@@ -847,6 +846,7 @@ fn dispatch_slot(
     scrollback_lines: u32,
     repo_name: &str,
     repo_root: &str,
+    initial_prompt: Option<&str>,
 ) -> Option<SlotState> {
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -868,6 +868,10 @@ fn dispatch_slot(
         }
         c
     };
+    cmd.arg("--dangerously-skip-permissions");
+    if let Some(prompt) = initial_prompt {
+        cmd.arg(prompt);
+    }
     if let Some(dir) = cwd {
         cmd.cwd(dir);
     }
@@ -1244,6 +1248,7 @@ fn dispatch_plan_tasks(app: &mut App) -> usize {
             if let Some(slot) = dispatch_slot(
                 slot_idx, "claude-code", &tool_cmd, pane_rows, pane_cols,
                 worktree.as_deref(), scrollback, &short_repo, &repo_root,
+                Some(&task.title),
             ) {
                 app.slots[slot_idx] = Some(slot);
             } else {
@@ -1258,9 +1263,6 @@ fn dispatch_plan_tasks(app: &mut App) -> usize {
             let worktree = create_worktree(&task.id, &repo_root);
             slot.task_id = Some(task.id.clone());
             slot.worktree_path = worktree;
-            let prefixed = format!("[Dispatch task {}] {}\r", task.id, task.title);
-            let _ = slot.writer.write_all(prefixed.as_bytes());
-            let _ = slot.writer.flush();
             slot.last_output_at = Instant::now();
             slot.display_name().to_string()
         };
@@ -1357,10 +1359,22 @@ fn merge_worktree(task_id: &str, repo_root: &str) -> bool {
     if merged {
         let _ = Command::new("git")
             .args(["worktree", "remove", &worktree_path, "--force"])
+            .stdin(Stdio::null())
             .current_dir(repo_root)
             .status();
+        // Fallback: remove directory manually if git worktree remove failed (Windows file locks)
+        if std::path::Path::new(&worktree_path).exists() {
+            let _ = std::fs::remove_dir_all(&worktree_path);
+            // Prune stale worktree entries
+            let _ = Command::new("git")
+                .args(["worktree", "prune"])
+                .stdin(Stdio::null())
+                .current_dir(repo_root)
+                .status();
+        }
         let _ = Command::new("git")
             .args(["branch", "-d", &branch])
+            .stdin(Stdio::null())
             .current_dir(repo_root)
             .status();
         true
@@ -2891,11 +2905,9 @@ fn main() -> io::Result<()> {
                             if let Some(mut slot) = dispatch_slot(
                                 g, "claude-code", &cmd, app.pane_rows, app.pane_cols,
                                 worktree.as_deref(), app.scrollback_lines, repo_name_from_path(&target_repo), &target_repo,
+                                Some(&prompt),
                             ) {
                                 update_task_in_file(&target_repo, &id, '~', Some(&slot.callsign));
-                                let prefixed = format!("[Dispatch task {id}] {prompt}\r");
-                                let _ = slot.writer.write_all(prefixed.as_bytes());
-                                let _ = slot.writer.flush();
                                 slot.task_id = Some(id);
                                 slot.worktree_path = worktree;
                                 app.slots[g] = Some(slot);
@@ -3177,6 +3189,7 @@ fn main() -> io::Result<()> {
                                                     if let Some(slot) = dispatch_slot(
                                                         g, "claude-code", &cmd, app.pane_rows, app.pane_cols, None,
                                                         app.scrollback_lines, repo_name_from_path(&target_repo), &target_repo,
+                                                        None,
                                                     ) {
                                                         let name = slot.display_name().to_string();
                                                         app.push_orch(OrchestratorEventKind::Dispatched { agent: name.clone(), slot: g + 1, tool: "claude-code".to_string() });
@@ -3257,6 +3270,7 @@ fn main() -> io::Result<()> {
                                                     g, "claude-code", &cmd, app.pane_rows, app.pane_cols,
                                                     Some(&selected_repo), app.scrollback_lines,
                                                     repo_name_from_path(&selected_repo), &selected_repo,
+                                                    None,
                                                 ) {
                                                     let page = g / SLOTS_PER_PAGE;
                                                     let local = g % SLOTS_PER_PAGE;
@@ -3401,6 +3415,7 @@ fn main() -> io::Result<()> {
                                             if let Some(slot) = dispatch_slot(
                                                 g, "claude-code", &cmd, app.pane_rows, app.pane_cols, None,
                                                 app.scrollback_lines, repo_name_from_path(&target_repo), &target_repo,
+                                                None,
                                             ) {
                                                 let page = g / SLOTS_PER_PAGE;
                                                 let local = g % SLOTS_PER_PAGE;
