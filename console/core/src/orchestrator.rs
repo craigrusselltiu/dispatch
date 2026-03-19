@@ -124,7 +124,7 @@ pub fn spawn(system_prompt: &str, cwd: &str) -> Option<Orchestrator> {
         "-p",
         "--output-format", "stream-json",
         "--input-format", "stream-json",
-        "--no-config",
+        "--verbose",
         "--tools", "",
         "--system-prompt", system_prompt,
     ]);
@@ -223,9 +223,15 @@ impl Orchestrator {
 
     /// Send directly (bypasses queue check).
     fn send_raw(&mut self, content: &str) {
-        let escaped = content.replace('\\', "\\\\").replace('"', "\\\"").replace('\n', "\\n");
-        let msg = format!("{{\"type\":\"user\",\"content\":\"{}\"}}\n", escaped);
-        if self.stdin.write_all(msg.as_bytes()).is_err() || self.stdin.flush().is_err() {
+        let msg = serde_json::json!({
+            "type": "user_message",
+            "message": {
+                "role": "user",
+                "content": content
+            }
+        });
+        let line = format!("{}\n", msg);
+        if self.stdin.write_all(line.as_bytes()).is_err() || self.stdin.flush().is_err() {
             self.state = OrchestratorState::Dead;
             return;
         }
