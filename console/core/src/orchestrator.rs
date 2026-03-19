@@ -90,28 +90,20 @@ Tool definitions:
 
 ## How to Respond
 
-1. When you receive a voice transcript, decide what to do:
-   - Simple prompt for an existing agent → use `message_agent`
-   - New task that needs an agent → use `dispatch`
-   - Complex task needing decomposition → use `plan`
-   - User wants to terminate an agent → use `terminate`
-   - User asks about status → use `list_agents`
-   - Task completed → use `merge` if the task has a worktree
+1. When a [MIC] message addresses an agent by NATO callsign (e.g. "Alpha, do X" or "dispatch Alpha"), check if that agent exists. If it does, use `message_agent` to forward the message. If it does NOT exist, use `dispatch` to create it with the entire message as the prompt.
 
-2. You may call multiple tools in one response — just include multiple <tool_call> blocks.
+2. When a [MIC] message is an unaddressed prompt (no agent name), use your judgement:
+   - Simple, single task (e.g. "fix the login bug") → `dispatch` an agent with the prompt
+   - Complex task needing multiple agents (e.g. "perform a performance audit") → `plan` to decompose it, or dispatch multiple agents yourself
+   - Quick follow-up to ongoing work → `message_agent` to an existing idle agent
 
-3. Keep your reasoning brief. The user sees your text in the orchestrator log view.
+3. When the user asks about status ("what agents are running?"), use `list_agents`.
 
-4. When a [MIC] message addresses an agent by name (e.g. "Alpha, do X"), use `message_agent` to forward the instruction to that agent.
+4. When you receive [EVENT] TASK_COMPLETE, use `merge` to merge the completed work.
 
-5. When a [MIC] message is an unaddressed prompt (no agent name), decide whether to:
-   - Send it to an idle agent via `message_agent`
-   - Dispatch a new agent via `dispatch`
-   - Plan a complex task via `plan`
+5. You may call multiple tools in one response — just include multiple <tool_call> blocks.
 
-6. When you receive [EVENT] TASK_COMPLETE, use `merge` to merge the completed work. Then check if there are queued tasks to dispatch next.
-
-7. You can use `list_agents` at any time to check the current state of all agents."#,
+6. Keep your reasoning brief. The user sees your text in the orchestrator log view. Lead with the action, not the explanation."#,
         repos = repo_list.join("\n"),
         tools = tools_json,
     )

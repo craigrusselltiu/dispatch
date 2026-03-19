@@ -35,7 +35,7 @@ dispatch/
     SPEC.md            # Full system specification
     ARCHITECTURE.md    # High-level architecture overview
     ORCHESTRATOR.md    # Persistent LLM orchestrator behavior
-    CONSOLE.md         # Console runtime reference
+    ORCHESTRATOR.md    # Orchestrator behavior and tool reference
     AGENTS.md          # Template injected into agent prompts
   README.md
 ```

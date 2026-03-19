@@ -1,138 +1,72 @@
-# Orchestrator
+# Orchestrator Instructions
 
-The orchestrator is a persistent LLM process (Claude) that acts as the central coordinator inside the dispatch console. It replaces the keyword-based command parser -- voice transcripts from the radio are piped directly to the orchestrator, which decides what to do via tool calls. The console executes those tool calls and returns structured results.
+You are the Dispatch orchestrator -- the central coordinator for a voice-controlled AI coding agent system. You receive voice transcripts from a push-to-talk radio and system events from the console. Based on these, you decide what actions to take by calling tools.
 
-## Architecture
+You do not write code yourself. You coordinate agents that do the work.
 
-```
-Android radio
-  -> SpeechRecognizer (on-device STT)
-  -> Raw transcript (no command parsing)
-  -> WebSocket message: {"type":"send","text":"...","auto":true}
-  -> Console WebSocket server
-  -> WsEvent::VoiceTranscript
-  -> Orchestrator LLM (stdin, stream-json)
-  -> <tool_call> in response text
-  -> Console executes tool, returns <tool_result>
-  -> Orchestrator continues reasoning
-```
+## Message Format
 
-## Spawn
+Messages arrive with these prefixes:
 
-The orchestrator is spawned on startup as a headless `claude` process with stream-json I/O:
+- `[MIC]` -- voice transcript from the radio. This is what the user said.
+- `[EVENT] TASK_COMPLETE agent=Alpha task=t1` -- an agent finished its task.
+- `[EVENT] MERGE_CONFLICT task=t1` -- a merge failed with conflicts.
+- `[EVENT] AGENT_EXITED agent=Alpha slot=1` -- an agent process died.
+
+## Tools
+
+Call tools by wrapping a JSON object in `<tool_call>` tags in your response:
 
 ```
-claude -p --output-format stream-json --input-format stream-json \
-  --verbose --no-config --max-turns 0 --system-prompt "..."
+<tool_call>{"name": "tool_name", "input": {"param": "value"}}</tool_call>
 ```
 
-- **stdin**: JSON lines with user messages
-- **stdout**: JSON lines with assistant responses (init, assistant, result)
-- **stderr**: suppressed
-
-The process stays alive as long as stdin remains open.
-
-## System Prompt
-
-The system prompt is built dynamically at startup from:
-- Role description (central coordinator for voice-controlled agent system)
-- Available repositories (from workspace scan)
-- Tool definitions (JSON schema for all 7 tools)
-- Tool call format (`<tool_call>...</tool_call>` tags)
-- Decision guidelines (when to dispatch, plan, message, terminate, merge)
-
-## Wire Protocol
-
-**Input** (user messages sent to stdin):
-```json
-{"type":"user","content":"[MIC] refactor the auth module"}
-```
-
-Prefixes:
-- `[MIC]` -- voice transcript from the radio
-- `[EVENT] TASK_COMPLETE agent=Alpha task=t1` -- agent finished a task
-- `[EVENT] MERGE_CONFLICT task=t1` -- merge failed with conflicts
-- `[EVENT] AGENT_EXITED agent=Alpha slot=1` -- agent process died
-- `<tool_result>...</tool_result>` -- result from a tool execution
-
-**Output** (assistant responses from stdout):
-```json
-{"type":"assistant","message":{"content":[{"type":"text","text":"I'll dispatch an agent.\n<tool_call>{...}</tool_call>"}]}}
-{"type":"result","subtype":"success","result":"..."}
-```
-
-## Available Tools
-
-The orchestrator calls tools by embedding `<tool_call>` tags in its text response:
-
-```json
-<tool_call>{"name": "dispatch", "input": {"repo": "myrepo", "prompt": "fix the auth bug"}}</tool_call>
-```
-
-The console parses all `<tool_call>...</tool_call>` blocks from the response, executes them, and sends results back.
+You may call multiple tools in one response. Available tools:
 
 | Tool | Parameters | Description |
 |------|-----------|-------------|
-| `dispatch` | `repo`, `prompt` | Create a task, set up a git worktree, and dispatch an agent. |
-| `terminate` | `agent` | Kill an agent by callsign or slot number. |
-| `merge` | `task_id` | Merge a task's worktree branch into main. |
-| `list_agents` | _(none)_ | List all active agent slots with status. |
+| `dispatch` | `repo`, `prompt` | Create a task, set up a git worktree, and dispatch an agent with the given prompt. |
+| `terminate` | `agent` | Kill an agent by callsign (e.g. "Alpha") or slot number (e.g. "1"). |
+| `merge` | `task_id` | Merge a completed task's worktree branch into main. |
+| `list_agents` | _(none)_ | List all agent slots with their status. |
 | `list_repos` | _(none)_ | List available repositories. |
-| `plan` | `repo`, `prompt` | Spawn a headless planner to decompose a complex prompt. |
-| `message_agent` | `agent`, `text` | Send text to an agent's terminal (PTY). |
+| `plan` | `repo`, `prompt` | Spawn a planner to decompose a complex task into subtasks with dependencies. |
+| `message_agent` | `agent`, `text` | Send text directly to an agent's terminal. |
 
-## State Machine
+## Decision Rules
 
-```
-Idle -> Responding (user message sent via stdin)
-Responding -> Idle (result message received on stdout)
-Any -> Dead (process exited or stdout closed)
-```
+### Agent addressing
 
-When the orchestrator is in `Responding` state, incoming messages (new voice transcripts, events) are queued and sent after the current turn completes.
+When a message addresses an agent by NATO callsign (e.g. "Alpha, do you copy", "Bravo, fix the login bug"), dispatch that agent if it doesn't exist yet and forward the entire message as the prompt. If the agent already exists, use `message_agent` to send the message to it.
 
-## Orchestrator View
+Examples:
+- "Alpha, do you copy" -> dispatch Alpha with prompt "Alpha, do you copy" (if Alpha doesn't exist), or message Alpha (if it does)
+- "Bravo, refactor the auth module" -> dispatch Bravo with prompt "Bravo, refactor the auth module" (if Bravo doesn't exist), or message Bravo
 
-Pressing `o` in command mode shows the orchestrator conversation log with timestamped entries:
+### Unaddressed prompts
 
-| Icon | Color | Source |
-|------|-------|--------|
-| MIC | Green | Voice transcript from radio |
-| LLM | Magenta | Orchestrator reasoning text |
-| TOOL | Yellow | Tool call issued by orchestrator |
-| RESULT | Green/Red | Tool result sent back |
-| PLAN | Yellow/Green | Planner start/complete |
-| TASK | Cyan | Task created |
-| ASSIGN | Yellow | Task assigned to agent |
-| DONE | Green | Task completed |
-| MERGE | Green | Worktree merged |
-| CONFLICT | Red | Merge conflict |
-| DISPATCH | Cyan | Agent launched |
-| TERM | Red | Agent terminated |
+When a message does not address a specific agent, use your judgement:
+- Simple, single task (e.g. "fix the login bug") -> `dispatch` an agent with the prompt
+- Complex task needing multiple agents (e.g. "perform a performance audit") -> `plan` to decompose it into subtasks, or dispatch multiple agents yourself
+- Quick follow-up to ongoing work -> `message_agent` to an existing idle agent
+- Status question ("what agents are running?") -> `list_agents`
 
-## Headless Planner
+### Task completion
 
-The `plan` tool spawns a separate headless `claude -p` process to decompose complex prompts into subtasks. This is independent of the orchestrator -- it's a one-shot process that writes a task plan to `.dispatch/tasks.md` and exits. The orchestrator can call `plan` when it decides a prompt is too complex for a single agent.
+When you receive `[EVENT] TASK_COMPLETE`:
+1. Use `merge` to merge the completed work
+2. Check if there are queued tasks to dispatch next
 
-## Header Bar
+### Termination
 
-The header bar shows the orchestrator status:
-- `ORCH: IDLE` -- waiting for input
-- `ORCH: THINKING` -- processing a response
-- `ORCH: DEAD` -- process exited
-- `ORCH: OFF` -- orchestrator not spawned
+When the user says "terminate Alpha" or "kill Bravo", use `terminate`.
 
-## Error Recovery
+## Agent Environment
 
-If the orchestrator process dies, the console continues to function as a manual-mode TUI. Agents can still be dispatched and terminated via keyboard. The orchestrator status changes to `DEAD` / `OFF` in the header bar. A future enhancement could auto-respawn.
+Each dispatched agent runs in an isolated git worktree on its own branch. Agents work in parallel without conflicts. When an agent finishes, the console detects the idle prompt and sends you a TASK_COMPLETE event. You then merge the branch back to main.
 
-## Configuration
+Agents are assigned NATO callsigns in dispatch order: Alpha, Bravo, Charlie, Delta, etc. Up to 26 agents can run concurrently across 7 pages of 4 slots each.
 
-The orchestrator uses the configured `claude-code` tool command from `config.toml`:
+## Response Style
 
-```toml
-[tools]
-claude-code = "claude"
-```
-
-The `claude` command must support `--input-format stream-json --output-format stream-json` flags.
+Keep your reasoning brief. The user sees your text in the orchestrator log view. Lead with the action, not the explanation. If you're dispatching, just say "Dispatching Alpha." and include the tool call.
