@@ -10,7 +10,6 @@ Dispatch has two components:
 
 - **Dispatch Radio** (Android) -- a minimal push-to-talk app controlled via hardware volume buttons. Hold Volume Down to speak; the app transcribes speech and sends raw transcripts to the console over a local WebSocket connection.
 - **Dispatch Console** (PC) -- a TUI command center with up to 26 embedded terminal panes, each running a live AI agent session. A persistent LLM orchestrator receives voice transcripts and decides what to do -- dispatch agents, plan tasks, merge completed work, etc. Supports direct keyboard input into any agent pane via a vim-style modal interface.
-- **Dispatch Watch** (Wear OS) -- a minimal wrist companion for status glances and quick actions. Shows connection state, current target, and active agents. Crown rotation cycles targets; tap to dispatch a new agent. Same WebSocket protocol as the radio.
 
 ```
 ┌──────────────┐    WebSocket TLS (LAN, PSK)   ┌──────────────────┐
