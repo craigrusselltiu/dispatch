@@ -254,37 +254,11 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // dispatch-h62: send raw transcripts to the orchestrator LLM instead of
+    // parsing commands locally. The orchestrator decides what to do.
     private fun handleTranscript(transcript: String) {
-        val command = CommandParser.parse(transcript, agents)
-        val msg = when (command) {
-            is Command.Dispatch -> {
-                haptics.dispatchConfirm()
-                showLastDispatch("DISPATCH ${command.tool.uppercase()}", null)
-                """{"type":"dispatch","tool":"${command.tool}"}"""
-            }
-            is Command.Terminate -> {
-                val agent = agents.firstOrNull { it.slot == command.slot }
-                showLastDispatch("TERMINATE ${agent?.callsign?.uppercase() ?: command.slot}", null)
-                """{"type":"terminate","slot":${command.slot}}"""
-            }
-            is Command.SetTarget -> {
-                val agent = agents.firstOrNull { it.slot == command.slot }
-                currentSlot = command.slot
-                refreshTarget()
-                showLastDispatch("TARGET -> ${agent?.callsign?.uppercase() ?: command.slot}", null)
-                """{"type":"set_target","slot":${command.slot}}"""
-            }
-            is Command.SendTo -> {
-                val agent = agents.firstOrNull { it.slot == command.slot }
-                showLastDispatch("-> ${agent?.callsign?.uppercase() ?: command.slot}: \"${command.text}\"", null)
-                """{"type":"send","text":${gson.toJson(command.text)},"slot":${command.slot}}"""
-            }
-            is Command.SendToTarget -> {
-                val target = agents.firstOrNull { it.slot == currentSlot }
-                showLastDispatch("-> ${target?.callsign?.uppercase() ?: "TARGET"}: \"${command.text}\"", null)
-                """{"type":"send","text":${gson.toJson(command.text)}}"""
-            }
-        }
+        showLastDispatch("\"$transcript\"", null)
+        val msg = """{"type":"send","text":${gson.toJson(transcript)},"auto":true}"""
         wsClient.send(msg)
     }
 

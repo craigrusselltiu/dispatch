@@ -29,16 +29,8 @@ pub const MAX_SLOTS: usize = 26;
 /// Events sent from the WebSocket handler to the main TUI thread so that
 /// PTY operations (which must happen on the main thread) can be executed.
 pub enum WsEvent {
-    /// Auto-dispatch: the radio sent an unaddressed prompt. The main thread
-    /// should ensure a PTY exists at `slot`, create a beads task, and
-    /// forward the prompt to the agent.
-    AutoDispatch { slot: u32, prompt: String },
-    /// All agent slots were full. The main thread should create an open
-    /// beads task so it appears in the queued-task list.
-    QueueTask { prompt: String },
-    /// Complex unaddressed prompt: main thread should spawn a headless
-    /// planner to decompose it before dispatching (dispatch-fnx).
-    PlanRequest { prompt: String },
+    /// Voice transcript from the radio — forwarded to the orchestrator (dispatch-h62).
+    VoiceTranscript { text: String },
 }
 
 // --- Agent state ---------------------------------------------------------
@@ -112,18 +104,6 @@ impl ConsoleState {
 
     fn all_slot_infos(&self) -> Vec<SlotInfo> {
         (1..=MAX_SLOTS as u32).map(|s| self.slot_info(s)).collect()
-    }
-
-    fn first_idle_slot(&self) -> Option<u32> {
-        self.slots.iter().enumerate().find_map(|(i, s)| {
-            s.as_ref().and_then(|a| {
-                if a.status == AgentStatus::Idle {
-                    Some(i as u32 + 1)
-                } else {
-                    None
-                }
-            })
-        })
     }
 
     fn first_empty_slot(&self) -> Option<u32> {
@@ -288,51 +268,27 @@ fn handle_message(raw: RawInbound, state: &SharedState) -> Option<OutboundMsg> {
             let auto = raw.auto.unwrap_or(false);
             let mut st = state.lock().unwrap();
 
-            // Determine which slot to send to.
-            let (slot, auto_dispatched) = if let Some(s) = raw.slot {
-                // Explicit slot.
-                (Some(s), false)
-            } else if auto {
-                // Complex prompt detection: if > 15 words, route to planner
-                // instead of direct dispatch (dispatch-fnx).
-                let word_count = text.split_whitespace().count();
-                if word_count > 15 {
-                    if let Some(tx) = &st.event_tx {
-                        let _ = tx.send(WsEvent::PlanRequest { prompt: text });
-                    }
-                    return Some(OutboundMsg::Ack {
-                        slot: 0,
-                        callsign: "Planner".to_string(),
-                        task: "planning".to_string(),
-                        auto_dispatched: Some(true),
-                        seq,
-                    });
+            // dispatch-h62: when auto is true, forward the raw transcript to the
+            // orchestrator LLM which decides what to do via tool calls. The old
+            // deterministic routing (word count, idle slots, etc.) is replaced.
+            if auto {
+                if let Some(tx) = &st.event_tx {
+                    let _ = tx.send(WsEvent::VoiceTranscript { text });
                 }
-                // Auto-dispatch: idle agent → empty slot → error.
-                if let Some(idle) = st.first_idle_slot() {
-                    (Some(idle), false)
-                } else if let Some(empty) = st.first_empty_slot() {
-                    let callsign = default_callsign(empty).to_string();
-                    st.slots[(empty as usize) - 1] = Some(AgentSlot {
-                        callsign,
-                        tool: "claude-code".to_string(),
-                        status: AgentStatus::Idle,
-                        task: None,
-                        repo: None,
-                    });
-                    (Some(empty), true)
-                } else {
-                    let task_id = st.next_task_id();
-                    let msg = format!("all agents busy, task queued as {task_id}");
-                    st.queued_tasks.push(task_id);
-                    if let Some(tx) = &st.event_tx {
-                        let _ = tx.send(WsEvent::QueueTask { prompt: text });
-                    }
-                    return Some(OutboundMsg::Error { message: msg, seq });
-                }
+                return Some(OutboundMsg::Ack {
+                    slot: 0,
+                    callsign: "Orchestrator".to_string(),
+                    task: "routing".to_string(),
+                    auto_dispatched: Some(true),
+                    seq,
+                });
+            }
+
+            // Explicit slot or current target — direct send (non-auto path unchanged).
+            let slot = if let Some(s) = raw.slot {
+                Some(s)
             } else {
-                // Use current target.
-                (st.target, false)
+                st.target
             };
 
             let slot = match slot {
@@ -368,19 +324,11 @@ fn handle_message(raw: RawInbound, state: &SharedState) -> Option<OutboundMsg> {
             agent.task = Some(task_id.clone());
             let callsign = agent.callsign.clone();
 
-            // For auto-dispatched prompts, notify the main thread to spawn
-            // the PTY (if needed) and forward the prompt.
-            if auto {
-                if let Some(tx) = &st.event_tx {
-                    let _ = tx.send(WsEvent::AutoDispatch { slot, prompt: text });
-                }
-            }
-
             Some(OutboundMsg::Ack {
                 slot,
                 callsign,
                 task: task_id,
-                auto_dispatched: if auto { Some(auto_dispatched) } else { None },
+                auto_dispatched: None,
                 seq,
             })
         }
@@ -602,8 +550,11 @@ mod tests {
     }
 
     #[test]
-    fn auto_dispatch_new_agent() {
+    fn auto_sends_voice_transcript() {
+        // dispatch-h62: auto:true now sends VoiceTranscript to orchestrator.
         let state = make_state();
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.lock().unwrap().event_tx = Some(tx);
 
         let mut s = raw("send");
         s.text = Some("write tests".to_string());
@@ -611,7 +562,13 @@ mod tests {
         let resp = handle_message(s, &state).unwrap();
         let json = serde_json::to_string(&resp).unwrap();
         assert!(json.contains("\"type\":\"ack\""));
-        assert!(json.contains("\"auto_dispatched\":true"));
+        assert!(json.contains("\"callsign\":\"Orchestrator\""));
+
+        match rx.try_recv().unwrap() {
+            WsEvent::VoiceTranscript { text } => {
+                assert_eq!(text, "write tests");
+            }
+        }
     }
 
     #[test]
@@ -652,106 +609,40 @@ mod tests {
     }
 
     #[test]
-    fn auto_dispatch_sends_ws_event() {
+    fn auto_always_sends_voice_transcript() {
+        // dispatch-h62: all auto:true prompts (short or long) go to orchestrator.
         let state = make_state();
         let (tx, rx) = std::sync::mpsc::channel();
         state.lock().unwrap().event_tx = Some(tx);
 
-        let mut s = raw("send");
-        s.text = Some("implement feature X".to_string());
-        s.auto = Some(true);
-        let resp = handle_message(s, &state).unwrap();
-        let json = serde_json::to_string(&resp).unwrap();
-        assert!(json.contains("\"type\":\"ack\""));
-
-        // Main thread should receive an AutoDispatch event with the prompt.
-        match rx.try_recv().unwrap() {
-            WsEvent::AutoDispatch { slot: _, prompt } => {
-                assert_eq!(prompt, "implement feature X");
-            }
-            _ => panic!("expected AutoDispatch event"),
-        }
-    }
-
-    #[test]
-    fn queue_task_sends_ws_event() {
-        let state = make_state();
-        // Fill all slots so auto-dispatch falls through to queue.
-        for i in 0..MAX_SLOTS {
-            state.lock().unwrap().slots[i] = Some(AgentSlot {
-                callsign: format!("Agent{i}"),
-                tool: "claude-code".to_string(),
-                status: AgentStatus::Busy,
-                task: Some(format!("t{i}")),
-                repo: None,
-            });
-        }
-        let (tx, rx) = std::sync::mpsc::channel();
-        state.lock().unwrap().event_tx = Some(tx);
-
-        let mut s = raw("send");
-        s.text = Some("a big new task".to_string());
-        s.auto = Some(true);
-        let resp = handle_message(s, &state).unwrap();
-        let json = serde_json::to_string(&resp).unwrap();
-        assert!(json.contains("\"type\":\"error\""));
-        assert!(json.contains("all agents busy"));
-
-        match rx.try_recv().unwrap() {
-            WsEvent::QueueTask { prompt } => {
-                assert_eq!(prompt, "a big new task");
-            }
-            _ => panic!("expected QueueTask event"),
-        }
-    }
-
-    #[test]
-    fn complex_prompt_triggers_plan_request() {
-        let state = make_state();
-        let (tx, rx) = std::sync::mpsc::channel();
-        state.lock().unwrap().event_tx = Some(tx);
-
-        // A prompt with >15 words should trigger PlanRequest instead of AutoDispatch.
-        let mut s = raw("send");
-        s.text = Some(
-            "refactor the entire authentication system to use OAuth2 with JWT tokens \
-             and add refresh token rotation plus session management with Redis backend"
-                .to_string(),
-        );
-        s.auto = Some(true);
-        let resp = handle_message(s, &state).unwrap();
-        let json = serde_json::to_string(&resp).unwrap();
-        assert!(json.contains("\"type\":\"ack\""));
-        assert!(json.contains("\"callsign\":\"Planner\""));
-
-        match rx.try_recv().unwrap() {
-            WsEvent::PlanRequest { prompt } => {
-                assert!(prompt.contains("refactor"));
-            }
-            _ => panic!("expected PlanRequest event"),
-        }
-    }
-
-    #[test]
-    fn short_prompt_uses_auto_dispatch() {
-        let state = make_state();
-        let (tx, rx) = std::sync::mpsc::channel();
-        state.lock().unwrap().event_tx = Some(tx);
-
-        // A short prompt (<=15 words) should use AutoDispatch.
+        // Short prompt
         let mut s = raw("send");
         s.text = Some("fix the login bug".to_string());
         s.auto = Some(true);
         let resp = handle_message(s, &state).unwrap();
         let json = serde_json::to_string(&resp).unwrap();
-        assert!(json.contains("\"type\":\"ack\""));
-        assert!(json.contains("\"auto_dispatched\":true"));
+        assert!(json.contains("\"callsign\":\"Orchestrator\""));
 
         match rx.try_recv().unwrap() {
-            WsEvent::AutoDispatch { slot: _, prompt } => {
-                assert_eq!(prompt, "fix the login bug");
+            WsEvent::VoiceTranscript { text } => {
+                assert_eq!(text, "fix the login bug");
             }
-            _ => panic!("expected AutoDispatch event"),
+        }
+
+        // Long prompt — same behavior (no word-count routing)
+        let mut s2 = raw("send");
+        s2.text = Some(
+            "refactor the entire authentication system to use OAuth2 with JWT tokens \
+             and add refresh token rotation plus session management with Redis backend"
+                .to_string(),
+        );
+        s2.auto = Some(true);
+        handle_message(s2, &state);
+
+        match rx.try_recv().unwrap() {
+            WsEvent::VoiceTranscript { text } => {
+                assert!(text.contains("refactor"));
+            }
         }
     }
 }

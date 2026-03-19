@@ -8,8 +8,8 @@ Turn your Android phone into a push-to-talk radio that dispatches tasks to AI co
 
 The system has two components:
 
-1. **Dispatch Radio** (Android) -- a minimal push-to-talk app controlled via hardware volume buttons. Transcribes speech, parses voice commands, and sends structured messages over a local WebSocket connection.
-2. **Dispatch Console** (PC) -- a TUI command center with four embedded terminal panes, each running a live AI agent session. Receives voice commands from the radio, plans and decomposes tasks, dispatches agents into git worktrees, tracks progress in `.dispatch/tasks.md`, and merges completed work. Supports direct keyboard input into any agent pane via a vim-style modal interface.
+1. **Dispatch Radio** (Android) -- a minimal push-to-talk app controlled via hardware volume buttons. Transcribes speech and sends raw transcripts over a local WebSocket connection to the console's orchestrator.
+2. **Dispatch Console** (PC) -- a TUI command center with four embedded terminal panes, each running a live AI agent session. A persistent LLM orchestrator receives voice transcripts and decides what to do -- dispatch agents, plan tasks, merge completed work, etc. Supports direct keyboard input into any agent pane via a vim-style modal interface.
 
 Both components live in a single monorepo.
 
@@ -21,8 +21,8 @@ Both components live in a single monorepo.
 │              │                               │                  │
 │  Volume keys │                               │  4x embedded     │
 │  Speech-to-  │                               │  terminals (PTY) │
-│  text, voice │                               │  Git worktrees   │
-│  commands    │                               │  .dispatch/      │
+│  text        │                               │  Git worktrees   │
+│              │                               │  .dispatch/      │
 └──────────────┘                               └──────────────────┘
 ```
 
@@ -74,7 +74,7 @@ Every agent is assigned a callsign from the NATO phonetic alphabet by default, i
 
 Maximum 26 concurrent agents. Callsigns are bound to slots, not agent instances. If Alpha is terminated and a new agent is dispatched into slot 1, it becomes Alpha again.
 
-Agents can be renamed from the console via the `R` key. Custom names replace the NATO default until the agent is terminated, at which point the slot reverts. Custom names are validated against reserved command vocabulary to avoid parser conflicts.
+Agents can be renamed from the console via the `R` key. Custom names replace the NATO default until the agent is terminated, at which point the slot reverts.
 
 Callsigns are the primary identifier for voice commands. All agents are addressable by voice regardless of which page is currently displayed in the console.
 
@@ -82,78 +82,29 @@ Callsigns are the primary identifier for voice commands. All agents are addressa
 
 ## Voice Commands
 
-The radio parses the transcript locally before sending it to the console. The parser checks for command patterns and agent addressing. If no command or agent is detected, the entire transcript is sent as a prompt to the currently targeted agent.
+The radio sends raw voice transcripts to the console without any local parsing. The console's persistent LLM orchestrator (see `docs/ORCHESTRATOR.md`) receives these transcripts and decides what to do -- dispatch agents, send messages, terminate agents, merge tasks, etc.
 
-### Natural Agent Addressing
+### How It Works
 
-Agents can be addressed directly by callsign at the start of an utterance, as if speaking to a person:
+1. User speaks into the radio (push-to-talk or continuous listening).
+2. Radio transcribes speech via Android `SpeechRecognizer`.
+3. Raw transcript is sent to the console as `{"type":"send","text":"...","auto":true}`.
+4. Console forwards the transcript to the orchestrator as `[MIC] <transcript>`.
+5. Orchestrator decides what action(s) to take and issues tool calls.
+6. Console executes the tool calls and returns results to the orchestrator.
 
-| Utterance                                      | Parsed as                                    |
+### Examples
+
+| Utterance                                      | Orchestrator action                          |
 |------------------------------------------------|----------------------------------------------|
-| "Alpha, can you refactor the auth module"      | `send` to Alpha, text="can you refactor..."  |
-| "Charlie, investigate the memory leak"         | `send` to Charlie, text="investigate..."     |
-| "Bravo, write tests for the payment module"    | `send` to Bravo, text="write tests..."       |
-| "Alpha refactor the auth module"               | `send` to Alpha, text="refactor..."          |
+| "Alpha, can you refactor the auth module"      | `message_agent` to Alpha                     |
+| "dispatch an agent to fix the login bug"       | `dispatch` with prompt                       |
+| "terminate bravo"                              | `terminate` agent=Bravo                      |
+| "what agents are running"                      | `list_agents`                                |
+| "refactor the auth system"                     | `plan` or `dispatch` depending on complexity |
+| "merge alpha's work"                           | `merge` task                                 |
 
-The parser detects a callsign at the start of the utterance, optionally followed by a comma, strips it, and routes the remaining text to that agent. The prompt is sent directly -- the target does not change. This is the primary method for addressing a specific agent.
-
-If no callsign is detected at the start, the prompt goes to the currently targeted agent.
-
-### Command Patterns
-
-**Dispatch a new agent:**
-
-| Utterance                                       | Parsed as                              |
-|-------------------------------------------------|----------------------------------------|
-| "dispatch claude code"                          | `dispatch` tool=claude-code            |
-| "new copilot"                                   | `dispatch` tool=copilot                |
-| "spin up claude code"                           | `dispatch` tool=claude-code            |
-
-The console assigns the agent to the first empty slot.
-
-**Terminate an agent:**
-
-| Utterance                                       | Parsed as                              |
-|-------------------------------------------------|----------------------------------------|
-| "terminate alpha"                               | `terminate` agent=Alpha                |
-| "kill bravo"                                    | `terminate` agent=Bravo                |
-| "shut down charlie"                             | `terminate` agent=Charlie              |
-
-**Switch target (changes default recipient for unaddressed prompts):**
-
-| Utterance                                       | Parsed as                              |
-|-------------------------------------------------|----------------------------------------|
-| "switch to bravo"                               | `set_target` agent=Bravo               |
-| "target charlie"                                | `set_target` agent=Charlie             |
-
-**Unaddressed prompt (auto-dispatch):**
-
-If the utterance doesn't start with a callsign and doesn't match a command, it goes to the current target. If there is no current target (no agents running), the console auto-dispatches a new agent and sends the prompt to it. See the Task Management section for the full auto-dispatch flow.
-
-### Parser Design
-
-Priority-ordered keyword matcher. Not an LLM. Runs synchronously on the final transcript.
-
-```
-1. Normalize: lowercase, trim whitespace
-2. Check for command prefixes:
-   a. /^(dispatch|new|spin up)\s+(claude code|copilot)/     -> dispatch
-   b. /^(terminate|kill|shut down)\s+{agent_name}/           -> terminate
-   c. /^(switch to|target)\s+{agent_name}/                   -> set_target
-3. Check for agent addressing:
-   d. /^{agent_name}[,]?\s+(.+)/                             -> send to specific agent
-4. Default:
-   e. No match                                                -> send to current target (or auto-dispatch)
-```
-
-`{agent_name}` matches all active callsigns (NATO and custom), case-insensitive.
-
-Fuzzy alias table for tool names:
-
-| Canonical      | Aliases                                    |
-|----------------|--------------------------------------------|
-| `claude-code`  | claude code, cloud code, claud code        |
-| `copilot`      | copilot, co-pilot, co pilot, github copilot|
+The orchestrator understands natural language -- there are no fixed command patterns. It uses the full context of the conversation (agent states, prior tool results, etc.) to decide the best action.
 
 ---
 
@@ -880,9 +831,7 @@ Primary controls are hardware volume buttons with haptic feedback.
 |-----------|-----------------------------------------------------------|
 | Key down  | Start `SpeechRecognizer`, show listening indicator, short vibration, send `radio_status: listening` |
 | Held      | Partial transcription results displayed on screen         |
-| Key up    | Stop recognizer, parse transcript, send appropriate message, confirm vibration, send `radio_status: idle` |
-
-The command parser runs between recognition and send. If a voice command or agent address is detected, the radio shows what it parsed (e.g. "-> ALPHA: refactor the auth module" or "DISPATCH: claude-code") before sending.
+| Key up    | Stop recognizer, send raw transcript to console, confirm vibration, send `radio_status: idle` |
 
 If the transcript is empty, double-pulse vibration, no message sent.
 
@@ -985,7 +934,7 @@ Programming terms ("JWT", "OAuth", "useState", etc.) often transcribe incorrectl
 
 **1. `EXTRA_BIASING_STRINGS`** -- passed in the `RecognizerIntent` to hint the recognizer toward known terms. Engine support varies; Google's recognizer honors it, third-party engines may not. Include the canonical forms of common terms (e.g. "JWT", "OAuth", "useState", "TypeScript").
 
-**2. Post-processing correction table** -- applied to every transcript after recognition, before parsing. Engine-independent and fully testable. Maps phonetic variants to canonical forms:
+**2. Post-processing correction table** -- applied to every transcript after recognition, before sending to the console. Engine-independent and fully testable. Maps phonetic variants to canonical forms:
 
 | Raw transcript                        | Corrected      |
 |---------------------------------------|----------------|
@@ -1000,27 +949,9 @@ Programming terms ("JWT", "OAuth", "useState", etc.) often transcribe incorrectl
 | node.js / nodejs / node js            | Node.js        |
 | postgres / postgress / post gres      | PostgreSQL     |
 
-The correction pass runs after normalization (lowercase, trimmed) and before command parsing. It uses whole-word replacement to avoid false positives.
+The correction pass runs after normalization (lowercase, trimmed) and before sending to the console. It uses whole-word replacement to avoid false positives.
 
 Both mechanisms are additive: biasing reduces misrecognitions at the source; the correction table catches what biasing misses. Maintain both as new terms are encountered in use.
-
-### Voice Command Parser
-
-Kotlin sealed class:
-
-```kotlin
-sealed class Command {
-    data class Dispatch(val tool: String) : Command()
-    data class Terminate(val slot: Int) : Command()
-    data class SetTarget(val slot: Int) : Command()
-    data class SendTo(val slot: Int, val text: String) : Command()
-    data class SendToTarget(val text: String) : Command()
-}
-
-fun parse(transcript: String, agents: List<Agent>): Command
-```
-
-The parser needs the current agent list (synced from console) for callsign matching and the fuzzy alias table for tool names.
 
 ### Networking
 
@@ -1068,8 +999,7 @@ Console:
 Radio:
 - Single Activity with volume button overrides.
 - Push-to-talk via `SpeechRecognizer` on volume down.
-- Voice command parser with natural agent addressing ("Alpha, can you...").
-- Command parsing (dispatch, terminate, switch target).
+- Raw transcript forwarding to console orchestrator (no local command parsing).
 - Target cycling on volume up, quick dispatch on long press.
 - WebSocket connection with PSK and auto-reconnect.
 - Agent list sync, task ID display.
