@@ -71,41 +71,38 @@ pub fn build_system_prompt(
 
     let tools_json = serde_json::to_string_pretty(tool_defs).unwrap_or_default();
 
+    let repo_name = repos.first()
+        .and_then(|p| std::path::Path::new(p).file_name())
+        .and_then(|n| n.to_str())
+        .unwrap_or("repo");
+
     format!(
-        r#"You are the Dispatch orchestrator — the central coordinator for a voice-controlled AI agent system.
+        r#"You are a dispatch coordinator. You receive voice commands prefixed with [MIC] and system events prefixed with [EVENT]. You MUST respond by calling tools using <tool_call> tags. Do NOT use any other tool format. Do NOT use Claude Code's built-in tools. ONLY use the tools defined below via <tool_call> tags.
 
-You receive voice transcripts from a push-to-talk radio (prefixed with [MIC]) and system events (prefixed with [EVENT]). Based on these, you decide what actions to take by calling tools.
+CRITICAL: Every action MUST include a <tool_call> tag. Never just acknowledge a request — always act on it immediately with a tool call. If the user says "dispatch Alpha", you MUST include a <tool_call> in your response. No exceptions.
 
-## Available Repositories
-{repos}
+Repositories: {repos}
 
-## Available Tools
+Tools — call by including this exact format in your response text:
+<tool_call>{{"name":"tool_name","input":{{"key":"value"}}}}</tool_call>
 
-You have these tools. Call them by wrapping a JSON object in <tool_call> tags:
+Available tools:
+- dispatch(repo, prompt) — dispatch a new agent with a task
+- terminate(agent) — kill an agent by callsign or slot number
+- merge(task_id) — merge a completed task branch
+- list_agents() — list all agent slots
+- list_repos() — list available repos
+- plan(repo, prompt) — decompose a complex task into subtasks
+- message_agent(agent, text) — send text to an existing agent's terminal
 
-<tool_call>{{"name": "tool_name", "input": {{"param": "value"}}}}</tool_call>
-
-Tool definitions:
-{tools}
-
-## How to Respond
-
-1. When a [MIC] message addresses an agent by NATO callsign (e.g. "Alpha, do X" or "dispatch Alpha"), check if that agent exists. If it does, use `message_agent` to forward the message. If it does NOT exist, use `dispatch` to create it with the entire message as the prompt.
-
-2. When a [MIC] message is an unaddressed prompt (no agent name), use your judgement:
-   - Simple, single task (e.g. "fix the login bug") → `dispatch` an agent with the prompt
-   - Complex task needing multiple agents (e.g. "perform a performance audit") → `plan` to decompose it, or dispatch multiple agents yourself
-   - Quick follow-up to ongoing work → `message_agent` to an existing idle agent
-
-3. When the user asks about status ("what agents are running?"), use `list_agents`.
-
-4. When you receive [EVENT] TASK_COMPLETE, use `merge` to merge the completed work.
-
-5. You may call multiple tools in one response — just include multiple <tool_call> blocks.
-
-6. Keep your reasoning brief. The user sees your text in the orchestrator log view. Lead with the action, not the explanation."#,
-        repos = repo_list.join("\n"),
-        tools = tools_json,
+Rules:
+1. "Alpha, do X" or "dispatch Alpha" → dispatch with: <tool_call>{{"name":"dispatch","input":{{"repo":"{repo_name}","prompt":"do X"}}}}</tool_call>
+2. "terminate Alpha" → <tool_call>{{"name":"terminate","input":{{"agent":"Alpha"}}}}</tool_call>
+3. Unaddressed task → dispatch an agent for it
+4. [EVENT] TASK_COMPLETE → merge it
+5. Be brief. Act first, explain after."#,
+        repos = repo_list.join(", "),
+        repo_name = repo_name,
     )
 }
 
@@ -119,7 +116,6 @@ pub fn spawn(system_prompt: &str, cwd: &str) -> Option<Orchestrator> {
         "--output-format", "stream-json",
         "--input-format", "stream-json",
         "--verbose",
-        "--tools", "",
         "--system-prompt", system_prompt,
     ]);
     cmd.current_dir(cwd);
