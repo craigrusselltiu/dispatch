@@ -76,9 +76,13 @@ The PSK is displayed in the console header bar. You'll need it to connect the ra
 
 ### Radio (Android)
 
-1. Open the `radio/` directory in Android Studio.
-2. Build and install the app on your Android device.
-3. Connect the radio: press `Q` in the console to show a QR code, then scan it from the radio's settings screen. Or tap **DISCOVER CONSOLE** to auto-detect via mDNS, or enter the IP address and PSK manually.
+1. Open the `radio/` directory in Android Studio (File > Open, select the `radio/` folder).
+2. Connect your Android device via USB and enable USB debugging (Settings > Developer options > USB debugging).
+3. In Android Studio, select your device from the device dropdown in the toolbar and click **Run** (or `Shift+F10`). This builds and installs the app.
+4. Pair the radio to the console using one of these methods:
+   - **QR code (recommended)**: press `Q` in the console to show a QR code, then tap the gear icon in the radio app and scan it.
+   - **mDNS auto-discovery**: tap **DISCOVER CONSOLE** in the radio's settings screen.
+   - **Manual**: enter the console's IP address, port, and PSK in the radio's settings screen. The PSK is shown in the console header bar.
 
 ## Usage
 
