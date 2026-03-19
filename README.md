@@ -6,11 +6,10 @@ Turn your Android phone into a push-to-talk radio that dispatches tasks to AI co
 
 ## Overview
 
-Dispatch has three components:
+Dispatch has two components:
 
 - **Dispatch Radio** (Android) -- a minimal push-to-talk app controlled via hardware volume buttons. Hold Volume Down to speak; the app transcribes speech, parses voice commands, and sends structured messages to the console over a local WebSocket connection.
 - **Dispatch Console** (PC) -- a TUI command center with up to 26 embedded terminal panes, each running a live AI agent session. Receives voice commands from the radio, plans and decomposes tasks, dispatches agents into git worktrees, tracks progress in `.dispatch/tasks.md`, and merges completed work. Supports direct keyboard input into any agent pane via a vim-style modal interface.
-- **Dispatch Watch** (Wear OS) -- a minimal wrist companion for status glances and quick actions. Shows connection state, current target, and active agents. Crown rotation cycles targets; tap to dispatch a new agent. Same WebSocket protocol as the radio.
 
 ```
 ┌──────────────┐    WebSocket TLS (LAN, PSK)   ┌──────────────────┐
@@ -31,7 +30,6 @@ Dispatch has three components:
 dispatch/
   radio/               # Android phone app (Kotlin, Gradle)
     app/               # Phone radio module
-    wear/              # Wear OS companion module
   console/             # PC TUI (Rust, Cargo)
   docs/
     SPEC.md            # Full system specification
@@ -82,12 +80,6 @@ The PSK is displayed in the console header bar. You'll need it to connect the ra
 2. Build and install the app on your Android device.
 3. Connect the radio: press `Q` in the console to show a QR code, then scan it from the radio's settings screen. Or tap **DISCOVER CONSOLE** to auto-detect via mDNS, or enter the IP address and PSK manually.
 
-### Watch (Wear OS)
-
-1. Open the `radio/` directory in Android Studio -- the `wear` module is included.
-2. Build and install on a Wear OS 3+ device (API 30+).
-3. Long-press the main screen to open settings and enter the console's IP address, port, and PSK.
-
 ## Usage
 
 `cd` into any git repo and run `dispatch`. The console starts listening for voice commands. A `.dispatch/` directory is created in the repo when the first agent is dispatched. You can also launch `dispatch` from a parent directory that contains multiple git repos -- it will detect the repos and let you choose which to target (multi-repo mode).
@@ -131,14 +123,6 @@ The console displays four agent panes at a time in a 2x2 grid with a scrolling t
 **Continuous listening mode** -- enable in settings to stay in listen mode without holding Volume Down. Uses voice-activity detection to automatically detect speech start and end. Volume Down becomes a toggle instead of push-to-talk.
 
 **Background volume keys** -- enable the Dispatch Radio accessibility service in Android Settings > Accessibility to use volume buttons for PTT and target cycling even when the screen is off or the app is in the background. A shortcut button in the radio's settings screen opens the Android accessibility settings.
-
-### Watch
-
-| Control              | Action                                              |
-|----------------------|-----------------------------------------------------|
-| Crown rotation       | Cycle through active agents                         |
-| Tap "TAP TO DISPATCH"| Pick and launch a new agent type                    |
-| Long press           | Open settings (host, port, PSK)                     |
 
 ### Voice Commands
 
