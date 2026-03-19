@@ -11,8 +11,8 @@ High-level architecture of the Dispatch system.
 │  (Android)   │                               │  ┌─────────────────┐    │
 │              │                               │  │  Orchestrator    │    │
 │  Voice input │                               │  │  (persistent LLM)│    │
-│  Command     │                               │  │  - Tool calls    │    │
-│  parser      │                               │  │  - Voice interp  │    │
+│  Speech-to-  │                               │  │  - Tool calls    │    │
+│  text        │                               │  │  - Voice interp  │    │
 │              │                               │  │  - Dispatch/merge│    │
 │              │                               │  └────────┬────────┘    │
 │              │                               │           │             │
@@ -161,7 +161,7 @@ Alpha works, completes, merge, done.
 
 ## Radio Architecture
 
-The Android radio is a single-activity app. It handles voice input, command parsing, and WebSocket communication.
+The Android radio is a single-activity app. It handles voice input and WebSocket communication.
 
 ```
 Volume Down (hold)
@@ -178,16 +178,10 @@ Volume Down (release)
 Post-processing correction table
   │
   ▼
-Command parser (keyword matcher, not LLM)
-  │
-  ├─▶ Dispatch command   -> { "type": "dispatch", ... }
-  ├─▶ Terminate command  -> { "type": "terminate", ... }
-  ├─▶ Set target command -> { "type": "set_target", ... }
-  ├─▶ Agent-addressed    -> { "type": "send", "slot": N, ... }
-  └─▶ Unaddressed prompt -> { "type": "send", ... }
+Raw transcript sent as { "type": "send", "text": "...", "auto": true }
   │
   ▼
-WebSocket send to console
+WebSocket send to console orchestrator
 ```
 
 ## Key Design Decisions
