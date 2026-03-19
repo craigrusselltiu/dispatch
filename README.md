@@ -34,7 +34,6 @@ dispatch/
   docs/
     SPEC.md            # Full system specification
     ARCHITECTURE.md    # High-level architecture overview
-    ORCHESTRATOR.md    # Persistent LLM orchestrator behavior
     ORCHESTRATOR.md    # Orchestrator behavior and tool reference
     AGENTS.md          # Template injected into agent prompts
   README.md
@@ -172,6 +171,7 @@ Simple one-off prompts skip the planning step and dispatch directly.
 - **mDNS discovery** -- the console advertises itself on the LAN via Zeroconf. The radio can find it automatically without manual IP entry.
 - **TLS encryption** -- WebSocket connections are wrapped in TLS (wss://) with a self-signed certificate. The radio pins the cert fingerprint via QR code pairing.
 - **PSK authentication** -- all WebSocket connections require a pre-shared key. Auto-generated on first run.
+- **Radio chat log** -- the radio displays a scrollable chat history showing orchestrator decisions, agent events, and voice transcripts in real-time. No need to look at the console to know what's happening.
 - **Cross-platform** -- console runs on Windows (ConPTY), macOS, and Linux.
 
 ## CLI Reference

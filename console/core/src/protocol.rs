@@ -95,6 +95,13 @@ pub enum OutboundMsg {
         #[serde(skip_serializing_if = "Option::is_none")]
         seq: Option<u64>,
     },
+    /// Unsolicited chat message pushed to all connected clients.
+    Chat {
+        /// Sender label (e.g. "Dispatcher", "Alpha", "System").
+        sender: String,
+        /// Chat message text.
+        text: String,
+    },
     /// Sent on protocol errors (unknown slot, no target, all busy, etc.).
     Error {
         message: String,

@@ -22,11 +22,14 @@ pub use dispatch_core::handler::{
 use dispatch_core::handler::handle_message;
 use dispatch_core::protocol::RawInbound;
 
+/// Broadcast sender for pushing unsolicited messages (chat) to all connected clients.
+pub type ChatBroadcast = tokio::sync::broadcast::Sender<String>;
+
 // --- Server entry point --------------------------------------------------
 
 /// Start the WebSocket server on `0.0.0.0:{port}` with TLS.
 /// Accepts connections only when the `?psk=<key>` query parameter matches.
-pub async fn run_server(state: SharedState, port: u16, psk: String, tls: TlsAcceptor) {
+pub async fn run_server(state: SharedState, port: u16, psk: String, tls: TlsAcceptor, chat_tx: ChatBroadcast) {
     let addr = SocketAddr::from(([0, 0, 0, 0], port));
     let listener = TcpListener::bind(addr)
         .await
@@ -40,6 +43,7 @@ pub async fn run_server(state: SharedState, port: u16, psk: String, tls: TlsAcce
         let state = Arc::clone(&state);
         let psk = psk.clone();
         let tls = tls.clone();
+        let chat_rx = chat_tx.subscribe();
         tokio::spawn(async move {
             let tls_stream = match tls.accept(stream).await {
                 Ok(s) => s,
@@ -48,7 +52,7 @@ pub async fn run_server(state: SharedState, port: u16, psk: String, tls: TlsAcce
                     return;
                 }
             };
-            if let Err(e) = handle_connection(tls_stream, peer_addr, state, psk).await {
+            if let Err(e) = handle_connection(tls_stream, peer_addr, state, psk, chat_rx).await {
                 eprintln!("ws: connection error from {peer_addr}: {e}");
             }
         });
@@ -62,6 +66,7 @@ async fn handle_connection<S: AsyncRead + AsyncWrite + Unpin>(
     peer_addr: SocketAddr,
     state: SharedState,
     psk: String,
+    mut chat_rx: tokio::sync::broadcast::Receiver<String>,
 ) -> Result<(), Box<dyn std::error::Error + Send + Sync>> {
     let mut auth_ok = false;
 
@@ -101,28 +106,48 @@ async fn handle_connection<S: AsyncRead + AsyncWrite + Unpin>(
 
     let (mut tx, mut rx) = ws_stream.split();
 
-    while let Some(msg) = rx.next().await {
-        let msg = match msg {
-            Ok(m) => m,
-            Err(_) => break,
-        };
+    loop {
+        tokio::select! {
+            ws_msg = rx.next() => {
+                let msg = match ws_msg {
+                    Some(Ok(m)) => m,
+                    _ => break,
+                };
 
-        let text = match msg {
-            Message::Text(t) => t,
-            Message::Close(_) => break,
-            _ => continue,
-        };
+                if let Message::Close(_) = msg {
+                    break;
+                }
+                let text = match msg {
+                    Message::Text(t) => t,
+                    _ => { continue; },
+                };
 
-        let raw: RawInbound = match serde_json::from_str(&text) {
-            Ok(v) => v,
-            Err(_) => continue, // silently ignore malformed JSON
-        };
+                let raw: RawInbound = match serde_json::from_str(&text) {
+                    Ok(v) => v,
+                    Err(_) => { continue; },
+                };
 
-        if let Some(response) = handle_message(raw, &state) {
-            let json = serde_json::to_string(&response)?;
-            tx.send(Message::Text(json)).await?;
+                if let Some(response) = handle_message(raw, &state) {
+                    let json = serde_json::to_string(&response)?;
+                    tx.send(Message::Text(json)).await?;
+                }
+            }
+            chat_msg = chat_rx.recv() => {
+                match chat_msg {
+                    Ok(json) => {
+                        if tx.send(Message::Text(json)).await.is_err() {
+                            break;
+                        }
+                    }
+                    Err(tokio::sync::broadcast::error::RecvError::Lagged(_)) => {
+                        // Slow client missed some messages — continue.
+                    }
+                    Err(_) => break,
+                }
+            }
         }
     }
 
+    #[allow(unreachable_code)]
     Ok(())
 }

@@ -161,7 +161,7 @@ Alpha works, completes, merge, done.
 
 ## Radio Architecture
 
-The Android radio is a single-activity app. It handles voice input, command parsing, and WebSocket communication.
+The Android radio is a single-activity app. It handles voice input and WebSocket communication. Raw voice transcripts are sent to the console's orchestrator for interpretation -- no local command parsing.
 
 ```
 Volume Down (hold)
@@ -178,17 +178,25 @@ Volume Down (release)
 Post-processing correction table
   │
   ▼
-Command parser (keyword matcher, not LLM)
-  │
-  ├─▶ Dispatch command   -> { "type": "dispatch", ... }
-  ├─▶ Terminate command  -> { "type": "terminate", ... }
-  ├─▶ Set target command -> { "type": "set_target", ... }
-  ├─▶ Agent-addressed    -> { "type": "send", "slot": N, ... }
-  └─▶ Unaddressed prompt -> { "type": "send", ... }
+WebSocket send to console (auto:true)
   │
   ▼
-WebSocket send to console
+Console pushes chat messages back
+  │
+  ▼
+Radio displays in scrollable chat log
 ```
+
+### Chat Log
+
+The radio displays a scrollable chat log showing orchestrator decisions, agent events, and voice transcripts. The console pushes `chat` messages over the WebSocket whenever significant events occur:
+
+- **Voice transcripts** -- the user's spoken commands, echoed back.
+- **Orchestrator reasoning** -- the dispatcher's decisions (e.g. "Dispatching Alpha.").
+- **Agent events** -- task completions, dispatches, terminations.
+- **Merge results** -- successful merges and conflicts.
+
+The WebSocket server uses a `tokio::sync::broadcast` channel to push chat messages to all connected clients. Each connection handler uses `tokio::select!` to simultaneously process inbound requests and forward broadcast messages.
 
 ## Key Design Decisions
 

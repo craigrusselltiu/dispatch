@@ -330,6 +330,8 @@ struct App {
     history_scroll: usize,        // selected index in the prompt history overlay
     // Persistent LLM orchestrator (dispatch-h62)
     orchestrator: Option<orchestrator::Orchestrator>,
+    // Broadcast channel for pushing chat messages to radio clients (dispatch-chat)
+    chat_tx: tokio::sync::broadcast::Sender<String>,
 }
 
 impl App {
@@ -345,6 +347,7 @@ impl App {
         workspace: Workspace,
         scrollback_lines: u32,
         tls_fingerprint: String,
+        chat_tx: tokio::sync::broadcast::Sender<String>,
     ) -> Self {
         App {
             slots: std::array::from_fn(|_| None),
@@ -383,6 +386,7 @@ impl App {
             input_line_buf: String::new(),
             history_scroll: 0,
             orchestrator: None,
+            chat_tx,
         }
     }
 
@@ -394,6 +398,17 @@ impl App {
         if self.orch_log.len() > 500 {
             self.orch_log.remove(0);
             self.orch_scroll = self.orch_scroll.saturating_sub(1);
+        }
+    }
+
+    /// Push a chat message to all connected radio clients (dispatch-chat).
+    fn push_chat(&self, sender: &str, text: &str) {
+        let msg = dispatch_core::protocol::OutboundMsg::Chat {
+            sender: sender.to_string(),
+            text: text.to_string(),
+        };
+        if let Ok(json) = serde_json::to_string(&msg) {
+            let _ = self.chat_tx.send(json);
         }
     }
 
@@ -636,6 +651,7 @@ impl App {
                 self.push_ticker(format!(
                     "DISPATCH: {} -> {} (slot {})", task_id, callsign, slot_idx + 1
                 ));
+                self.push_chat("Dispatcher", &format!("Dispatched agent {}.", callsign));
 
                 // Sync ws_state.
                 {
@@ -685,6 +701,7 @@ impl App {
                     agent: callsign.clone(), slot: idx + 1,
                 });
                 self.push_ticker(format!("TERMINATED: {} (slot {})", callsign, idx + 1));
+                self.push_chat("Dispatcher", &format!("Terminated agent {}.", callsign));
 
                 // Sync ws_state.
                 {
@@ -708,6 +725,7 @@ impl App {
                     update_task_in_file(&target_repo, task_id, 'x', None);
                     self.push_orch(OrchestratorEventKind::Merged { id: task_id.clone() });
                     self.push_ticker(format!("MERGED: task/{}", task_id));
+                    self.push_chat("Dispatcher", &format!("Merged task/{} into main.", task_id));
                     tools::ToolResult::Merged {
                         task_id: task_id.clone(),
                         success: true,
@@ -717,6 +735,7 @@ impl App {
                     self.conflict_tasks.push(task_id.clone());
                     self.push_orch(OrchestratorEventKind::MergeConflict { id: task_id.clone() });
                     self.push_ticker(format!("CONFLICT: task/{} — merge aborted", task_id));
+                    self.push_chat("Dispatcher", &format!("Merge conflict on task/{}.", task_id));
                     tools::ToolResult::Merged {
                         task_id: task_id.clone(),
                         success: false,
@@ -791,13 +810,16 @@ impl App {
                 };
 
                 let slot = self.slots[idx].as_mut().unwrap();
+                let agent_name = slot.display_name().to_string();
                 let msg = format!("{}\r", text);
                 let _ = slot.writer.write_all(msg.as_bytes());
                 let _ = slot.writer.flush();
                 slot.last_output_at = Instant::now();
 
+                self.push_chat("Dispatcher", &format!("Message to {}: {}", agent_name, text));
+
                 tools::ToolResult::MessageSent {
-                    agent: slot.display_name().to_string(),
+                    agent: agent_name,
                     slot: (idx + 1) as u32,
                 }
             }
@@ -1945,6 +1967,30 @@ fn truncate(s: &str, max: usize) -> String {
     }
 }
 
+/// Strip ```action ... ``` and <tool_call>...</tool_call> blocks from text,
+/// returning only the prose/reasoning portion for chat display (dispatch-chat).
+fn strip_action_blocks(text: &str) -> String {
+    let mut result = text.to_string();
+    // Remove ```action ... ``` blocks
+    while let Some(start) = result.find("```action") {
+        if let Some(end_fence) = result[start + 9..].find("```") {
+            let end = start + 9 + end_fence + 3;
+            result.replace_range(start..end, "");
+        } else {
+            break;
+        }
+    }
+    // Remove <tool_call>...</tool_call> blocks
+    while let Some(start) = result.find("<tool_call>") {
+        if let Some(end) = result.find("</tool_call>") {
+            result.replace_range(start..end + "</tool_call>".len(), "");
+        } else {
+            break;
+        }
+    }
+    result
+}
+
 fn render_footer(f: &mut Frame, area: Rect, app: &App) {
     let target_g = app.target_global();
     let target_name = app
@@ -2618,6 +2664,9 @@ fn main() -> io::Result<()> {
     let tls = config::load_or_create_tls();
     let tls_fingerprint = tls.fingerprint.clone();
 
+    // Broadcast channel for pushing chat messages to all connected radio clients (dispatch-chat).
+    let (chat_tx, _) = tokio::sync::broadcast::channel::<String>(256);
+
     // Start the WebSocket server with TLS (dispatch-bgz.7, dispatch-ct2.6).
     let ws_state: ws_server::SharedState = Arc::new(Mutex::new(ws_server::ConsoleState::new()));
     {
@@ -2625,10 +2674,11 @@ fn main() -> io::Result<()> {
         let psk = cfg.auth.psk.clone();
         let port = cfg.server.port;
         let acceptor = tls.acceptor;
+        let chat_tx_ws = chat_tx.clone();
         thread::spawn(move || {
             tokio::runtime::Runtime::new()
                 .expect("tokio runtime")
-                .block_on(ws_server::run_server(state, port, psk, acceptor));
+                .block_on(ws_server::run_server(state, port, psk, acceptor, chat_tx_ws));
         });
     }
 
@@ -2677,6 +2727,7 @@ fn main() -> io::Result<()> {
         workspace,
         cfg.terminal.scrollback_lines,
         tls_fingerprint,
+        chat_tx,
     );
 
     // dispatch-h62: orchestrator is spawned lazily on first voice transcript
@@ -2729,6 +2780,7 @@ fn main() -> io::Result<()> {
                     app.slots[i] = None;
                     if let Some(id) = task_id {
                         app.push_orch(OrchestratorEventKind::TaskComplete { id: id.clone(), agent: callsign.clone() });
+                        app.push_chat(&callsign, &format!("Task {} complete.", id));
                         // dispatch-h62: notify orchestrator of completion so it can decide next steps.
                         if let Some(orch) = &mut app.orchestrator {
                             orch.send_message(&format!("[EVENT] TASK_COMPLETE agent={} task={}", callsign, id));
@@ -2738,10 +2790,12 @@ fn main() -> io::Result<()> {
                             if merge_worktree(&id, &slot_repo) {
                                 app.push_orch(OrchestratorEventKind::Merged { id: id.clone() });
                                 app.push_ticker(format!("TASK COMPLETE: {} merged {} — slot {} now standby", callsign, id, i + 1));
+                                app.push_chat("Dispatcher", &format!("Merged task/{} into main.", id));
                             } else {
                                 app.push_orch(OrchestratorEventKind::MergeConflict { id: id.clone() });
                                 app.conflict_tasks.push(id.clone());
                                 app.push_ticker(format!("MERGE CONFLICT: {} in {} — resolve manually", id, callsign));
+                                app.push_chat("Dispatcher", &format!("Merge conflict on task/{}.", id));
                                 if let Some(orch) = &mut app.orchestrator {
                                     orch.send_message(&format!("[EVENT] MERGE_CONFLICT task={}", id));
                                 }
@@ -2816,6 +2870,7 @@ fn main() -> io::Result<()> {
             let agent_name = app.slots[i].as_ref().map(|s| s.display_name().to_string()).unwrap_or_default();
             let slot_repo = app.slots[i].as_ref().map(|s| s.repo_root.clone()).unwrap_or_else(|| app.default_repo_root().to_string());
             app.push_orch(OrchestratorEventKind::TaskComplete { id: task_id.clone(), agent: agent_name.clone() });
+            app.push_chat(&agent_name, &format!("Task {} complete.", task_id));
             // dispatch-h62: notify orchestrator of idle-detected completion.
             if let Some(orch) = &mut app.orchestrator {
                 orch.send_message(&format!("[EVENT] TASK_COMPLETE agent={} task={}", agent_name, task_id));
@@ -2889,13 +2944,15 @@ fn main() -> io::Result<()> {
                     app.push_ticker(format!(
                         "PLAN READY: {} tasks from '{}' — {} dispatched now",
                         total,
-                        if prompt.len() > 40 { format!("{}...", &prompt[..37]) } else { prompt },
+                        if prompt.len() > 40 { format!("{}...", &prompt[..37]) } else { prompt.clone() },
                         dispatched
                     ));
+                    app.push_chat("Dispatcher", &format!("Plan ready: {} tasks, {} dispatched.", total, dispatched));
                 } else {
                     // Planner failed: fall back to direct single-task dispatch.
                     app.push_orch(OrchestratorEventKind::PlanFailed);
                     app.push_ticker("PLANNER FAILED: falling back to direct dispatch".to_string());
+                    app.push_chat("Dispatcher", "Plan failed, falling back to direct dispatch.");
                     let target_repo = app.default_repo_root().to_string();
                     if let Some(id) = create_task_in_file(&target_repo, &prompt) {
                         // Try to dispatch directly to the first available slot.
@@ -2926,6 +2983,7 @@ fn main() -> io::Result<()> {
             let ws_server::WsEvent::VoiceTranscript { text } = event;
             app.radio_state = RadioState::Connected;
             app.push_orch(OrchestratorEventKind::VoiceTranscript { text: text.clone() });
+            app.push_chat("You", &text);
             // Lazy-spawn orchestrator on first voice input.
             if app.orchestrator.is_none() {
                 let repos: Vec<&str> = app.repo_list().iter().copied().collect();
@@ -2959,6 +3017,13 @@ fn main() -> io::Result<()> {
             match output {
                 orchestrator::OrchestratorOutput::Text(text) => {
                     app.push_orch(OrchestratorEventKind::OrchestratorText { text: text.clone() });
+
+                    // dispatch-chat: forward orchestrator reasoning to radio (strip action blocks).
+                    let chat_text = strip_action_blocks(&text);
+                    let chat_text = chat_text.trim();
+                    if !chat_text.is_empty() {
+                        app.push_chat("Dispatcher", chat_text);
+                    }
 
                     // Parse and execute any tool calls in the response.
                     let calls = orchestrator::parse_all_tool_calls(&text);

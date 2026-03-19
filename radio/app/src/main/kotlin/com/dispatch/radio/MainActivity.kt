@@ -8,6 +8,7 @@ import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
 import android.widget.LinearLayout
+import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
@@ -40,6 +41,9 @@ class MainActivity : AppCompatActivity() {
     private var currentSlot: Int = -1
     private var queuedTasks: Int = 0
 
+    // Chat log (dispatch-chat)
+    private var chatMessageCount: Int = 0
+
     // UI views
     private lateinit var tvConnDot: TextView
     private lateinit var tvConnStatus: TextView
@@ -49,8 +53,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var tvListeningLabel: TextView
     private lateinit var tvPartial: TextView
     private lateinit var audioLevelView: AudioLevelView
-    private lateinit var tvLastDispatch: TextView
-    private lateinit var tvLastTaskId: TextView
+    private lateinit var svChat: ScrollView
+    private lateinit var llChat: LinearLayout
     private lateinit var llAgents: LinearLayout
     private lateinit var tvQueued: TextView
 
@@ -58,6 +62,7 @@ class MainActivity : AppCompatActivity() {
 
     companion object {
         private const val SETTINGS_REQUEST = 1001
+        private const val MAX_CHAT_MESSAGES = 100
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -182,8 +187,8 @@ class MainActivity : AppCompatActivity() {
         tvListeningLabel = findViewById(R.id.tv_listening_label)
         tvPartial = findViewById(R.id.tv_partial)
         audioLevelView = findViewById(R.id.audio_level_view)
-        tvLastDispatch = findViewById(R.id.tv_last_dispatch)
-        tvLastTaskId = findViewById(R.id.tv_last_task_id)
+        svChat = findViewById(R.id.sv_chat)
+        llChat = findViewById(R.id.ll_chat)
         llAgents = findViewById(R.id.ll_agents)
         tvQueued = findViewById(R.id.tv_queued)
     }
@@ -282,7 +287,6 @@ class MainActivity : AppCompatActivity() {
     // dispatch-h62: send raw transcripts to the orchestrator LLM instead of
     // parsing commands locally. The orchestrator decides what to do.
     private fun handleTranscript(transcript: String) {
-        showLastDispatch("\"$transcript\"", null)
         val msg = """{"type":"send","text":${gson.toJson(transcript)},"auto":true}"""
         wsClient?.send(msg)
     }
@@ -314,13 +318,45 @@ class MainActivity : AppCompatActivity() {
                 refreshTarget()
             }
             "ack" -> {
-                val taskId = json.get("task")?.let { if (it.isJsonNull) null else it.asString }
-                tvLastTaskId.text = if (taskId != null) "task $taskId" else ""
+                // Acknowledged by orchestrator
             }
             "dispatched" -> {
                 haptics.dispatchConfirm()
             }
+            // dispatch-chat: handle chat messages pushed by the console
+            "chat" -> {
+                val sender = json.get("sender")?.asString ?: return
+                val chatText = json.get("text")?.asString ?: return
+                addChatMessage(sender, chatText)
+            }
         }
+    }
+
+    // dispatch-chat: add a message to the scrollable chat log
+    private fun addChatMessage(sender: String, text: String) {
+        // Trim old messages if over the cap
+        if (chatMessageCount >= MAX_CHAT_MESSAGES) {
+            llChat.removeViewAt(0)
+            chatMessageCount--
+        }
+
+        val color = when {
+            sender == "You" -> R.color.green
+            sender == "Dispatcher" -> R.color.magenta
+            sender == "System" -> R.color.dim_grey
+            else -> R.color.cyan  // Agent callsigns
+        }
+
+        val tv = TextView(this).apply {
+            this.text = "$sender: $text"
+            textSize = 11f
+            typeface = android.graphics.Typeface.MONOSPACE
+            setTextColor(getColor(color))
+            setPadding(0, 2, 0, 2)
+        }
+        llChat.addView(tv)
+        chatMessageCount++
+        svChat.post { svChat.fullScroll(View.FOCUS_DOWN) }
     }
 
     private fun setConnected(connected: Boolean) {
@@ -365,11 +401,6 @@ class MainActivity : AppCompatActivity() {
             }
             llAgents.addView(tv)
         }
-    }
-
-    private fun showLastDispatch(line: String, taskId: String?) {
-        tvLastDispatch.text = line
-        tvLastTaskId.text = if (taskId != null) "task $taskId" else ""
     }
 
     /** Maps NATO callsign to Greek letter initial for the agent row display. */
