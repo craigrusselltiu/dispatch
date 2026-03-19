@@ -38,6 +38,7 @@
 
 mod config;
 mod mdns;
+mod orchestrator;
 mod protocol;
 mod tools;
 mod ws_server;
@@ -166,6 +167,12 @@ enum OrchestratorEventKind {
     Queued { id: String },
     /// Ready tasks dispatched from the plan.
     PlanDispatched { count: usize },
+    /// Orchestrator reasoning text (dispatch-h62).
+    OrchestratorText { text: String },
+    /// Tool call issued by orchestrator (dispatch-h62).
+    ToolCallIssued { name: String },
+    /// Tool result sent back to orchestrator (dispatch-h62).
+    ToolResultSent { name: String, success: bool },
 }
 
 /// Workspace mode: single repo or multi-repo parent directory (dispatch-sa1).
@@ -319,6 +326,8 @@ struct App {
     prompt_history: Vec<PromptEntry>,
     input_line_buf: String,       // shadow buffer tracking keyboard input in input mode
     history_scroll: usize,        // selected index in the prompt history overlay
+    // Persistent LLM orchestrator (dispatch-h62)
+    orchestrator: Option<orchestrator::Orchestrator>,
 }
 
 impl App {
@@ -371,6 +380,7 @@ impl App {
             prompt_history: Vec::new(),
             input_line_buf: String::new(),
             history_scroll: 0,
+            orchestrator: None,
         }
     }
 
@@ -1564,12 +1574,22 @@ fn render_header(f: &mut Frame, area: Rect, app: &App) {
     } else {
         String::new()
     };
+    // dispatch-h62: orchestrator status indicator.
+    let orch_indicator = match &app.orchestrator {
+        Some(o) if o.is_alive() => match o.state {
+            orchestrator::OrchestratorState::Idle => "  ORCH: IDLE",
+            orchestrator::OrchestratorState::Responding => "  ORCH: THINKING",
+            orchestrator::OrchestratorState::Dead => "  ORCH: DEAD",
+        },
+        _ => "  ORCH: OFF",
+    };
     let right = format!(
-        "   PSK: {}   AGENTS: {}/{}{}  PAGE {}/{}  {}",
+        "   PSK: {}   AGENTS: {}/{}{}{}  PAGE {}/{}  {}",
         app.psk_display(),
         app.active_count(),
         app.slots.len(),
         workspace_indicator,
+        orch_indicator,
         app.current_page + 1,
         app.total_pages(),
         clock,
@@ -1895,6 +1915,22 @@ fn render_orchestrator(f: &mut Frame, area: Rect, app: &App) {
                 "PLAN",
                 Style::default().fg(Color::Cyan),
                 format!("{} ready tasks dispatched", count),
+            ),
+            // dispatch-h62: orchestrator LLM events
+            OrchestratorEventKind::OrchestratorText { text } => (
+                "LLM",
+                Style::default().fg(Color::Magenta),
+                truncate(text, 120).to_string(),
+            ),
+            OrchestratorEventKind::ToolCallIssued { name } => (
+                "TOOL",
+                Style::default().fg(Color::Yellow),
+                format!("-> {}", name),
+            ),
+            OrchestratorEventKind::ToolResultSent { name, success } => (
+                "RESULT",
+                if *success { Style::default().fg(Color::Green) } else { Style::default().fg(Color::Red) },
+                format!("<- {} {}", name, if *success { "ok" } else { "error" }),
             ),
         };
         lines.push(Line::from(vec![
@@ -2795,25 +2831,29 @@ fn main() -> io::Result<()> {
         tls_fingerprint,
     );
 
-    // Dispatch slot 0 (Alpha) with claude on startup (dispatch-bgz.6).
-    // dispatch-et1: spawn Alpha in repo root without creating .dispatch —
-    // the folder is deferred until the first real dispatch via radio/planner.
-    // dispatch-sa1: only auto-dispatch in single-repo mode.
-    if !app.is_multi_repo() {
-        let claude_cmd = app.tool_cmd("claude-code").to_string();
-        let short_repo_name = repo_name_from_path(&repo_root).to_string();
-        if let Some(slot) = dispatch_slot(
-            0, "claude-code", &claude_cmd, pane_rows, pane_cols,
-            Some(&repo_root), app.scrollback_lines, &short_repo_name, &repo_root,
-        ) {
-            let name = slot.display_name().to_string();
-            app.push_orch(OrchestratorEventKind::Dispatched { agent: name.clone(), slot: 1, tool: "claude-code".to_string() });
-            app.push_ticker(format!("DISPATCH: {} launched in slot 1 — claude-code ready", name));
-            app.slots[0] = Some(slot);
+    // dispatch-h62: spawn persistent LLM orchestrator on startup.
+    // The orchestrator replaces the deterministic command parser — voice
+    // transcripts are piped to it and it decides what to do via tool calls.
+    {
+        let repos: Vec<&str> = app.repo_list().iter().copied().collect();
+        let tool_defs = tools::tool_definitions();
+        let system_prompt = orchestrator::build_system_prompt(&repos, &tool_defs);
+        let orch_cwd = app.default_repo_root().to_string();
+        match orchestrator::spawn(&system_prompt, &orch_cwd) {
+            Some(orch) => {
+                app.orchestrator = Some(orch);
+                app.push_ticker("ORCHESTRATOR: LLM orchestrator online".to_string());
+            }
+            None => {
+                app.push_ticker("ORCHESTRATOR: failed to spawn — falling back to manual mode".to_string());
+            }
         }
-    } else {
+    }
+
+    // dispatch-sa1: show multi-repo indicator if applicable.
+    if app.is_multi_repo() {
         let repo_count = app.repo_list().len();
-        app.push_ticker(format!("MULTI-REPO: detected {} repos — press 'n' to dispatch into a repo", repo_count));
+        app.push_ticker(format!("MULTI-REPO: detected {} repos", repo_count));
     }
 
     // Channel for WsEvents from the WebSocket thread (dispatch-1lc.1).
@@ -2856,6 +2896,10 @@ fn main() -> io::Result<()> {
                     app.slots[i] = None;
                     if let Some(id) = task_id {
                         app.push_orch(OrchestratorEventKind::TaskComplete { id: id.clone(), agent: callsign.clone() });
+                        // dispatch-h62: notify orchestrator of completion so it can decide next steps.
+                        if let Some(orch) = &mut app.orchestrator {
+                            orch.send_message(&format!("[EVENT] TASK_COMPLETE agent={} task={}", callsign, id));
+                        }
                         // dispatch-xje: merge worktree before closing; flag on conflict.
                         if worktree_path.is_some() {
                             if merge_worktree(&id, &slot_repo) {
@@ -2865,6 +2909,9 @@ fn main() -> io::Result<()> {
                                 app.push_orch(OrchestratorEventKind::MergeConflict { id: id.clone() });
                                 app.conflict_tasks.push(id.clone());
                                 app.push_ticker(format!("MERGE CONFLICT: {} in {} — resolve manually", id, callsign));
+                                if let Some(orch) = &mut app.orchestrator {
+                                    orch.send_message(&format!("[EVENT] MERGE_CONFLICT task={}", id));
+                                }
                             }
                         } else {
                             app.push_ticker(format!("TASK COMPLETE: {} closed {} — slot {} now standby", callsign, id, i + 1));
@@ -2874,6 +2921,9 @@ fn main() -> io::Result<()> {
                         dispatch_plan_tasks(&mut app);
                     } else {
                         app.push_ticker(format!("AGENT EXITED: {} (slot {}) — standby", callsign, i + 1));
+                        if let Some(orch) = &mut app.orchestrator {
+                            orch.send_message(&format!("[EVENT] AGENT_EXITED agent={} slot={}", callsign, i + 1));
+                        }
                     }
                 }
             }
@@ -2932,7 +2982,11 @@ fn main() -> io::Result<()> {
         for (i, task_id) in completed {
             let agent_name = app.slots[i].as_ref().map(|s| s.display_name().to_string()).unwrap_or_default();
             let slot_repo = app.slots[i].as_ref().map(|s| s.repo_root.clone()).unwrap_or_else(|| app.default_repo_root().to_string());
-            app.push_orch(OrchestratorEventKind::TaskComplete { id: task_id.clone(), agent: agent_name });
+            app.push_orch(OrchestratorEventKind::TaskComplete { id: task_id.clone(), agent: agent_name.clone() });
+            // dispatch-h62: notify orchestrator of idle-detected completion.
+            if let Some(orch) = &mut app.orchestrator {
+                orch.send_message(&format!("[EVENT] TASK_COMPLETE agent={} task={}", agent_name, task_id));
+            }
             if let Some(slot) = app.slots[i].as_mut() {
                 slot.task_id = None;
                 slot.idle_since = None;
@@ -3036,96 +3090,64 @@ fn main() -> io::Result<()> {
         // Advance ticker animation each frame (dispatch-ami).
         app.tick_ticker();
 
-        // Process auto-dispatch events from the WebSocket thread (dispatch-1lc.1).
+        // Process events from the WebSocket thread (dispatch-1lc.1, dispatch-h62).
         while let Ok(event) = ws_event_rx.try_recv() {
-            match event {
-                ws_server::WsEvent::AutoDispatch { slot, prompt } => {
-                    app.push_orch(OrchestratorEventKind::VoiceTranscript { text: prompt.clone() });
-                    let g = (slot as usize).saturating_sub(1);
-                    // dispatch-ct2.8: log voice prompt
-                    let voice_target = app.slots.get(g)
-                        .and_then(|s| s.as_ref())
-                        .map(|s| s.display_name().to_string())
-                        .unwrap_or_else(|| NATO.get(g).unwrap_or(&"?").to_string());
-                    app.log_prompt(PromptSource::Voice, &voice_target, &prompt);
-                    let target_repo = app.default_repo_root().to_string();
-                    if g < MAX_SLOTS {
-                        // Spawn a PTY if the slot is empty.
-                        if app.slots[g].is_none() {
-                            let cmd = app.tool_cmd("claude-code").to_string();
-                            if let Some(s) = dispatch_slot(
-                                g, "claude-code", &cmd, app.pane_rows, app.pane_cols, None,
-                                app.scrollback_lines, repo_name_from_path(&target_repo), &target_repo,
-                            ) {
-                                let name = s.display_name().to_string();
-                                app.push_orch(OrchestratorEventKind::Dispatched { agent: name.clone(), slot: g + 1, tool: "claude-code".to_string() });
-                                app.slots[g] = Some(s);
-                                app.push_ticker(format!("AUTO-DISPATCH: {} launched in slot {}", name, g + 1));
-                            }
-                        }
-                        let task_id = create_task_in_file(&target_repo, &prompt);
-                        if let Some(ref id) = task_id {
-                            app.push_orch(OrchestratorEventKind::TaskCreated { id: id.clone(), title: prompt.clone() });
-                        }
-                        let mut ticker_msg: Option<String> = None;
-                        let mut orch_assign: Option<(String, String)> = None;
-                        if let Some(slot_state) = app.slots[g].as_mut() {
-                            if let Some(ref id) = task_id {
-                                update_task_in_file(&target_repo, id, '~', Some(&slot_state.callsign));
-                                let prefixed = format!("[Dispatch task {id}] {prompt}\r");
-                                let _ = slot_state.writer.write_all(prefixed.as_bytes());
-                                let _ = slot_state.writer.flush();
-                                orch_assign = Some((id.clone(), slot_state.callsign.clone()));
-                                ticker_msg = Some(format!("AUTO-DISPATCH: task {} assigned to {}", id, slot_state.callsign));
-                            } else {
-                                let with_enter = format!("{prompt}\r");
-                                let _ = slot_state.writer.write_all(with_enter.as_bytes());
-                                let _ = slot_state.writer.flush();
-                            }
-                            slot_state.task_id = task_id;
-                        }
-                        if let Some((id, agent)) = orch_assign {
-                            app.push_orch(OrchestratorEventKind::TaskAssigned { id, agent, slot: g + 1 });
-                        }
-                        if let Some(msg) = ticker_msg {
-                            app.push_ticker(msg);
-                        }
-                    }
-                }
-                ws_server::WsEvent::QueueTask { prompt } => {
-                    app.push_orch(OrchestratorEventKind::VoiceTranscript { text: prompt.clone() });
-                    app.log_prompt(PromptSource::Voice, "queued", &prompt);
-                    let target_repo = app.default_repo_root().to_string();
-                    // Create an open task in .dispatch/tasks.md; it will
-                    // surface in the next poll and be picked up when a slot frees.
-                    if let Some(id) = create_task_in_file(&target_repo, &prompt) {
-                        app.push_orch(OrchestratorEventKind::Queued { id: id.clone() });
-                        app.push_ticker(format!("QUEUED: all agents busy — task {} waiting", id));
-                    }
-                }
-                ws_server::WsEvent::PlanRequest { prompt } => {
-                    app.push_orch(OrchestratorEventKind::VoiceTranscript { text: prompt.clone() });
-                    app.log_prompt(PromptSource::Voice, "planner", &prompt);
-                    let target_repo = app.default_repo_root().to_string();
-                    // dispatch-fnx: spawn a headless planner for complex prompts.
-                    if app.planner.is_none() {
-                        app.push_orch(OrchestratorEventKind::PlanStart { prompt: prompt.clone() });
-                        let cmd = app.tool_cmd("claude-code").to_string();
-                        let rx = spawn_planner(&prompt, &cmd, &target_repo);
-                        app.planner = Some(PlannerState { prompt: prompt.clone(), receiver: rx });
-                        let display = if prompt.len() > 60 {
-                            format!("{}...", &prompt[..57])
-                        } else {
-                            prompt
+            let ws_server::WsEvent::VoiceTranscript { text } = event;
+            app.push_orch(OrchestratorEventKind::VoiceTranscript { text: text.clone() });
+            if let Some(orch) = &mut app.orchestrator {
+                orch.send_message(&format!("[MIC] {}", text));
+            }
+        }
+
+        // dispatch-h62: poll orchestrator output and execute tool calls.
+        // Collect all pending outputs first to avoid borrow conflicts.
+        let mut orch_outputs: Vec<orchestrator::OrchestratorOutput> = Vec::new();
+        if let Some(orch) = &mut app.orchestrator {
+            while let Some(output) = orch.try_recv() {
+                orch_outputs.push(output);
+            }
+        }
+        for output in orch_outputs {
+            match output {
+                orchestrator::OrchestratorOutput::Text(text) => {
+                    app.push_orch(OrchestratorEventKind::OrchestratorText { text: text.clone() });
+
+                    // Parse and execute any tool calls in the response.
+                    let calls = orchestrator::parse_all_tool_calls(&text);
+                    for call in &calls {
+                        let call_name = match call {
+                            tools::ToolCall::Dispatch { .. } => "dispatch",
+                            tools::ToolCall::Terminate { .. } => "terminate",
+                            tools::ToolCall::Merge { .. } => "merge",
+                            tools::ToolCall::ListAgents => "list_agents",
+                            tools::ToolCall::ListRepos => "list_repos",
+                            tools::ToolCall::Plan { .. } => "plan",
+                            tools::ToolCall::MessageAgent { .. } => "message_agent",
                         };
-                        app.push_ticker(format!("PLANNING: {}", display));
-                    } else {
-                        // Planner already running; queue as a direct task.
-                        if let Some(id) = create_task_in_file(&target_repo, &prompt) {
-                            app.push_orch(OrchestratorEventKind::Queued { id: id.clone() });
-                            app.push_ticker(format!("QUEUED: planner busy — task {} waiting", id));
+                        app.push_orch(OrchestratorEventKind::ToolCallIssued {
+                            name: call_name.to_string(),
+                        });
+
+                        let result = app.execute_tool(call);
+                        let success = !matches!(result, tools::ToolResult::Error { .. });
+                        app.push_orch(OrchestratorEventKind::ToolResultSent {
+                            name: call_name.to_string(),
+                            success,
+                        });
+
+                        // Send tool result back to the orchestrator.
+                        let result_text = tools::format_tool_result(None, &result);
+                        if let Some(orch) = &mut app.orchestrator {
+                            orch.send_message(&result_text);
                         }
                     }
+                }
+                orchestrator::OrchestratorOutput::TurnComplete => {
+                    // Orchestrator finished responding, now idle.
+                }
+                orchestrator::OrchestratorOutput::Exited => {
+                    app.push_ticker("ORCHESTRATOR: process exited — manual mode only".to_string());
+                    app.orchestrator = None;
                 }
             }
         }
@@ -3261,6 +3283,10 @@ fn main() -> io::Result<()> {
                                                 let repo = slot_repo.unwrap_or_else(|| app.default_repo_root().to_string());
                                                 update_task_in_file(&repo, &task_id, ' ', None);
                                             }
+                                        }
+                                        // dispatch-h62: kill orchestrator on quit.
+                                        if let Some(orch) = &mut app.orchestrator {
+                                            orch.kill();
                                         }
                                         quit_requested = true;
                                         app.overlay = Overlay::None;
@@ -3455,6 +3481,9 @@ fn main() -> io::Result<()> {
                                     if app.active_count() > 0 {
                                         app.overlay = Overlay::ConfirmQuit;
                                     } else {
+                                        if let Some(orch) = &mut app.orchestrator {
+                                            orch.kill();
+                                        }
                                         break 'main;
                                     }
                                 }

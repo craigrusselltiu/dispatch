@@ -253,9 +253,12 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    // dispatch-h62: send raw transcripts to the orchestrator LLM instead of
+    // parsing commands locally. The orchestrator decides what to do.
     private fun handleTranscript(transcript: String) {
-        showLastDispatch(transcript, null)
-        wsClient.send("""{"type":"transcript","text":${gson.toJson(transcript)}}""")
+        showLastDispatch("\"$transcript\"", null)
+        val msg = """{"type":"send","text":${gson.toJson(transcript)},"auto":true}"""
+        wsClient.send(msg)
     }
 
     private fun handleMessage(text: String) {
