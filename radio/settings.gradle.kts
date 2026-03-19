@@ -16,4 +16,3 @@ dependencyResolutionManagement {
 
 rootProject.name = "DispatchRadio"
 include(":app")
-include(":wear")
