@@ -30,3 +30,11 @@ rustls = { version = "0.23", default-features = false, features = ["ring", "std"
 rustls-pemfile = "2"
 rcgen = { version = "0.13", default-features = false, features = ["ring"] }
 sha2 = "0.10"
+
+[profile.dev]
+incremental = true
+debug = "line-tables-only"
+
+[profile.release]
+lto = "thin"
+strip = true

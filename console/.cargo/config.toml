@@ -1,0 +1,12 @@
+# Faster linking with lld (install ld.lld or mold for your platform)
+# Windows GNU: install lld via MSYS2 (pacman -S mingw-w64-x86_64-lld)
+# Linux: install lld (apt install lld) or mold (apt install mold)
+
+# [target.x86_64-pc-windows-gnu]
+# rustflags = ["-C", "link-arg=-fuse-ld=lld"]
+
+[target.x86_64-pc-windows-msvc]
+linker = "rust-lld.exe"
+
+[target.x86_64-unknown-linux-gnu]
+rustflags = ["-C", "link-arg=-fuse-ld=lld"]
