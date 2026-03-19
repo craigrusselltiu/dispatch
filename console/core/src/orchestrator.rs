@@ -192,12 +192,8 @@ pub fn spawn(system_prompt: &str, cwd: &str) -> Option<Orchestrator> {
                     }
                 }
                 "result" => {
-                    // Also extract result text if present.
-                    if let Some(text) = parsed.get("result").and_then(|r| r.as_str()) {
-                        if !text.is_empty() {
-                            let _ = tx.send(OrchestratorOutput::Text(text.to_string()));
-                        }
-                    }
+                    // Don't emit Text here -- the same content was already sent
+                    // via the "assistant" message. Only signal turn completion.
                     let _ = tx.send(OrchestratorOutput::TurnComplete);
                 }
                 _ => {

@@ -2912,6 +2912,7 @@ fn main() -> io::Result<()> {
         // Process events from the WebSocket thread (dispatch-1lc.1, dispatch-h62).
         while let Ok(event) = ws_event_rx.try_recv() {
             let ws_server::WsEvent::VoiceTranscript { text } = event;
+            app.radio_state = RadioState::Connected;
             app.push_orch(OrchestratorEventKind::VoiceTranscript { text: text.clone() });
             // Lazy-spawn orchestrator on first voice input.
             if app.orchestrator.is_none() {
@@ -3008,7 +3009,8 @@ fn main() -> io::Result<()> {
 
             render_header(f, chunks[0], &app);
             render_ticker(f, chunks[1], &app);
-            // dispatch-6nm: toggle between agent grid and orchestrator view.
+            // Clear the main content area to prevent visual artifacts when switching views.
+            f.render_widget(Clear, chunks[2]);
             match app.view_mode {
                 ViewMode::Agents => render_panes(f, chunks[2], &app),
                 ViewMode::Orchestrator => render_orchestrator(f, chunks[2], &app),

@@ -28,12 +28,14 @@ class PushToTalkManager(
     private var recognizer: SpeechRecognizer? = null
     private var listening = false
     private var lastPartial = ""
+    private var resultDelivered = false
 
     /** Call from onKeyDown for KEYCODE_VOLUME_DOWN. */
     fun startListening() {
         if (listening) return
         listening = true
         lastPartial = ""
+        resultDelivered = false
 
         if (recognizer == null) {
             recognizer = SpeechRecognizer.createSpeechRecognizer(context)
@@ -84,6 +86,9 @@ class PushToTalkManager(
         }
 
         override fun onResults(results: Bundle?) {
+            if (resultDelivered) return
+            resultDelivered = true
+
             val transcript = results
                 ?.getStringArrayList(SpeechRecognizer.RESULTS_RECOGNITION)
                 ?.firstOrNull()
@@ -97,8 +102,10 @@ class PushToTalkManager(
         }
 
         override fun onError(error: Int) {
+            if (resultDelivered) return
+
             if (!listening) {
-                // Key was released before recognition finished — use last partial
+                resultDelivered = true
                 if (lastPartial.isNotBlank()) {
                     onFinalResult(lastPartial)
                 } else {
