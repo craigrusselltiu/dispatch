@@ -2,14 +2,14 @@
 
 > Voice-powered command center for AI coding agents.
 
-Turn your Android phone into a push-to-talk radio that dispatches tasks to AI coding agents. The PC-side TUI gives you a live quad-pane view of embedded agent terminals. Voice a task and the orchestrator dispatches agents into isolated git worktrees and merges results back -- all tracked in a simple markdown file (`.dispatch/tasks.md`).
+Turn your Android phone into a push-to-talk radio that dispatches tasks to AI coding agents. The PC-side TUI gives you a live quad-pane view of embedded agent terminals. Voice a big task and the orchestrator breaks it into subtasks, dispatches agents into isolated git worktrees, and merges results back -- all tracked in a simple markdown file (`.dispatch/tasks.md`).
 
 ## Overview
 
 The system has two components:
 
 1. **Dispatch Radio** (Android) -- a minimal push-to-talk app controlled via hardware volume buttons. Transcribes speech and sends raw transcripts over a local WebSocket connection to the console's orchestrator.
-2. **Dispatch Console** (PC) -- a TUI command center with up to 26 embedded terminal panes (displayed 4 at a time in a 2x2 grid across pages), each running a live AI agent session. A persistent LLM orchestrator receives voice transcripts and decides what to do -- dispatch agents, merge completed work, etc. Supports direct keyboard input into any agent pane via a vim-style modal interface.
+2. **Dispatch Console** (PC) -- a TUI command center with up to 26 embedded terminal panes (displayed 4 at a time in a 2x2 grid across pages), each running a live AI agent session. A persistent LLM orchestrator receives voice transcripts and decides what to do -- dispatch agents, decompose complex tasks, merge completed work, etc. Supports direct keyboard input into any agent pane via a vim-style modal interface.
 
 Both components live in a single monorepo.
 
@@ -101,7 +101,7 @@ The radio sends raw voice transcripts to the console without any local parsing. 
 | "dispatch an agent to fix the login bug"       | `dispatch` with prompt                       |
 | "terminate bravo"                              | `terminate` agent=Bravo                      |
 | "what agents are running"                      | `list_agents`                                |
-| "refactor the auth system"                     | Multiple `dispatch` calls to decompose       |
+| "refactor the auth system"                     | Decompose and `dispatch` multiple agents     |
 | "merge alpha's work"                           | `merge` task                                 |
 
 The orchestrator understands natural language -- there are no fixed command patterns. It uses the full context of the conversation (agent states, prior tool results, etc.) to decide the best action.
@@ -110,7 +110,7 @@ The orchestrator understands natural language -- there are no fixed command patt
 
 ## Task Management
 
-Tasks are tracked in `.dispatch/tasks.md` at the repo root. The console orchestrates all task lifecycle: dispatch and completion. The orchestrator decomposes complex tasks by issuing multiple dispatch calls directly. Each agent works in an isolated git worktree. No external tooling required.
+Tasks are tracked in `.dispatch/tasks.md` at the repo root. The orchestrator handles all task lifecycle: decomposition, dispatch, and completion. Each agent works in an isolated git worktree. No external tooling required.
 
 ### Task Format
 
@@ -137,13 +137,15 @@ Tasks are tracked in `.dispatch/tasks.md` at the repo root. The console orchestr
 
 ### Task Decomposition
 
-When a voice prompt describes a complex task (e.g. "refactor the auth system"), the orchestrator handles decomposition directly:
+When a voice prompt describes a complex task (e.g. "refactor the auth system"), the orchestrator decomposes it inline:
 
-1. **Analysis**: the orchestrator reasons about what subtasks are needed.
-2. **Multiple dispatches**: the orchestrator issues multiple `dispatch` action blocks in a single response, one per subtask.
-3. **Execution**: the console creates tasks in `.dispatch/tasks.md`, sets up worktrees, and assigns agents.
+1. **Decomposition**: the orchestrator analyzes the task itself, identifies subtasks, and determines dependencies.
+2. **Plan output**: the orchestrator writes the task breakdown with IDs, descriptions, and dependency arrows to `.dispatch/tasks.md`.
+3. **Dispatch begins**: the orchestrator calls `dispatch` for each unblocked subtask.
 
-For simple one-off prompts (e.g. "Alpha, fix this typo"), the orchestrator calls `dispatch` directly with a single action block. See [ORCHESTRATOR.md](ORCHESTRATOR.md) for the full decision-making logic.
+The ticker line (see [Ticker](#ticker)) shows decomposition progress in real-time.
+
+For simple one-off prompts (e.g. "Alpha, fix this typo"), the orchestrator calls `dispatch` directly without decomposition. See [ORCHESTRATOR.md](ORCHESTRATOR.md) for the full decision-making logic.
 
 ### Git Worktrees
 
@@ -188,20 +190,20 @@ In multi-repo mode:
 
 ### Task Lifecycle
 
-**Complex task (multi-dispatch):**
+**Complex task (with decomposition):**
 
 ```
 Voice: "refactor the auth system"
   -> Orchestrator decomposes into subtasks
-  -> Issues multiple dispatch calls
-  -> Console creates tasks in .dispatch/tasks.md
-  -> Dispatches agents into worktrees (one per task)
+  -> Ticker: "Decomposing: refactor the auth system..."
+  -> Orchestrator writes .dispatch/tasks.md with breakdown
+  -> Dispatches agents into worktrees (one per unblocked task)
   -> On completion: merge, mark [x], check what's unblocked
   -> Dispatches next ready tasks
-  -> Repeat until all tasks are done
+  -> Repeat until all subtasks done
 ```
 
-**Simple prompt (direct dispatch):**
+**Simple prompt (direct flow):**
 
 ```
 Voice: "Alpha, fix the login bug"
@@ -221,7 +223,7 @@ Voice: "Alpha, fix the login bug"
 
 When a prompt arrives without a specified agent:
 
-1. The console creates a task.
+1. The orchestrator creates a task (or decomposes it into subtasks if the prompt is complex).
 2. It checks agent states:
    - If an idle agent exists, assign the task to it.
    - If all agents are busy and an empty slot exists, dispatch a new agent (default tool: `claude-code`) and assign the task.
@@ -299,6 +301,7 @@ A single-line LED-style scrolling marquee between the header bar and the quad pa
 
 **Message sources:**
 
+- Decomposition status: `Decomposing: breaking down "refactor auth" into 5 subtasks...`
 - Task events: `t1.1 complete, merging... t1.2 unblocked, dispatching to Bravo`
 - Merge results: `t1.1 merged to main` or `t1.3 merge conflict, needs manual review`
 - Errors: `All agents busy, task t4 queued`
@@ -320,6 +323,7 @@ The console displays task state across multiple areas:
 Pressing `o` in command mode replaces the 2x2 agent grid with a full-height scrollable log of orchestrator events. Each entry is timestamped and categorized:
 
 - **MIC**: incoming voice transcripts from the radio.
+- **PLAN**: task decomposition start, completion (with task count), or failure.
 - **TASK**: task creation in `.dispatch/tasks.md`.
 - **ASSIGN**: task assigned to an agent slot.
 - **DONE**: task completed (idle prompt detected or inactivity timeout).
@@ -340,7 +344,7 @@ All voice prompts from the radio and keyboard input submitted in input mode are 
 ```
 [14:32:05] VOICE -> ALPHA: "refactor the auth module"
 [14:35:12] KEYBOARD -> ALPHA: "fix the typo in line 42"
-[14:38:00] VOICE -> CHARLIE: "set up CI pipeline for all microservices"
+[14:38:00] VOICE -> orchestrator: "set up CI pipeline for all microservices"
 [14:40:15] VOICE -> queued: "add rate limiting to the API"
 ```
 
@@ -574,7 +578,7 @@ Pages are cycled with `[` / `]` or `Shift+Left` / `Shift+Right`. The header show
 │                                │                                    │
 │                                │                                    │
 ├────────────────────────────────┴────────────────────────────────────┤
-│ ▸ RADIO IDLE │ TARGET: ALPHA │ ⏎ input │ [] page │ n new │ ?      │
+│ ▸ RADIO IDLE │ TARGET: ALPHA │ i input │ [] page │ n new │ ?      │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -610,7 +614,7 @@ Page 2 of the same session:
 │                                │                                    │
 │                                │                                    │
 ├────────────────────────────────┴────────────────────────────────────┤
-│ ▸ RADIO IDLE │ TARGET: ALPHA │ ⏎ input │ [] page │ n new │ ?      │
+│ ▸ RADIO IDLE │ TARGET: ALPHA │ i input │ [] page │ n new │ ?      │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -645,7 +649,7 @@ Bright green border on the active pane. Footer shows mode indicator.
 **Regions:**
 
 1. **Header bar** -- radio connection state, PSK (truncated), task progress (done/total), current page indicator, clock.
-2. **Ticker** -- single-line LED-style scrolling marquee. Shows task events, merge results, and errors. Text scrolls right-to-left. Blank when idle. See [Ticker](#ticker).
+2. **Ticker** -- single-line LED-style scrolling marquee. Shows decomposition status, task events, merge results, and errors. Text scrolls right-to-left. Blank when idle. See [Ticker](#ticker).
 3. **Quad pane** -- four slots from the current page. Targeted pane has `▸` marker and cyan border (command mode) or green border (input mode). Each pane has:
    - **Info strip**: callsign, tool type, current task ID (or "idle"), dispatch time, and runtime.
    - **Terminal area**: live embedded terminal output rendered from the VTE parser.
@@ -674,7 +678,7 @@ While in input mode, `Escape` is the only key intercepted by the console. Everyt
 
 | Key               | Action                                                       |
 |-------------------|--------------------------------------------------------------|
-| `Enter`           | Enter input mode on targeted pane                            |
+| `Enter` / `i`     | Enter input mode on targeted pane                            |
 | `1-4`             | Select target slot on current page (slot = page offset + key)|
 | `Tab`             | Cycle target forward across all pages (skips empty slots, auto-navigates) |
 | `Shift+Tab`       | Cycle target backward across all pages                       |
