@@ -19,6 +19,26 @@ use crate::util;
 /// Usage: `echo "@@DISPATCH_MSG:your message here"`
 pub const DISPATCH_MSG_MARKER: &str = "@@DISPATCH_MSG:";
 
+/// Check a completed line buffer for a dispatch marker and send the message
+/// if it's new. Called only on true line endings (\n or \r\n), not on bare \r.
+fn check_dispatch_marker(
+    line_buf: &[u8],
+    marker: &str,
+    last_msg: &mut String,
+    tx: &std::sync::mpsc::Sender<(usize, String)>,
+    slot_idx: usize,
+) {
+    if let Ok(line) = std::str::from_utf8(line_buf) {
+        if let Some(pos) = line.find(marker) {
+            let msg = util::clean_dispatch_msg(&line[pos + marker.len()..]);
+            if !msg.is_empty() && msg != *last_msg {
+                *last_msg = msg.clone();
+                let _ = tx.send((slot_idx, msg));
+            }
+        }
+    }
+}
+
 /// Open a PTY and spawn a process. Returns a SlotState on success.
 /// `cwd` sets the working directory for the PTY (dispatch-xje: worktree path).
 /// `initial_prompt` is passed as a CLI argument so the agent starts working immediately.
@@ -90,24 +110,39 @@ pub fn dispatch_slot(
         let mut buf = [0u8; 4096];
         let mut line_buf: Vec<u8> = Vec::with_capacity(512);
         let mut last_msg = String::new();
+        // Track whether the last byte was \r so we can distinguish
+        // \r\n (normal line ending) from bare \r (terminal redraw).
+        let mut cr_pending = false;
         loop {
             match pty_reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
                     // Scan for @@DISPATCH_MSG: markers in the byte stream.
-                    // Treat both \n and \r as line boundaries so terminal
-                    // redraws (CR without LF) don't concatenate garbage.
+                    //
+                    // Only process the line buffer on true line endings (\n
+                    // or \r\n). Bare \r (cursor-home for terminal redraws)
+                    // clears the buffer WITHOUT checking for markers, so
+                    // progressive redraws don't emit duplicate partial
+                    // messages.
                     for &byte in &buf[..n] {
-                        if byte == b'\n' || byte == b'\r' {
-                            if let Ok(line) = std::str::from_utf8(&line_buf) {
-                                if let Some(pos) = line.find(DISPATCH_MSG_MARKER) {
-                                    let msg = util::clean_dispatch_msg(&line[pos + DISPATCH_MSG_MARKER.len()..]);
-                                    if !msg.is_empty() && msg != last_msg {
-                                        last_msg = msg.clone();
-                                        let _ = agent_msg_tx.send((global_idx, msg));
-                                    }
-                                }
+                        if cr_pending {
+                            cr_pending = false;
+                            if byte == b'\n' {
+                                // \r\n — normal line ending. Process the buffer.
+                                check_dispatch_marker(&line_buf, DISPATCH_MSG_MARKER, &mut last_msg, &agent_msg_tx, global_idx);
+                                line_buf.clear();
+                                continue;
                             }
+                            // Bare \r followed by more content — terminal redraw.
+                            // Discard the partial line so it doesn't emit a message.
+                            line_buf.clear();
+                            // Fall through to handle the current byte.
+                        }
+                        if byte == b'\r' {
+                            cr_pending = true;
+                        } else if byte == b'\n' {
+                            // Bare \n — process the line.
+                            check_dispatch_marker(&line_buf, DISPATCH_MSG_MARKER, &mut last_msg, &agent_msg_tx, global_idx);
                             line_buf.clear();
                         } else {
                             line_buf.push(byte);
