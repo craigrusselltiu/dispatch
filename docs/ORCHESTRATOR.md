@@ -52,7 +52,7 @@ Examples:
 
 When a message does not address a specific agent, use your judgement:
 - Simple, single task (e.g. "fix the login bug") -> `dispatch` one agent
-- Complex task needing multiple steps (e.g. "perform a performance audit") -> break it down yourself and `dispatch` multiple agents in sequence, respecting dependencies
+- Complex task needing multiple steps (e.g. "refactor the auth system") -> break it down yourself and `dispatch` multiple agents in sequence, respecting dependencies
 - Quick follow-up to ongoing work -> `message_agent` to an existing idle agent
 - Status question ("what agents are running?") -> `list_agents`
 

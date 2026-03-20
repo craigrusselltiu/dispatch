@@ -109,11 +109,10 @@ Orchestrator receives "refactor the auth system"
   ├─▶ Orchestrator decomposes task into subtasks
   │     └─ Identifies dependencies and ordering
   │
-  ├─▶ Ticker: "Decomposing: refactor the auth system..."
-  │
   ▼
 For each independent subtask:
   │
+  ├─▶ Console creates task in .dispatch/tasks.md
   ├─▶ git worktree add .dispatch/.worktrees/{id} -b task/{id}
   ├─▶ Assign to idle agent slot
   ├─▶ Launch agent PTY in worktree directory

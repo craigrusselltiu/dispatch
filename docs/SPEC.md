@@ -2,14 +2,14 @@
 
 > Voice-powered command center for AI coding agents.
 
-Turn your Android phone into a push-to-talk radio that dispatches tasks to AI coding agents. The PC-side TUI gives you a live quad-pane view of embedded agent terminals. Voice a big task and the console plans it, breaks it into subtasks, dispatches agents into isolated git worktrees, and merges results back -- all tracked in a simple markdown file (`.dispatch/tasks.md`).
+Turn your Android phone into a push-to-talk radio that dispatches tasks to AI coding agents. The PC-side TUI gives you a live quad-pane view of embedded agent terminals. Voice a task and the orchestrator dispatches agents into isolated git worktrees and merges results back -- all tracked in a simple markdown file (`.dispatch/tasks.md`).
 
 ## Overview
 
 The system has two components:
 
 1. **Dispatch Radio** (Android) -- a minimal push-to-talk app controlled via hardware volume buttons. Transcribes speech and sends raw transcripts over a local WebSocket connection to the console's orchestrator.
-2. **Dispatch Console** (PC) -- a TUI command center with up to 26 embedded terminal panes (displayed 4 at a time in a 2x2 grid across pages), each running a live AI agent session. A persistent LLM orchestrator receives voice transcripts and decides what to do -- dispatch agents, plan tasks, merge completed work, etc. Supports direct keyboard input into any agent pane via a vim-style modal interface.
+2. **Dispatch Console** (PC) -- a TUI command center with up to 26 embedded terminal panes (displayed 4 at a time in a 2x2 grid across pages), each running a live AI agent session. A persistent LLM orchestrator receives voice transcripts and decides what to do -- dispatch agents, merge completed work, etc. Supports direct keyboard input into any agent pane via a vim-style modal interface.
 
 Both components live in a single monorepo.
 
@@ -101,7 +101,7 @@ The radio sends raw voice transcripts to the console without any local parsing. 
 | "dispatch an agent to fix the login bug"       | `dispatch` with prompt                       |
 | "terminate bravo"                              | `terminate` agent=Bravo                      |
 | "what agents are running"                      | `list_agents`                                |
-| "refactor the auth system"                     | `plan` or `dispatch` depending on complexity |
+| "refactor the auth system"                     | Multiple `dispatch` calls to decompose       |
 | "merge alpha's work"                           | `merge` task                                 |
 
 The orchestrator understands natural language -- there are no fixed command patterns. It uses the full context of the conversation (agent states, prior tool results, etc.) to decide the best action.
@@ -110,7 +110,7 @@ The orchestrator understands natural language -- there are no fixed command patt
 
 ## Task Management
 
-Tasks are tracked in `.dispatch/tasks.md` at the repo root. The console orchestrates all task lifecycle: planning, decomposition, dispatch, and completion. Each agent works in an isolated git worktree. No external tooling required.
+Tasks are tracked in `.dispatch/tasks.md` at the repo root. The console orchestrates all task lifecycle: dispatch and completion. The orchestrator decomposes complex tasks by issuing multiple dispatch calls directly. Each agent works in an isolated git worktree. No external tooling required.
 
 ### Task Format
 
@@ -135,18 +135,15 @@ Tasks are tracked in `.dispatch/tasks.md` at the repo root. The console orchestr
 - [~] t1.1: Create auth module skeleton | agent: Alpha
 ```
 
-### Planning
+### Task Decomposition
 
-When a voice prompt describes a complex task (e.g. "refactor the auth system"), the orchestrator calls the `plan` tool to spawn a headless planner agent:
+When a voice prompt describes a complex task (e.g. "refactor the auth system"), the orchestrator handles decomposition directly:
 
-1. **Planner dispatch**: the orchestrator calls `plan(repo, prompt)`. The console spawns a temporary agent (no pane, no slot consumed) with the prompt and instructions to write a plan to `.dispatch/tasks.md`.
-2. **Plan output**: the planner writes the task breakdown with IDs, descriptions, and dependency arrows.
-3. **Planner exits**: once `.dispatch/tasks.md` is written, the planner process terminates. The console notifies the orchestrator.
-4. **Dispatch begins**: the orchestrator calls `dispatch` for each unblocked task.
+1. **Analysis**: the orchestrator reasons about what subtasks are needed.
+2. **Multiple dispatches**: the orchestrator issues multiple `dispatch` action blocks in a single response, one per subtask.
+3. **Execution**: the console creates tasks in `.dispatch/tasks.md`, sets up worktrees, and assigns agents.
 
-The ticker line (see [Ticker](#ticker)) shows planner progress in real-time.
-
-For simple one-off prompts (e.g. "Alpha, fix this typo"), the orchestrator calls `dispatch` directly without planning. See [ORCHESTRATOR.md](ORCHESTRATOR.md) for the full decision-making logic.
+For simple one-off prompts (e.g. "Alpha, fix this typo"), the orchestrator calls `dispatch` directly with a single action block. See [ORCHESTRATOR.md](ORCHESTRATOR.md) for the full decision-making logic.
 
 ### Git Worktrees
 
@@ -191,21 +188,20 @@ In multi-repo mode:
 
 ### Task Lifecycle
 
-**Complex task (planning flow):**
+**Complex task (multi-dispatch):**
 
 ```
 Voice: "refactor the auth system"
-  -> Console spawns headless planner agent
-  -> Ticker: "Planning: refactor the auth system..."
-  -> Planner writes .dispatch/tasks.md with breakdown
-  -> Console reads plan, finds unblocked tasks
-  -> Dispatches workers into worktrees (one per task)
+  -> Orchestrator decomposes into subtasks
+  -> Issues multiple dispatch calls
+  -> Console creates tasks in .dispatch/tasks.md
+  -> Dispatches agents into worktrees (one per task)
   -> On completion: merge, mark [x], check what's unblocked
   -> Dispatches next ready tasks
-  -> Repeat until plan is done
+  -> Repeat until all tasks are done
 ```
 
-**Simple prompt (direct flow):**
+**Simple prompt (direct dispatch):**
 
 ```
 Voice: "Alpha, fix the login bug"
@@ -225,7 +221,7 @@ Voice: "Alpha, fix the login bug"
 
 When a prompt arrives without a specified agent:
 
-1. The console creates a task (or triggers planning if the prompt is complex -- currently prompts with more than 15 words are considered complex and routed to the headless planner).
+1. The console creates a task.
 2. It checks agent states:
    - If an idle agent exists, assign the task to it.
    - If all agents are busy and an empty slot exists, dispatch a new agent (default tool: `claude-code`) and assign the task.
@@ -255,7 +251,6 @@ The console parses the `"action"` field to determine which tool to execute. Para
 | `merge` | `task_id` | Merge a task's worktree branch into main. Returns success/failure with conflict details. |
 | `list_agents` | _(none)_ | List all active agent slots with callsign, tool, busy/idle status, current task, and repo. |
 | `list_repos` | _(none)_ | List available repositories that agents can work in. |
-| `plan` | `repo`, `prompt` | Spawn a headless planner to decompose a complex prompt into subtasks in `.dispatch/tasks.md`. |
 | `message_agent` | `agent`, `text` | Send text to an agent's terminal (PTY). Use for follow-up instructions or answering agent questions. |
 
 The `agent` parameter accepts either a callsign (e.g. "Alpha") or a slot number (e.g. "1"), case-insensitive.
@@ -304,7 +299,6 @@ A single-line LED-style scrolling marquee between the header bar and the quad pa
 
 **Message sources:**
 
-- Planner status: `Planning: breaking down "refactor auth" into 5 subtasks...`
 - Task events: `t1.1 complete, merging... t1.2 unblocked, dispatching to Bravo`
 - Merge results: `t1.1 merged to main` or `t1.3 merge conflict, needs manual review`
 - Errors: `All agents busy, task t4 queued`
@@ -326,7 +320,6 @@ The console displays task state across multiple areas:
 Pressing `o` in command mode replaces the 2x2 agent grid with a full-height scrollable log of orchestrator events. Each entry is timestamped and categorized:
 
 - **MIC**: incoming voice transcripts from the radio.
-- **PLAN**: planner start, completion (with task count), or failure.
 - **TASK**: task creation in `.dispatch/tasks.md`.
 - **ASSIGN**: task assigned to an agent slot.
 - **DONE**: task completed (idle prompt detected or inactivity timeout).
@@ -347,7 +340,7 @@ All voice prompts from the radio and keyboard input submitted in input mode are 
 ```
 [14:32:05] VOICE -> ALPHA: "refactor the auth module"
 [14:35:12] KEYBOARD -> ALPHA: "fix the typo in line 42"
-[14:38:00] VOICE -> planner: "set up CI pipeline for all microservices"
+[14:38:00] VOICE -> CHARLIE: "set up CI pipeline for all microservices"
 [14:40:15] VOICE -> queued: "add rate limiting to the API"
 ```
 
@@ -652,7 +645,7 @@ Bright green border on the active pane. Footer shows mode indicator.
 **Regions:**
 
 1. **Header bar** -- radio connection state, PSK (truncated), task progress (done/total), current page indicator, clock.
-2. **Ticker** -- single-line LED-style scrolling marquee. Shows planner status, task events, merge results, and errors. Text scrolls right-to-left. Blank when idle. See [Ticker](#ticker).
+2. **Ticker** -- single-line LED-style scrolling marquee. Shows task events, merge results, and errors. Text scrolls right-to-left. Blank when idle. See [Ticker](#ticker).
 3. **Quad pane** -- four slots from the current page. Targeted pane has `▸` marker and cyan border (command mode) or green border (input mode). Each pane has:
    - **Info strip**: callsign, tool type, current task ID (or "idle"), dispatch time, and runtime.
    - **Terminal area**: live embedded terminal output rendered from the VTE parser.
@@ -812,7 +805,7 @@ max_agents = 8
 dir = ".dispatch"
 # Auto-dispatch agents for unaddressed prompts.
 auto_dispatch = true
-# Default tool for auto-dispatched and planner agents.
+# Default tool for auto-dispatched agents.
 default_tool = "claude-code"
 # Inactivity timeout for task completion detection (seconds). 0 to disable.
 completion_timeout_secs = 60

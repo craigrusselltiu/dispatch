@@ -2,14 +2,14 @@
 
 > Voice-powered command center for AI coding agents.
 
-Turn your Android phone into a push-to-talk radio that dispatches tasks to AI coding agents. Voice a big task and the console plans it, breaks it into subtasks, dispatches agents into isolated git worktrees, and merges results back -- all tracked in a simple markdown file (`.dispatch/tasks.md`).
+Turn your Android phone into a push-to-talk radio that dispatches tasks to AI coding agents. Voice a task and the orchestrator dispatches agents into isolated git worktrees and merges results back -- all tracked in a simple markdown file (`.dispatch/tasks.md`).
 
 ## Overview
 
 Dispatch has two components:
 
 - **Dispatch Radio** (Android) -- a minimal push-to-talk app controlled via hardware volume buttons. Hold Volume Down to speak; the app transcribes speech and sends raw transcripts to the console over a local WebSocket connection.
-- **Dispatch Console** (PC) -- a TUI command center with up to 26 embedded terminal panes, each running a live AI agent session. A persistent LLM orchestrator receives voice transcripts and decides what to do -- dispatch agents, plan tasks, merge completed work, etc. Supports direct keyboard input into any agent pane via a vim-style modal interface.
+- **Dispatch Console** (PC) -- a TUI command center with up to 26 embedded terminal panes, each running a live AI agent session. A persistent LLM orchestrator receives voice transcripts and decides what to do -- dispatch agents, merge completed work, etc. Supports direct keyboard input into any agent pane via a vim-style modal interface.
 
 ```
 ┌──────────────┐    WebSocket TLS (LAN, PSK)   ┌──────────────────┐
@@ -35,7 +35,6 @@ dispatch/
     SPEC.md            # Full system specification
     ARCHITECTURE.md    # High-level architecture overview
     ORCHESTRATOR.md    # Orchestrator behavior and tool reference
-    PLANNER.md         # Headless planner agent behavior
     AGENTS.md          # Template injected into agent prompts
   README.md
 ```
@@ -143,7 +142,7 @@ Speak naturally. The radio sends raw transcripts to the console's LLM orchestrat
 | "dispatch an agent to fix the bug"   | Dispatch a new agent                     |
 | "terminate bravo"                    | Terminate the Bravo agent                |
 | "what agents are running"            | List active agents                       |
-| "refactor the auth system"           | Plan, decompose, and dispatch subtasks   |
+| "refactor the auth system"           | Decompose and dispatch multiple agents   |
 | "merge alpha's work"                 | Merge the completed task                 |
 
 No fixed command patterns -- the orchestrator understands natural language and uses conversational context.
@@ -151,20 +150,20 @@ No fixed command patterns -- the orchestrator understands natural language and u
 ## How Task Management Works
 
 1. **Voice a task** -- say something like "refactor the auth system".
-2. **Planning** -- the console spawns a headless planner agent that breaks it down into subtasks with dependencies, written to `.dispatch/tasks.md`.
-3. **Dispatch** -- the console finds unblocked tasks and dispatches agents into isolated git worktrees (one branch per task).
+2. **Decomposition** -- the orchestrator breaks complex tasks into subtasks and issues multiple dispatch calls.
+3. **Dispatch** -- the console creates tasks in `.dispatch/tasks.md` and dispatches agents into isolated git worktrees (one branch per task).
 4. **Completion** -- when an agent finishes, the console merges the branch to main, marks the task done, and dispatches the next unblocked task.
-5. **Ticker** -- a scrolling LED-style marquee shows task events in real-time: planning status, dispatches, merges, and errors.
+5. **Ticker** -- a scrolling LED-style marquee shows task events in real-time: dispatches, merges, and errors.
 
-Simple one-off prompts skip the planning step and dispatch directly.
+Simple one-off prompts dispatch a single agent directly.
 
 ## Key Features
 
 - **LLM orchestrator** -- a persistent headless Claude process acts as the central coordinator. Voice transcripts go directly to the orchestrator, which decides what to do via tool calls. No command parsing -- just natural language.
 - **Embedded terminals** -- each pane is a real PTY, not text capture. Full color, interactive TUI apps, tab completion, Ctrl+C -- everything works.
 - **Git worktree isolation** -- each task runs on its own branch in its own worktree. Agents work in parallel without conflicts. Completed work is auto-merged.
-- **Task planning** -- voice a complex task and the console decomposes it into subtasks with dependencies, then orchestrates execution automatically.
-- **LED ticker** -- scrolling marquee shows planner status, task completions, merge results, and errors without consuming pane space.
+- **Task decomposition** -- voice a complex task and the orchestrator breaks it into subtasks, dispatching multiple agents in parallel.
+- **LED ticker** -- scrolling marquee shows task completions, merge results, and errors without consuming pane space.
 - **Auto-dispatch** -- send a prompt without specifying an agent and the orchestrator decides the best action: message an existing agent, launch a new one, or queue the task.
 - **NATO callsigns** -- agents are assigned Alpha, Bravo, Charlie, ... in dispatch order. Addressable by voice from any page.
 - **Paged layout** -- up to 26 agents across 7 pages. Off-screen agents keep running and are still addressable.

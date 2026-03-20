@@ -1135,8 +1135,9 @@ fn fetch_task_list_from_file(
 }
 
 
-/// Dispatch ready plan tasks to available agents. Returns the number dispatched.
-fn dispatch_plan_tasks(app: &mut App) -> usize {
+/// Dispatch ready tasks from .dispatch/tasks.md to available agents. Returns the
+/// number dispatched. Called after task completion to fill newly unblocked tasks.
+fn dispatch_ready_tasks(app: &mut App) -> usize {
     let ready = fetch_ready_tasks(&app.repo_root);
     let pane_rows = app.pane_rows;
     let pane_cols = app.pane_cols;
@@ -1188,7 +1189,7 @@ fn dispatch_plan_tasks(app: &mut App) -> usize {
         };
         app.push_orch(OrchestratorEventKind::TaskAssigned { id: task.id.clone(), agent: display_name.clone(), slot: slot_idx + 1 });
         app.push_ticker(format!(
-            "PLAN DISPATCH: {} -> {} (slot {})",
+            "DISPATCH: {} -> {} (slot {})",
             task.id, display_name, slot_idx + 1
         ));
         dispatched += 1;
@@ -2682,8 +2683,8 @@ fn main() -> io::Result<()> {
                             app.push_ticker(format!("TASK COMPLETE: {} closed {} — slot {} now standby", callsign, id, i + 1));
                         }
                         update_task_in_file(&slot_repo, &id, 'x', None);
-                        // dispatch-fnx: dispatch newly unblocked plan tasks after completion.
-                        dispatch_plan_tasks(&mut app);
+                        // Dispatch newly unblocked tasks after completion.
+                        dispatch_ready_tasks(&mut app);
                     } else {
                         app.push_ticker(format!("AGENT EXITED: {} (slot {}) — standby", callsign, i + 1));
                         if let Some(orch) = &mut app.orchestrator {
@@ -2759,8 +2760,8 @@ fn main() -> io::Result<()> {
             }
             update_task_in_file(&slot_repo, &task_id, 'x', None);
 
-            // dispatch-fnx: dispatch newly unblocked plan tasks after completion.
-            dispatch_plan_tasks(&mut app);
+            // Dispatch newly unblocked tasks after completion.
+            dispatch_ready_tasks(&mut app);
 
             // Pick up next available queued task and assign it to the idle slot.
             let next = fetch_ready_tasks(&slot_repo).into_iter().next();
