@@ -447,7 +447,13 @@ impl App {
     }
 
     fn psk_display(&self) -> String {
-        self.psk.clone()
+        if self.psk_expanded {
+            self.psk.clone()
+        } else if self.psk.len() >= 4 {
+            format!("{}...", &self.psk[..4])
+        } else {
+            "****".to_string()
+        }
     }
 
     /// True if `global_idx` is the last empty slot on the last page (dispatch-bgz.11).
