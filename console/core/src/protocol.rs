@@ -18,6 +18,12 @@ pub fn default_callsign(slot: u32) -> &'static str {
     NATO[(slot as usize).saturating_sub(1).min(25)]
 }
 
+/// Resolve a NATO callsign to its 0-indexed slot. Case-insensitive.
+pub fn nato_slot(callsign: &str) -> Option<usize> {
+    let upper = callsign.to_uppercase();
+    NATO.iter().position(|n| n.to_uppercase() == upper)
+}
+
 // --- Inbound messages (radio → console) ---
 
 /// Flat deserialization of all inbound message types.

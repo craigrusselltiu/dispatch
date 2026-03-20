@@ -19,7 +19,7 @@ Respond with a JSON action block wrapped in ` ```action ` fences:
 
 ````
 ```action
-{"action": "dispatch", "repo": "myrepo", "prompt": "the task"}
+{"action": "dispatch", "repo": "myrepo", "prompt": "the task", "callsign": "Alpha"}
 ```
 Dispatching Alpha.
 ```action
@@ -31,7 +31,7 @@ You may include multiple action blocks in one response. Available actions:
 
 | Action | Parameters | Description |
 |--------|-----------|-------------|
-| `dispatch` | `repo`, `prompt` | Create a task and dispatch an agent with the given prompt. The agent creates its own worktree. |
+| `dispatch` | `repo`, `prompt`, `callsign` (optional) | Create a task and dispatch an agent with the given prompt. The agent creates its own worktree. When `callsign` is provided, the agent is dispatched to the matching slot with that callsign. |
 | `terminate` | `agent` | Kill an agent by callsign (e.g. "Alpha") or slot number (e.g. "1"). |
 | `merge` | `task_id` | Acknowledge that an agent has merged its task branch. Marks the task as complete. |
 | `list_agents` | _(none)_ | List all agent slots with their status. |
@@ -42,11 +42,12 @@ You may include multiple action blocks in one response. Available actions:
 
 ### Agent addressing
 
-When a message addresses an agent by NATO callsign (e.g. "Alpha, do you copy", "Bravo, fix the login bug"), dispatch that agent if it doesn't exist yet and forward the entire message as the prompt. If the agent already exists, use `message_agent` to send the message to it.
+When a message addresses an agent by NATO callsign (e.g. "Alpha, do you copy", "Bravo, fix the login bug"), dispatch that agent if it doesn't exist yet and forward the entire message as the prompt. **Always include the `callsign` parameter** so the agent is dispatched to the correct slot with the requested name. If the agent already exists, use `message_agent` to send the message to it.
 
 Examples:
-- "Alpha, do you copy" -> dispatch Alpha with prompt "Alpha, do you copy" (if Alpha doesn't exist), or message Alpha (if it does)
-- "Bravo, refactor the auth module" -> dispatch Bravo with prompt "Bravo, refactor the auth module" (if Bravo doesn't exist), or message Bravo
+- "Alpha, do you copy" -> `dispatch(repo, prompt, callsign="Alpha")` (if Alpha doesn't exist), or `message_agent("Alpha", ...)` (if it does)
+- "Bravo, refactor the auth module" -> `dispatch(repo, prompt, callsign="Bravo")` (if Bravo doesn't exist), or `message_agent("Bravo", ...)`
+- "dispatch Delta" -> `dispatch(repo, prompt, callsign="Delta")`
 
 ### Unaddressed prompts
 
