@@ -44,8 +44,9 @@ pub fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-/// Strip ANSI escape sequences from a string.
-pub fn strip_ansi(s: &str) -> String {
+/// Clean a dispatch message: strip ANSI escapes and non-printable chars,
+/// then trim shell artifacts like trailing `")` from echo output.
+pub fn clean_dispatch_msg(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars();
     while let Some(c) = chars.next() {
@@ -69,16 +70,16 @@ pub fn strip_ansi(s: &str) -> String {
                         prev = c2;
                     }
                 }
-                Some(c2) if ('\x40'..='\x5f').contains(&c2) => {
-                    // Other Fe sequences (single char after ESC)
-                }
+                Some(c2) if ('\x40'..='\x5f').contains(&c2) => {}
                 _ => {}
             }
-        } else {
+        } else if c.is_ascii_graphic() || c == ' ' {
             out.push(c);
         }
     }
-    out
+    // Trim trailing shell artifacts: ") or ")
+    let out = out.trim().trim_end_matches('"').trim_end_matches(')').trim_end_matches('"');
+    out.trim().to_string()
 }
 
 /// Strip ```action ... ``` and <tool_call>...</tool_call> blocks from text,

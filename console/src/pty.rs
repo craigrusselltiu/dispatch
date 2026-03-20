@@ -98,7 +98,7 @@ pub fn dispatch_slot(
                         if byte == b'\n' {
                             if let Ok(line) = std::str::from_utf8(&line_buf) {
                                 if let Some(pos) = line.find(DISPATCH_MSG_MARKER) {
-                                    let msg = util::strip_ansi(line[pos + DISPATCH_MSG_MARKER.len()..].trim());
+                                    let msg = util::clean_dispatch_msg(line[pos + DISPATCH_MSG_MARKER.len()..].trim());
                                     if !msg.is_empty() {
                                         let _ = agent_msg_tx.send((global_idx, msg));
                                     }
