@@ -199,7 +199,7 @@ fn pane_info_strip(global_idx: usize, local_idx: usize, app: &App) -> Text<'stat
         }
         Some(agent) => {
             let name_style = if is_target {
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+                Style::default().fg(Color::LightGreen).add_modifier(Modifier::BOLD)
             } else {
                 Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
             };
