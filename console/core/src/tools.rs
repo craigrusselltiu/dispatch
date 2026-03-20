@@ -152,7 +152,7 @@ pub fn tool_definitions() -> serde_json::Value {
         },
         {
             "name": "merge",
-            "description": "Merge a completed task's git worktree branch back into the main branch. On success, the worktree and branch are cleaned up. On conflict, the merge is aborted and the worktree is preserved.",
+            "description": "Acknowledge a completed task's merge. Validates that the agent actually merged its branch into main: returns success only if the task branch was merged and cleaned up, fails if the branch still exists or no merge commit is found.",
             "input_schema": {
                 "type": "object",
                 "properties": {

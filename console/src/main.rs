@@ -705,10 +705,74 @@ impl App {
                 }
             }
 
-            // dispatch-bka: agents now merge their own branches, so this just
-            // acknowledges the completion and updates the task file.
+            // dispatch-bka: agents now merge their own branches, so this
+            // validates the merge actually happened before acknowledging.
             tools::ToolCall::Merge { task_id } => {
                 let target_repo = self.default_repo_root().to_string();
+                let branch = format!("task/{}", task_id);
+
+                // Check if the task branch still exists (agent should have
+                // deleted it after merging).
+                let branch_exists = Command::new("git")
+                    .args(["rev-parse", "--verify", &format!("refs/heads/{}", branch)])
+                    .current_dir(&target_repo)
+                    .output()
+                    .map(|o| o.status.success())
+                    .unwrap_or(false);
+
+                if branch_exists {
+                    // Branch still exists — agent did not merge and clean up.
+                    // Check if it has any commits ahead of HEAD (i.e. actual work).
+                    let has_commits = Command::new("git")
+                        .args(["log", "--oneline", &format!("HEAD..{}", branch)])
+                        .current_dir(&target_repo)
+                        .output()
+                        .ok()
+                        .and_then(|o| String::from_utf8(o.stdout).ok())
+                        .map(|s| !s.trim().is_empty())
+                        .unwrap_or(false);
+
+                    let message = if has_commits {
+                        format!("task/{} branch exists with unmerged commits — agent did not merge into main", task_id)
+                    } else {
+                        format!("task/{} branch exists but has no commits — agent did not make any changes", task_id)
+                    };
+
+                    self.push_ticker(format!("MERGE FAILED: task/{}", task_id));
+                    self.push_chat("Dispatcher", &message);
+                    return tools::ToolResult::Merged {
+                        task_id: task_id.clone(),
+                        success: false,
+                        message,
+                    };
+                }
+
+                // Branch doesn't exist — check if main has a merge commit for
+                // this task (evidence the agent actually merged).
+                let has_merge_commit = Command::new("git")
+                    .args(["log", "--oneline", "--grep", &format!("task/{}", task_id), "-1"])
+                    .current_dir(&target_repo)
+                    .output()
+                    .ok()
+                    .and_then(|o| String::from_utf8(o.stdout).ok())
+                    .map(|s| !s.trim().is_empty())
+                    .unwrap_or(false);
+
+                if !has_merge_commit {
+                    let message = format!(
+                        "task/{} branch does not exist and no merge commit found — agent did not make any changes",
+                        task_id
+                    );
+                    self.push_ticker(format!("MERGE FAILED: task/{}", task_id));
+                    self.push_chat("Dispatcher", &message);
+                    return tools::ToolResult::Merged {
+                        task_id: task_id.clone(),
+                        success: false,
+                        message,
+                    };
+                }
+
+                // Merge verified — update task and report success.
                 update_task_in_file(&target_repo, task_id, 'x', None);
                 self.push_orch(OrchestratorEventKind::Merged { id: task_id.clone() });
                 self.push_ticker(format!("MERGED: task/{}", task_id));
