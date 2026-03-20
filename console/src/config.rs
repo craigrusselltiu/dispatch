@@ -1,3 +1,4 @@
+use dispatch_core::protocol::NATO_DEFAULTS;
 use rand::Rng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -17,7 +18,14 @@ pub struct AuthConfig {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct TerminalConfig {
     pub scrollback_lines: u32,
-    pub max_agents: u32,
+    /// Deprecated: use [agents].callsigns instead. Kept for backward compatibility.
+    #[serde(default)]
+    pub max_agents: Option<u32>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct AgentsConfig {
+    pub callsigns: Vec<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -25,7 +33,30 @@ pub struct Config {
     pub server: ServerConfig,
     pub auth: AuthConfig,
     pub terminal: TerminalConfig,
+    #[serde(default)]
+    pub agents: Option<AgentsConfig>,
     pub tools: HashMap<String, String>,
+}
+
+impl Config {
+    /// Effective callsign list. Uses [agents].callsigns if present,
+    /// otherwise generates NATO names from terminal.max_agents for
+    /// backward compatibility.
+    pub fn callsigns(&self) -> Vec<String> {
+        if let Some(agents) = &self.agents {
+            agents.callsigns.clone()
+        } else {
+            let n = self.terminal.max_agents.unwrap_or(8) as usize;
+            NATO_DEFAULTS[..n.min(NATO_DEFAULTS.len())]
+                .iter()
+                .map(|s| s.to_string())
+                .collect()
+        }
+    }
+}
+
+fn default_callsigns() -> Vec<String> {
+    NATO_DEFAULTS[..8].iter().map(|s| s.to_string()).collect()
 }
 
 impl Default for Config {
@@ -43,8 +74,11 @@ impl Default for Config {
             auth: AuthConfig { psk },
             terminal: TerminalConfig {
                 scrollback_lines: 1000,
-                max_agents: 8,
+                max_agents: None,
             },
+            agents: Some(AgentsConfig {
+                callsigns: default_callsigns(),
+            }),
             tools,
         }
     }
@@ -166,6 +200,14 @@ fn to_toml_with_comments(cfg: &Config) -> String {
         }
     }
 
+    // Build callsigns array.
+    let callsigns = cfg.callsigns();
+    let callsigns_str = callsigns
+        .iter()
+        .map(|s| format!("\"{}\"", s))
+        .collect::<Vec<_>>()
+        .join(", ");
+
     format!(
         "[server]\n\
          port = {port}\n\
@@ -177,8 +219,11 @@ fn to_toml_with_comments(cfg: &Config) -> String {
          \n\
          [terminal]\n\
          scrollback_lines = {scrollback}\n\
-         # Maximum concurrent agents. 4-26, in multiples of 4 (one page per 4 agents).\n\
-         max_agents = {max_agents}\n\
+         \n\
+         [agents]\n\
+         # Agent names, in slot order. The number of entries determines the slot count.\n\
+         # Pages are allocated automatically (4 slots per page).\n\
+         callsigns = [{callsigns}]\n\
          \n\
          [tools]\n\
          {tools}",
@@ -186,7 +231,7 @@ fn to_toml_with_comments(cfg: &Config) -> String {
         bind = cfg.server.bind,
         psk = cfg.auth.psk,
         scrollback = cfg.terminal.scrollback_lines,
-        max_agents = cfg.terminal.max_agents,
+        callsigns = callsigns_str,
         tools = tools_lines,
     )
 }

@@ -57,23 +57,18 @@ The `.dispatch/` directory is gitignored by the console on first run.
 
 ## Agent Naming
 
-Every agent is assigned a callsign from the NATO phonetic alphabet by default, in dispatch order:
+Agent names are defined in the `[agents]` section of `config.toml`. The list determines both the callsigns and the number of available slots. By default, the first 8 NATO phonetic alphabet names are used:
 
-| Slot | Callsign | Slot | Callsign  | Slot | Callsign  |
-|------|----------|------|-----------|------|-----------|
-| 1    | Alpha    | 10   | Juliet    | 19   | Sierra    |
-| 2    | Bravo    | 11   | Kilo      | 20   | Tango     |
-| 3    | Charlie  | 12   | Lima      | 21   | Uniform   |
-| 4    | Delta    | 13   | Mike      | 22   | Victor    |
-| 5    | Echo     | 14   | November  | 23   | Whiskey   |
-| 6    | Foxtrot  | 15   | Oscar     | 24   | X-ray     |
-| 7    | Golf     | 16   | Papa      | 25   | Yankee    |
-| 8    | Hotel    | 17   | Quebec    | 26   | Zulu      |
-| 9    | India    | 18   | Romeo     |      |           |
+```toml
+[agents]
+callsigns = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel"]
+```
 
-Maximum 26 concurrent agents. Callsigns are bound to slots, not agent instances. If Alpha is terminated and a new agent is dispatched into slot 1, it becomes Alpha again.
+Users can customize this list with any names they prefer. The number of entries determines the slot count (4-26), and pages are allocated automatically (4 slots per page).
 
-Agents can be renamed by the orchestrator. Custom names replace the NATO default until the agent is terminated, at which point the slot reverts.
+Callsigns are bound to slots, not agent instances. If Alpha is terminated and a new agent is dispatched into slot 1, it becomes Alpha again.
+
+Agents can be renamed by the orchestrator. Custom names replace the configured default until the agent is terminated, at which point the slot reverts.
 
 Callsigns are the primary identifier for voice commands. All agents are addressable by voice regardless of which page is currently displayed in the console.
 
@@ -659,8 +654,11 @@ psk = "a7f3e9b1c4d8..."
 
 [terminal]
 scrollback_lines = 1000
-# Maximum concurrent agents. 4-26, in multiples of 4 (one page per 4 agents).
-max_agents = 8
+
+[agents]
+# Agent names, in slot order. The number of entries determines the slot count.
+# Pages are allocated automatically (4 slots per page).
+callsigns = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel"]
 
 [tools]
 claude-code = "claude"

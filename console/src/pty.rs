@@ -12,7 +12,7 @@ use chrono::Local;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
-use crate::types::{SlotState, NATO, MAX_SLOTS};
+use crate::types::SlotState;
 use crate::util;
 
 /// Marker prefix that agents echo to send chat messages to the radio app.
@@ -60,6 +60,7 @@ pub fn dispatch_slot(
     repo_root: &str,
     initial_prompt: Option<&str>,
     agent_msg_tx: std::sync::mpsc::Sender<(usize, String)>,
+    callsign: &str,
 ) -> Option<SlotState> {
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -165,7 +166,7 @@ pub fn dispatch_slot(
     });
 
     let writer = pair.master.take_writer().ok()?;
-    let callsign = NATO[global_idx % NATO.len()].to_string();
+    let callsign = callsign.to_string();
     let wall = Local::now().format("%H:%M").to_string();
 
     let now = Instant::now();
@@ -217,7 +218,7 @@ pub fn terminate_slot(slot: &mut Option<SlotState>) -> Option<String> {
 }
 
 /// Resize all active PTYs to the new pane size (dispatch-bgz.6).
-pub fn resize_all_slots(slots: &mut [Option<SlotState>; MAX_SLOTS], new_size: PtySize) {
+pub fn resize_all_slots(slots: &mut [Option<SlotState>], new_size: PtySize) {
     for slot in slots.iter_mut().flatten() {
         let _ = slot.master.resize(new_size);
         let mut parser = slot.screen.lock().unwrap();

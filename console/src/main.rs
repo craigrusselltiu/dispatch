@@ -10,7 +10,7 @@
 //   Quad pane   : 2x2 grid; each pane has info strip + terminal area
 //   Footer bar  : mode indicator, target, navigation hints
 //
-// Pages: slots 1-4 on page 1, 5-8 on page 2, etc. (max 26 slots / 7 pages).
+// Pages: slots 1-4 on page 1, 5-8 on page 2, etc. Slot count is config-driven.
 // All PTYs run regardless of visible page. Each slot owns its own PTY.
 
 mod app;
@@ -89,6 +89,7 @@ fn main() -> io::Result<()> {
     }
 
     let cfg = config::load_or_create();
+    let callsigns = cfg.callsigns();
 
     // Load or generate TLS certificate (dispatch-ct2.6).
     let tls = config::load_or_create_tls();
@@ -98,7 +99,7 @@ fn main() -> io::Result<()> {
     let (chat_tx, _) = tokio::sync::broadcast::channel::<String>(256);
 
     // Start the WebSocket server with TLS (dispatch-bgz.7, dispatch-ct2.6).
-    let ws_state: ws_server::SharedState = Arc::new(Mutex::new(ws_server::ConsoleState::new()));
+    let ws_state: ws_server::SharedState = Arc::new(Mutex::new(ws_server::ConsoleState::new(callsigns.clone())));
     {
         let state = Arc::clone(&ws_state);
         let psk = cfg.auth.psk.clone();
@@ -157,17 +158,19 @@ fn main() -> io::Result<()> {
         cfg.terminal.scrollback_lines,
         chat_tx,
         agent_msg_tx,
+        callsigns.clone(),
     );
 
     // dispatch-guj: eagerly spawn orchestrator in background so it's warm
     // by the time the first voice message arrives (eliminates first-message lag).
     let orch_repos: Vec<String> = app.repo_list().iter().map(|s| s.to_string()).collect();
     let orch_cwd = app.default_repo_root().to_string();
+    let orch_callsigns = callsigns;
     let (orch_ready_tx, orch_ready_rx) = mpsc::channel::<orchestrator::Orchestrator>();
     thread::spawn(move || {
         let repo_refs: Vec<&str> = orch_repos.iter().map(|s| s.as_str()).collect();
         let tool_defs = tools::tool_definitions();
-        let system_prompt = orchestrator::build_system_prompt(&repo_refs, &tool_defs);
+        let system_prompt = orchestrator::build_system_prompt(&repo_refs, &tool_defs, &orch_callsigns);
         if let Some(orch) = orchestrator::spawn(&system_prompt, &orch_cwd) {
             let _ = orch_ready_tx.send(orch);
         }
@@ -197,7 +200,8 @@ fn main() -> io::Result<()> {
 
     'main: loop {
         // Close any slots whose child exited naturally (dispatch-bgz.9, dispatch-xje).
-        for i in 0..MAX_SLOTS {
+        let slot_count = app.slots.len();
+        for i in 0..slot_count {
             if let Some(s) = &app.slots[i] {
                 if s.child_exited.load(Ordering::Relaxed) {
                     let callsign = s.display_name().to_string();
@@ -424,8 +428,8 @@ fn main() -> io::Result<()> {
                                         if app.active_count() == 0 {
                                             break 'main;
                                         }
-                                        for i in 0..MAX_SLOTS {
-                                            pty::terminate_slot(&mut app.slots[i]);
+                                        for slot in app.slots.iter_mut() {
+                                            pty::terminate_slot(slot);
                                         }
                                         // Kill orchestrator on quit.
                                         if let Some(orch) = &mut app.orchestrator {
@@ -483,12 +487,14 @@ fn main() -> io::Result<()> {
                                             // Dispatch into the first empty slot, targeting the selected repo.
                                             if let Some(g) = app.slots.iter().position(|s| s.is_none()) {
                                                 let cmd = app.tool_cmd("claude-code").to_string();
+                                                let cs = app.callsigns.get(g).cloned().unwrap_or_else(|| format!("Agent-{}", g + 1));
                                                 if let Some(slot) = pty::dispatch_slot(
                                                     g, "claude-code", &cmd, app.pane_rows, app.pane_cols,
                                                     Some(&selected_repo), app.scrollback_lines,
                                                     util::repo_name_from_path(&selected_repo), &selected_repo,
                                                     None,
                                                     app.agent_msg_tx.clone(),
+                                                    &cs,
                                                 ) {
                                                     let page = g / SLOTS_PER_PAGE;
                                                     let local = g % SLOTS_PER_PAGE;

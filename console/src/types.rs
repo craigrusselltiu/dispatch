@@ -8,16 +8,8 @@ use std::{
 
 use dispatch_core::orchestrator;
 
-/// Total number of agent slots (maps to NATO alphabet A-Z).
-pub const MAX_SLOTS: usize = 26;
 /// Slots per page (2x2 grid).
 pub const SLOTS_PER_PAGE: usize = 4;
-
-pub const NATO: &[&str] = &[
-    "ALPHA", "BRAVO", "CHARLIE", "DELTA", "ECHO", "FOXTROT", "GOLF", "HOTEL", "INDIA", "JULIET",
-    "KILO", "LIMA", "MIKE", "NOVEMBER", "OSCAR", "PAPA", "QUEBEC", "ROMEO", "SIERRA", "TANGO",
-    "UNIFORM", "VICTOR", "WHISKEY", "X-RAY", "YANKEE", "ZULU",
-];
 
 /// Input mode for the console (dispatch-bgz.4).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -98,7 +90,7 @@ pub enum RadioState {
 /// Per-slot PTY and display state (dispatch-bgz.2).
 /// Not Send — only used on the main thread.
 pub struct SlotState {
-    pub callsign: String,            // NATO default (slot-bound)
+    pub callsign: String,            // config-defined (slot-bound)
     pub custom_name: Option<String>, // user rename (dispatch-bgz.3)
     pub tool: String,
     pub task_id: Option<String>,
@@ -126,7 +118,9 @@ impl SlotState {
 }
 
 pub struct App {
-    pub slots: [Option<SlotState>; MAX_SLOTS],
+    pub slots: Vec<Option<SlotState>>,
+    /// Configured agent callsigns (drives slot count).
+    pub callsigns: Vec<String>,
     pub current_page: usize,
     /// 0-indexed into the current page's 4 visible slots.
     pub target: usize,

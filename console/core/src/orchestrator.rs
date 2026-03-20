@@ -50,10 +50,11 @@ pub struct Orchestrator {
 // ── System prompt ────────────────────────────────────────────────────────────
 
 /// Build the orchestrator system prompt. Reads from docs/ORCHESTRATOR.md in
-/// the repo, prepending the active repository name as context.
+/// the repo, prepending the active repository name and configured callsigns.
 pub fn build_system_prompt(
     repos: &[&str],
     _tool_defs: &serde_json::Value,
+    callsigns: &[String],
 ) -> String {
     let repo_name = repos.first()
         .and_then(|p| std::path::Path::new(p).file_name())
@@ -67,7 +68,11 @@ pub fn build_system_prompt(
         })
         .unwrap_or_else(|| "You are a dispatch coordinator. Manage AI coding agents via voice commands.".to_string());
 
-    format!("Repository: {}\n\n{}", repo_name, md_content)
+    let callsign_list = callsigns.join(", ");
+    format!(
+        "Repository: {}\n\nAvailable agent callsigns (slot 1 through {}): {}\n\n{}",
+        repo_name, callsigns.len(), callsign_list, md_content
+    )
 }
 
 // ── Spawn ────────────────────────────────────────────────────────────────────
@@ -374,8 +379,11 @@ mod tests {
     fn system_prompt_includes_repo() {
         let repos = vec!["/home/user/myrepo"];
         let tools = tools::tool_definitions();
-        let prompt = build_system_prompt(&repos, &tools);
+        let callsigns = vec!["Alpha".to_string(), "Bravo".to_string()];
+        let prompt = build_system_prompt(&repos, &tools, &callsigns);
         // Should always contain repo name as context prefix.
         assert!(prompt.contains("Repository: myrepo"));
+        // Should list configured callsigns.
+        assert!(prompt.contains("Alpha, Bravo"));
     }
 }

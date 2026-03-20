@@ -5,23 +5,25 @@
 
 use serde::{Deserialize, Serialize};
 
-/// NATO phonetic callsigns, 1-indexed (slot 1 → Alpha, ..., slot 26 → Zulu).
-pub const NATO: [&str; 26] = [
+/// NATO phonetic alphabet, used as the default agent callsign list.
+pub const NATO_DEFAULTS: [&str; 26] = [
     "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel",
     "India", "Juliet", "Kilo", "Lima", "Mike", "November", "Oscar", "Papa",
     "Quebec", "Romeo", "Sierra", "Tango", "Uniform", "Victor", "Whiskey",
     "X-ray", "Yankee", "Zulu",
 ];
 
-/// Default callsign for a 1-indexed slot number.
-pub fn default_callsign(slot: u32) -> &'static str {
-    NATO[(slot as usize).saturating_sub(1).min(25)]
+/// Callsign for a 1-indexed slot number, given the configured callsign list.
+pub fn callsign_for_slot(slot: u32, callsigns: &[String]) -> &str {
+    callsigns.get((slot as usize).saturating_sub(1))
+        .map(|s| s.as_str())
+        .unwrap_or("Agent")
 }
 
-/// Resolve a NATO callsign to its 0-indexed slot. Case-insensitive.
-pub fn nato_slot(callsign: &str) -> Option<usize> {
+/// Resolve a callsign to its 0-indexed slot. Case-insensitive.
+pub fn callsign_to_slot(callsign: &str, callsigns: &[String]) -> Option<usize> {
     let upper = callsign.to_uppercase();
-    NATO.iter().position(|n| n.to_uppercase() == upper)
+    callsigns.iter().position(|n| n.to_uppercase() == upper)
 }
 
 // --- Inbound messages (radio → console) ---

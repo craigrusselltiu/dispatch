@@ -125,7 +125,7 @@ pub fn render_header(f: &mut Frame, area: Rect, app: &App) {
         "PSK: {}  AGENTS: {}/{}{}{}  PAGE {}/{}  {}",
         app.psk_display(),
         app.active_count(),
-        MAX_SLOTS,
+        app.slots.len(),
         workspace_indicator,
         orch_indicator,
         app.current_page + 1,
@@ -317,7 +317,7 @@ pub fn render_panes(f: &mut Frame, area: Rect, app: &App) {
     let mut page_scrolled: [bool; SLOTS_PER_PAGE] = [false; SLOTS_PER_PAGE];
     for local in 0..SLOTS_PER_PAGE {
         let g = page_start + local;
-        if g < MAX_SLOTS {
+        if g < app.slots.len() {
             if let Some(slot) = &app.slots[g] {
                 let mut parser = slot.screen.lock().unwrap();
                 parser.set_scrollback(slot.scroll_offset);
@@ -346,7 +346,7 @@ pub fn render_panes(f: &mut Frame, area: Rect, app: &App) {
     let areas = [left_rows[0], right_rows[0], left_rows[1], right_rows[1]];
     for local in 0..SLOTS_PER_PAGE {
         let g = page_start + local;
-        if g < MAX_SLOTS {
+        if g < app.slots.len() {
             render_pane(f, areas[local], local, g, app, page_lines[local].take(), page_scrolled[local]);
         }
     }

@@ -5,9 +5,7 @@
 
 use std::sync::{mpsc, Arc, Mutex};
 
-use crate::protocol::{default_callsign, OutboundMsg, RawInbound, SlotInfo};
-
-pub const MAX_SLOTS: usize = 26;
+use crate::protocol::{callsign_for_slot, OutboundMsg, RawInbound, SlotInfo};
 
 // --- Event channel -------------------------------------------------------
 
@@ -41,7 +39,9 @@ pub struct AgentSlot {
 }
 
 pub struct ConsoleState {
-    pub slots: [Option<AgentSlot>; MAX_SLOTS],
+    pub slots: Vec<Option<AgentSlot>>,
+    /// Configured callsign list (drives slot count).
+    pub callsigns: Vec<String>,
     /// Currently targeted slot (1-indexed). None if no agents are running.
     pub target: Option<u32>,
     /// Queued beads task IDs (tasks waiting for an available agent).
@@ -53,9 +53,11 @@ pub struct ConsoleState {
 }
 
 impl ConsoleState {
-    pub fn new() -> Self {
+    pub fn new(callsigns: Vec<String>) -> Self {
+        let slot_count = callsigns.len();
         Self {
-            slots: std::array::from_fn(|_| None),
+            slots: vec![None; slot_count],
+            callsigns,
             target: None,
             queued_tasks: Vec::new(),
             task_counter: 0,
@@ -91,7 +93,7 @@ impl ConsoleState {
     }
 
     pub fn all_slot_infos(&self) -> Vec<SlotInfo> {
-        (1..=MAX_SLOTS as u32).map(|s| self.slot_info(s)).collect()
+        (1..=self.slots.len() as u32).map(|s| self.slot_info(s)).collect()
     }
 
     pub fn first_empty_slot(&self) -> Option<u32> {
@@ -127,7 +129,7 @@ pub fn handle_message(raw: RawInbound, state: &SharedState) -> Option<OutboundMs
             let slot = raw.slot?;
             let mut st = state.lock().unwrap();
             let idx = (slot as usize).saturating_sub(1);
-            if idx >= MAX_SLOTS {
+            if idx >= st.slots.len() {
                 return Some(OutboundMsg::Error {
                     message: format!("invalid slot {slot}"),
                     seq,
@@ -186,7 +188,7 @@ pub fn handle_message(raw: RawInbound, state: &SharedState) -> Option<OutboundMs
             };
 
             let idx = (slot as usize).saturating_sub(1);
-            if idx >= MAX_SLOTS {
+            if idx >= st.slots.len() {
                 return Some(OutboundMsg::Error {
                     message: format!("invalid slot {slot}"),
                     seq,
@@ -235,14 +237,14 @@ pub fn handle_message(raw: RawInbound, state: &SharedState) -> Option<OutboundMs
             };
 
             let idx = (slot as usize).saturating_sub(1);
-            if idx >= MAX_SLOTS {
+            if idx >= st.slots.len() {
                 return Some(OutboundMsg::Error {
                     message: format!("invalid slot {slot}"),
                     seq,
                 });
             }
 
-            let callsign = default_callsign(slot).to_string();
+            let callsign = callsign_for_slot(slot, &st.callsigns).to_string();
             st.slots[idx] = Some(AgentSlot {
                 callsign: callsign.clone(),
                 tool: tool.clone(),
@@ -258,7 +260,7 @@ pub fn handle_message(raw: RawInbound, state: &SharedState) -> Option<OutboundMs
             let slot = raw.slot?;
             let mut st = state.lock().unwrap();
             let idx = (slot as usize).saturating_sub(1);
-            if idx >= MAX_SLOTS {
+            if idx >= st.slots.len() {
                 return Some(OutboundMsg::Error {
                     message: format!("invalid slot {slot}"),
                     seq,
@@ -284,7 +286,7 @@ pub fn handle_message(raw: RawInbound, state: &SharedState) -> Option<OutboundMs
             let callsign = raw.callsign.as_deref().unwrap_or("").to_string();
             let mut st = state.lock().unwrap();
             let idx = (slot as usize).saturating_sub(1);
-            if idx >= MAX_SLOTS {
+            if idx >= st.slots.len() {
                 return Some(OutboundMsg::Error {
                     message: format!("invalid slot {slot}"),
                     seq,
@@ -321,8 +323,13 @@ pub fn handle_message(raw: RawInbound, state: &SharedState) -> Option<OutboundMs
 mod tests {
     use super::*;
 
+    fn default_callsigns() -> Vec<String> {
+        ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel"]
+            .iter().map(|s| s.to_string()).collect()
+    }
+
     fn make_state() -> SharedState {
-        Arc::new(Mutex::new(ConsoleState::new()))
+        Arc::new(Mutex::new(ConsoleState::new(default_callsigns())))
     }
 
     fn raw(type_: &str) -> RawInbound {

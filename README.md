@@ -10,7 +10,7 @@ Turn your Android phone into a push-to-talk radio that dispatches AI coding agen
 │  Radio       │                               │  Console         │
 │  (Android)   │                               │  (PC TUI)        │
 │              │                               │                  │
-│  Volume keys │                               │  26 agent slots  │
+│  Volume keys │                               │  Agent slots     │
 │  Speech-to-  │                               │  Embedded PTYs   │
 │  text        │                               │  Git worktrees   │
 └──────────────┘                               └──────────────────┘
@@ -18,7 +18,7 @@ Turn your Android phone into a push-to-talk radio that dispatches AI coding agen
 
 ## Components
 
-**Dispatch Console** (PC) -- a terminal UI with up to 26 embedded agent panes displayed in a 2x2 grid across pages. A persistent LLM orchestrator receives voice transcripts and coordinates everything: dispatching agents, routing messages, managing work. Supports direct keyboard input into any agent pane via vim-style modal controls.
+**Dispatch Console** (PC) -- a terminal UI with configurable agent slots displayed in a 2x2 grid across pages. A persistent LLM orchestrator receives voice transcripts and coordinates everything: dispatching agents, routing messages, managing work. Supports direct keyboard input into any agent pane via vim-style modal controls.
 
 **Dispatch Radio** (Android) -- a push-to-talk app controlled by hardware volume buttons. Hold Volume Down to speak; the app transcribes speech and sends it to the console over a TLS-encrypted WebSocket on your local network.
 
@@ -127,7 +127,7 @@ The PSK is displayed in the console header bar. You will need it to connect the 
 - **LLM orchestrator** -- a persistent headless Claude process acts as the central coordinator. Voice transcripts go directly to it; it responds with tool calls. No command parsing.
 - **Embedded terminals** -- each pane is a real PTY with full color, interactive TUI support, tab completion, and signal handling.
 - **Git worktree isolation** -- each agent works on its own branch in its own worktree. Agents run in parallel without conflicts and handle their own merging.
-- **NATO callsigns** -- agents are named Alpha through Zulu in dispatch order (up to 26 concurrent agents across 7 pages). All agents are addressable by voice from any page.
+- **Configurable agent names** -- agent callsigns are defined in `config.toml`. The number of entries determines slot count and page layout. Defaults to NATO phonetic alphabet (Alpha through Hotel). All agents are addressable by voice from any page.
 - **LED ticker** -- a scrolling marquee shows dispatches, completions, merge results, and errors in real-time without consuming pane space.
 - **Clean target repo** -- all dispatch artifacts live in `.dispatch/` (gitignored). Your repo stays untouched.
 - **Networking** -- TLS-encrypted WebSocket with PSK authentication. mDNS auto-discovery eliminates manual IP configuration.

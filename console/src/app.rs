@@ -25,9 +25,13 @@ impl App {
         scrollback_lines: u32,
         chat_tx: tokio::sync::broadcast::Sender<String>,
         agent_msg_tx: std::sync::mpsc::Sender<(usize, String)>,
+        callsigns: Vec<String>,
     ) -> Self {
+        let slot_count = callsigns.len();
+        let slots: Vec<Option<SlotState>> = (0..slot_count).map(|_| None).collect();
         App {
-            slots: std::array::from_fn(|_| None),
+            slots,
+            callsigns,
             current_page: 0,
             target: 0,
             mode: Mode::Command,
@@ -93,16 +97,9 @@ impl App {
         self.slots.iter().filter(|s| s.is_some()).count()
     }
 
-    /// Total pages needed: enough to show all active slots plus at least one standby.
+    /// Total pages: determined by the configured slot count (callsigns list length).
     pub fn total_pages(&self) -> usize {
-        let last_active = self
-            .slots
-            .iter()
-            .rposition(|s| s.is_some())
-            .map(|i| i + 1)
-            .unwrap_or(0);
-        let needed = (last_active + SLOTS_PER_PAGE).max(SLOTS_PER_PAGE);
-        ((needed + SLOTS_PER_PAGE - 1) / SLOTS_PER_PAGE).min(MAX_SLOTS / SLOTS_PER_PAGE + 1)
+        (self.slots.len() + SLOTS_PER_PAGE - 1) / SLOTS_PER_PAGE
     }
 
     pub fn psk_display(&self) -> String {
@@ -232,13 +229,8 @@ impl App {
                 // matching slot (e.g. Delta -> slot 4) instead of picking the
                 // first empty slot.
                 let slot_idx = if let Some(cs) = requested_callsign.as_deref() {
-                    match protocol::nato_slot(cs) {
+                    match protocol::callsign_to_slot(cs, &self.callsigns) {
                         Some(idx) => {
-                            if idx >= MAX_SLOTS {
-                                return tools::ToolResult::Error {
-                                    message: format!("invalid callsign '{}'", cs),
-                                };
-                            }
                             // Slot must be empty or idle (no active task).
                             match &self.slots[idx] {
                                 Some(slot) if slot.task_id.is_some() => {
@@ -279,7 +271,7 @@ impl App {
                 // Determine callsign before spawn so it can be included in the prompt.
                 let callsign_for_prompt = requested_callsign
                     .as_deref()
-                    .unwrap_or_else(|| protocol::default_callsign((slot_idx + 1) as u32));
+                    .unwrap_or_else(|| protocol::callsign_for_slot((slot_idx + 1) as u32, &self.callsigns));
                 let full_prompt = format!("Your callsign is {}. {}", callsign_for_prompt, prompt);
 
                 // Spawn PTY if slot is empty. Agent creates its own worktree.
@@ -291,6 +283,7 @@ impl App {
                         repo_name_from_path(&target_repo), &target_repo,
                         Some(&full_prompt),
                         self.agent_msg_tx.clone(),
+                        callsign_for_prompt,
                     ) {
                         Some(slot) => { self.slots[slot_idx] = Some(slot); }
                         None => return tools::ToolResult::Error {
