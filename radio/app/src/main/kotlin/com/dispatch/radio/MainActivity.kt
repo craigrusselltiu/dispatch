@@ -328,6 +328,8 @@ class MainActivity : AppCompatActivity() {
             chatMessageCount--
         }
 
+        val displayName = if (sender == "Dispatcher") "Console" else sender
+
         val color = when {
             sender == "You" -> R.color.green
             sender == "Dispatcher" -> R.color.magenta
@@ -336,7 +338,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val tv = TextView(this).apply {
-            this.text = "$sender: $text"
+            this.text = "$displayName: $text"
             textSize = 11f
             typeface = android.graphics.Typeface.MONOSPACE
             setTextColor(getColor(color))
