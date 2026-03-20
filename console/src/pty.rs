@@ -1,7 +1,7 @@
 // PTY management: spawn, kill, terminate, resize (dispatch-bgz.2, dispatch-bgz.6).
 
 use std::{
-    io::{Read, Write},
+    io::Read,
     process::Command,
     sync::{atomic::{AtomicBool, Ordering}, Arc, Mutex},
     thread,
@@ -59,9 +59,7 @@ pub fn dispatch_slot(
     if let Some(prompt) = initial_prompt {
         cmd.arg(prompt);
     }
-    if let Some(dir) = cwd {
-        cmd.cwd(dir);
-    }
+    cmd.cwd(cwd.unwrap_or(repo_root));
 
     let child = pair
         .slave
@@ -115,8 +113,6 @@ pub fn dispatch_slot(
         child_pid,
         master: pair.master,
         last_output_at: now,
-        last_screen_hash: 0,
-        idle_since: None,
         scroll_offset: 0,
     })
 }

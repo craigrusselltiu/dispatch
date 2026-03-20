@@ -221,49 +221,18 @@ fn pane_info_strip(global_idx: usize, local_idx: usize, app: &App) -> Text<'stat
     }
 }
 
-fn standby_body(global_idx: usize, app: &App) -> Vec<Line<'static>> {
+fn standby_body(_global_idx: usize, _app: &App) -> Vec<Line<'static>> {
     let mut lines: Vec<Line<'static>> = Vec::new();
     lines.push(Line::from(""));
-
-    if app.is_last_standby(global_idx) {
-        lines.push(Line::from(Span::styled(
-            format!(" Queued tasks: {}", app.queued_tasks.len()),
-            Style::default().fg(Color::Yellow),
-        )));
-        lines.push(Line::from(""));
-        for task in app.queued_tasks.iter().take(6) {
-            let title_truncated = if task.title.len() > 24 {
-                format!("{}...", &task.title[..21])
-            } else {
-                task.title.clone()
-            };
-            lines.push(Line::from(Span::styled(
-                format!("  {}  \"{}\"", task.id, title_truncated),
-                Style::default().fg(Color::DarkGray),
-            )));
-        }
-        if app.queued_tasks.is_empty() {
-            lines.push(Line::from(Span::styled(
-                "  (none)",
-                Style::default().fg(Color::DarkGray),
-            )));
-        }
-    } else {
-        lines.push(Line::from(Span::styled(
-            " Dispatch new agent:",
-            Style::default().fg(Color::DarkGray),
-        )));
-        lines.push(Line::from(""));
-        lines.push(Line::from(Span::styled(
-            "  [c] claude-code",
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-        )));
-        lines.push(Line::from(Span::styled(
-            "  [g] gh copilot",
-            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-        )));
-    }
-
+    lines.push(Line::from(Span::styled(
+        " STANDBY",
+        Style::default().fg(Color::DarkGray),
+    )));
+    lines.push(Line::from(""));
+    lines.push(Line::from(Span::styled(
+        "  Orchestrator dispatches agents via voice.",
+        Style::default().fg(Color::DarkGray),
+    )));
     lines
 }
 
@@ -397,11 +366,6 @@ pub fn render_orchestrator(f: &mut Frame, area: Rect, app: &App) {
                 Style::default().fg(Color::Green),
                 format!("\"{}\"", text),
             ),
-            OrchestratorEventKind::TaskCreated { id, title } => (
-                "TASK",
-                Style::default().fg(Color::Cyan),
-                format!("created {}: {}", id, truncate(title, 60)),
-            ),
             OrchestratorEventKind::TaskAssigned { id, agent, slot } => (
                 "ASSIGN",
                 Style::default().fg(Color::Yellow),
@@ -432,12 +396,6 @@ pub fn render_orchestrator(f: &mut Frame, area: Rect, app: &App) {
                 Style::default().fg(Color::Red),
                 format!("{} (slot {})", agent, slot),
             ),
-            OrchestratorEventKind::Queued { id } => (
-                "QUEUE",
-                Style::default().fg(Color::Yellow),
-                format!("{} waiting for available agent", id),
-            ),
-            // dispatch-h62: orchestrator LLM events
             OrchestratorEventKind::OrchestratorText { text } => (
                 "LLM",
                 Style::default().fg(Color::Magenta),
@@ -502,24 +460,6 @@ pub fn render_footer(f: &mut Frame, area: Rect, app: &App) {
         .map(|a| a.display_name().to_string())
         .unwrap_or_else(|| format!("[{}]", target_g + 1));
 
-    // dispatch-xje: show merge conflict notice when present.
-    if !app.conflict_tasks.is_empty() {
-        let ids = app.conflict_tasks.join(", ");
-        let line = Line::from(vec![
-            Span::styled(
-                " MERGE CONFLICT: ",
-                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD),
-            ),
-            Span::styled(ids, Style::default().fg(Color::Yellow)),
-            Span::styled(
-                " -- resolve manually, then run: git worktree remove .dispatch/.worktrees/<id>",
-                Style::default().fg(Color::DarkGray),
-            ),
-        ]);
-        f.render_widget(Paragraph::new(line), area);
-        return;
-    }
-
     let content = match app.mode {
         Mode::Command => {
             let view_indicator = match app.view_mode {
@@ -529,7 +469,7 @@ pub fn render_footer(f: &mut Frame, area: Rect, app: &App) {
             let hints = if app.view_mode == ViewMode::Orchestrator {
                 " o:back  ?:help  q:quit"
             } else {
-                " Enter:input  n:new  x:kill  t:tasks  o:orch  ?:help  q:quit"
+                " Enter:input  k:kill  o:orch  ?:help  q:quit"
             };
             Line::from(vec![
                 Span::styled(
@@ -573,7 +513,7 @@ pub fn centered_rect(width: u16, height: u16, area: Rect) -> Rect {
 }
 
 pub fn render_help_overlay(f: &mut Frame, area: Rect) {
-    let r = centered_rect(52, 27, area);
+    let r = centered_rect(52, 21, area);
     f.render_widget(Clear, r);
     let lines = vec![
         Line::from(Span::styled(
@@ -588,13 +528,7 @@ pub fn render_help_overlay(f: &mut Frame, area: Rect) {
         Line::from(Span::raw("  → / ←        Next / prev page")),
         Line::from(Span::raw("  PgUp / PgDn  Scroll output")),
         Line::from(Span::raw("  ↑ / ↓        Scroll orchestrator view")),
-        Line::from(Span::raw("  n            Dispatch (repo select in multi-repo)")),
-        Line::from(Span::raw("  N            Dispatch into specific slot")),
         Line::from(Span::raw("  k            Kill target agent")),
-        Line::from(Span::raw("  R            Rename target agent")),
-        Line::from(Span::raw("  S            Rescan repos (multi-repo mode)")),
-        Line::from(Span::raw("  t            Task list overlay")),
-        Line::from(Span::raw("  h            Prompt history")),
         Line::from(Span::raw("  o            Toggle orchestrator view")),
         Line::from(Span::raw("  p            Toggle PSK visibility")),
         Line::from(Span::raw("  x            Show connection info")),
@@ -667,183 +601,6 @@ pub fn render_connection_info_overlay(f: &mut Frame, area: Rect, app: &App) {
     );
 }
 
-pub fn render_task_list_overlay(f: &mut Frame, area: Rect, app: &App) {
-    // Full-screen overlay (dispatch-1lc.4)
-    let r = centered_rect(area.width.saturating_sub(2), area.height.saturating_sub(2), area);
-    f.render_widget(Clear, r);
-
-    let in_progress: Vec<&TaskEntry> = app
-        .task_list_data
-        .iter()
-        .filter(|t| t.status == "in_progress")
-        .collect();
-    let queued: Vec<&TaskEntry> = app
-        .task_list_data
-        .iter()
-        .filter(|t| t.status == "open")
-        .collect();
-    let completed: Vec<&TaskEntry> = app
-        .task_list_data
-        .iter()
-        .filter(|t| t.status == "closed")
-        .collect();
-
-    let total = app.task_list_data.len();
-    let done_count = completed.len();
-
-    // Inner width for truncating titles (subtract border + padding).
-    let inner_w = r.width.saturating_sub(4) as usize;
-
-    let mut lines: Vec<Line<'static>> = Vec::new();
-
-    // Progress summary line.
-    lines.push(Line::default());
-    lines.push(Line::from(vec![
-        Span::styled(
-            format!("  Tasks: {}/{} complete", done_count, total),
-            Style::default().fg(Color::White),
-        ),
-        Span::styled(
-            format!(
-                "   {} active  {} queued  {} done",
-                in_progress.len(),
-                queued.len(),
-                done_count
-            ),
-            Style::default().fg(Color::DarkGray),
-        ),
-    ]));
-    lines.push(Line::default());
-
-    // IN PROGRESS section.
-    lines.push(Line::from(Span::styled(
-        "  IN PROGRESS",
-        Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-    )));
-    if in_progress.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "    (none)",
-            Style::default().fg(Color::DarkGray),
-        )));
-    } else {
-        for t in &in_progress {
-            let agent_str = t
-                .agent
-                .as_deref()
-                .map(|a| format!(" <- {}", a))
-                .unwrap_or_default();
-            let prefix = format!("  [~] {}  ", t.id);
-            let avail = inner_w.saturating_sub(prefix.len() + agent_str.len());
-            let title = if t.title.len() > avail && avail > 3 {
-                format!("{}...", &t.title[..avail - 3])
-            } else {
-                t.title.clone()
-            };
-            lines.push(Line::from(vec![
-                Span::styled("[~] ", Style::default().fg(Color::Yellow)),
-                Span::styled(
-                    format!("{}  ", t.id),
-                    Style::default().fg(Color::Yellow).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(title, Style::default().fg(Color::White)),
-                Span::styled(agent_str, Style::default().fg(Color::Cyan)),
-            ]));
-        }
-    }
-    lines.push(Line::default());
-
-    // QUEUED section.
-    lines.push(Line::from(Span::styled(
-        "  QUEUED",
-        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-    )));
-    if queued.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "    (none)",
-            Style::default().fg(Color::DarkGray),
-        )));
-    } else {
-        for t in &queued {
-            let dep_str = if t.deps.is_empty() {
-                String::new()
-            } else {
-                format!(" -> {}", t.deps.join(", "))
-            };
-            let prefix = format!("[ ] {}  ", t.id);
-            let avail = inner_w.saturating_sub(prefix.len() + dep_str.len());
-            let title = if t.title.len() > avail && avail > 3 {
-                format!("{}...", &t.title[..avail - 3])
-            } else {
-                t.title.clone()
-            };
-            lines.push(Line::from(vec![
-                Span::styled("[ ] ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    format!("{}  ", t.id),
-                    Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
-                ),
-                Span::styled(title, Style::default().fg(Color::DarkGray)),
-                Span::styled(dep_str, Style::default().fg(Color::Red)),
-            ]));
-        }
-    }
-    lines.push(Line::default());
-
-    // COMPLETED section (most recent first, limited to avoid flooding).
-    lines.push(Line::from(Span::styled(
-        "  COMPLETED",
-        Style::default().fg(Color::DarkGray).add_modifier(Modifier::BOLD),
-    )));
-    let max_completed = (r.height as usize).saturating_sub(lines.len() + 4);
-    let show_completed: Vec<&TaskEntry> = completed.iter().rev().take(max_completed).cloned().collect();
-    if show_completed.is_empty() {
-        lines.push(Line::from(Span::styled(
-            "    (none)",
-            Style::default().fg(Color::DarkGray),
-        )));
-    } else {
-        for t in &show_completed {
-            let prefix = format!("[x] {}  ", t.id);
-            let avail = inner_w.saturating_sub(prefix.len());
-            let title = if t.title.len() > avail && avail > 3 {
-                format!("{}...", &t.title[..avail - 3])
-            } else {
-                t.title.clone()
-            };
-            lines.push(Line::from(vec![
-                Span::styled("[x] ", Style::default().fg(Color::DarkGray)),
-                Span::styled(
-                    format!("{}  ", t.id),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::styled(title, Style::default().fg(Color::DarkGray)),
-            ]));
-        }
-        if done_count > max_completed {
-            lines.push(Line::from(Span::styled(
-                format!("    ... and {} more", done_count - max_completed),
-                Style::default().fg(Color::DarkGray),
-            )));
-        }
-    }
-
-    lines.push(Line::default());
-    lines.push(Line::from(Span::styled(
-        "  Press any key to close",
-        Style::default().fg(Color::DarkGray),
-    )));
-
-    f.render_widget(
-        Paragraph::new(Text::from(lines)).block(
-            Block::default()
-                .title(" TASK LIST ")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
-        ),
-        r,
-    );
-}
-
 pub fn render_confirm_overlay(f: &mut Frame, area: Rect, title: &str, body: &str) {
     let r = centered_rect(50, 7, area);
     f.render_widget(Clear, r);
@@ -870,38 +627,7 @@ pub fn render_confirm_overlay(f: &mut Frame, area: Rect, title: &str, body: &str
     );
 }
 
-pub fn render_dispatch_overlay(f: &mut Frame, area: Rect, app: &App) {
-    let r = centered_rect(50, 7, area);
-    f.render_widget(Clear, r);
-    let lines = vec![
-        Line::default(),
-        Line::from(Span::styled(
-            format!("  Slot number (1-{}):", MAX_SLOTS),
-            Style::default().fg(Color::White),
-        )),
-        Line::from(Span::styled(
-            format!("  > {}_", app.input_buf),
-            Style::default().fg(Color::Green),
-        )),
-        Line::default(),
-        Line::from(Span::styled(
-            "  Enter confirm    Esc cancel",
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::default(),
-    ];
-    f.render_widget(
-        Paragraph::new(Text::from(lines)).block(
-            Block::default()
-                .title(" DISPATCH INTO SLOT ")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Green)),
-        ),
-        r,
-    );
-}
-
-/// Render the repo selection overlay for multi-repo mode (dispatch-sa1).
+/// Render the repo selection overlay for multi-repo mode.
 pub fn render_repo_select_overlay(f: &mut Frame, area: Rect, app: &App) {
     let repos = app.repo_list();
     let height = (repos.len() as u16 + 5).min(area.height.saturating_sub(4));
@@ -944,127 +670,3 @@ pub fn render_repo_select_overlay(f: &mut Frame, area: Rect, app: &App) {
     );
 }
 
-/// Render the prompt history overlay (dispatch-ct2.8).
-pub fn render_prompt_history_overlay(f: &mut Frame, area: Rect, app: &App) {
-    let max_h = area.height.saturating_sub(4).min(30);
-    let max_w = area.width.saturating_sub(4).min(80);
-    let r = centered_rect(max_w, max_h, area);
-    f.render_widget(Clear, r);
-
-    let inner_height = max_h.saturating_sub(4) as usize; // borders + hint line
-    let mut lines: Vec<Line<'static>> = Vec::new();
-
-    if app.prompt_history.is_empty() {
-        lines.push(Line::default());
-        lines.push(Line::from(Span::styled(
-            "  (no prompts recorded yet)",
-            Style::default().fg(Color::DarkGray),
-        )));
-    } else {
-        // Show entries centered around the selected one
-        let total = app.prompt_history.len();
-        let start = if app.history_scroll + inner_height / 2 >= total {
-            total.saturating_sub(inner_height)
-        } else {
-            app.history_scroll.saturating_sub(inner_height / 2)
-        };
-        let end = (start + inner_height).min(total);
-
-        for i in start..end {
-            let entry = &app.prompt_history[i];
-            let label = match entry.source {
-                PromptSource::Voice => "MIC",
-                PromptSource::Keyboard => "KBD",
-            };
-            let selected = i == app.history_scroll;
-            let marker = if selected { ">" } else { " " };
-            let text = truncate(&entry.text, (max_w as usize).saturating_sub(22));
-            let style = if selected {
-                Style::default().fg(Color::Green).add_modifier(Modifier::BOLD)
-            } else {
-                Style::default().fg(Color::White)
-            };
-            lines.push(Line::from(vec![
-                Span::styled(format!(" {} ", marker), style),
-                Span::styled(
-                    format!("{} ", entry.time),
-                    Style::default().fg(Color::DarkGray),
-                ),
-                Span::styled(
-                    format!("{:<3} ", label),
-                    match entry.source {
-                        PromptSource::Voice => Style::default().fg(Color::Green),
-                        PromptSource::Keyboard => Style::default().fg(Color::Cyan),
-                    },
-                ),
-                Span::styled(
-                    format!("{:<8} ", truncate(&entry.target, 8)),
-                    Style::default().fg(Color::Yellow),
-                ),
-                Span::styled(text, style),
-            ]));
-        }
-    }
-
-    // Pad remaining height
-    while lines.len() < inner_height {
-        lines.push(Line::default());
-    }
-
-    // Hint line
-    lines.push(Line::from(Span::styled(
-        "  j/k navigate    Enter re-send    g/G top/bottom    Esc close",
-        Style::default().fg(Color::DarkGray),
-    )));
-
-    f.render_widget(
-        Paragraph::new(Text::from(lines)).block(
-            Block::default()
-                .title(Span::styled(
-                    " PROMPT HISTORY ",
-                    Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-                ))
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Green)),
-        ),
-        r,
-    );
-}
-
-pub fn render_rename_overlay(f: &mut Frame, area: Rect, app: &App) {
-    let r = centered_rect(52, 8, area);
-    f.render_widget(Clear, r);
-    let target_g = app.target_global();
-    let current = app
-        .slots
-        .get(target_g)
-        .and_then(|s| s.as_ref())
-        .map(|a| a.display_name().to_string())
-        .unwrap_or_default();
-    let lines = vec![
-        Line::default(),
-        Line::from(Span::styled(
-            format!("  Current: {}", current),
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::from(Span::styled(
-            format!("  > {}_", app.input_buf),
-            Style::default().fg(Color::Green),
-        )),
-        Line::default(),
-        Line::from(Span::styled(
-            "  Enter confirm    Esc cancel    empty = reset to NATO",
-            Style::default().fg(Color::DarkGray),
-        )),
-        Line::default(),
-    ];
-    f.render_widget(
-        Paragraph::new(Text::from(lines)).block(
-            Block::default()
-                .title(" RENAME AGENT ")
-                .borders(Borders::ALL)
-                .border_style(Style::default().fg(Color::Cyan)),
-        ),
-        r,
-    );
-}

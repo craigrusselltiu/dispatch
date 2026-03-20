@@ -2,14 +2,13 @@
 
 use std::{
     io::Write,
-    time::{Duration, Instant},
+    time::Instant,
 };
 
 use chrono::Local;
-use dispatch_core::{orchestrator, protocol, tools};
+use dispatch_core::{protocol, tools};
 
 use crate::types::*;
-use crate::task_file::{create_task_in_file, fetch_ready_tasks, update_task_in_file};
 use crate::pty::dispatch_slot;
 use crate::util::repo_name_from_path;
 use crate::ws_server;
@@ -22,11 +21,8 @@ impl App {
         pane_rows: u16,
         pane_cols: u16,
         tools: std::collections::HashMap<String, String>,
-        completion_timeout: Duration,
-        repo_root: String,
         workspace: Workspace,
         scrollback_lines: u32,
-        tls_fingerprint: String,
         chat_tx: tokio::sync::broadcast::Sender<String>,
     ) -> Self {
         App {
@@ -40,30 +36,20 @@ impl App {
             port,
             psk_expanded: false,
             overlay: Overlay::None,
-            input_buf: String::new(),
-            queued_tasks: Vec::new(),
             ws_state,
             pane_rows,
             pane_cols,
             tools,
-            completion_timeout,
             ticker_queue: std::collections::VecDeque::new(),
             ticker_current: String::new(),
             ticker_offset: 0,
             ticker_frame_counter: 0,
-            conflict_tasks: Vec::new(),
-            repo_root,
             workspace,
             repo_select_idx: 0,
-            task_list_data: Vec::new(),
             scrollback_lines,
             view_mode: ViewMode::Agents,
             orch_log: Vec::new(),
             orch_scroll: 0,
-            tls_fingerprint,
-            prompt_history: Vec::new(),
-            input_line_buf: String::new(),
-            history_scroll: 0,
             orchestrator: None,
             pending_voice: Vec::new(),
             chat_tx,
@@ -90,34 +76,6 @@ impl App {
         if let Ok(json) = serde_json::to_string(&msg) {
             let _ = self.chat_tx.send(json);
         }
-    }
-
-    /// Record a prompt to in-memory history and append to the log file (dispatch-ct2.8).
-    pub fn log_prompt(&mut self, source: PromptSource, target: &str, text: &str) {
-        let time = Local::now().format("%H:%M:%S").to_string();
-        let entry = PromptEntry {
-            time: time.clone(),
-            source,
-            target: target.to_string(),
-            text: text.to_string(),
-        };
-        self.prompt_history.push(entry);
-
-        // Append to .dispatch/prompt_history.log
-        let repo = self.default_repo_root().to_string();
-        let dispatch_dir = format!("{}/.dispatch", repo);
-        let _ = std::fs::create_dir_all(&dispatch_dir);
-        let log_path = format!("{}/prompt_history.log", dispatch_dir);
-        let label = match source {
-            PromptSource::Voice => "VOICE",
-            PromptSource::Keyboard => "KEYBOARD",
-        };
-        let line = format!("[{}] {} -> {}: \"{}\"\n", time, label, target, text);
-        let _ = std::fs::OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&log_path)
-            .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
     }
 
     pub fn global_idx(&self, local_idx: usize) -> usize {
@@ -152,26 +110,6 @@ impl App {
         } else {
             "****".to_string()
         }
-    }
-
-    /// True if `global_idx` is the last empty slot on the last page (dispatch-bgz.11).
-    pub fn is_last_standby(&self, global_idx: usize) -> bool {
-        if self.slots[global_idx].is_some() {
-            return false;
-        }
-        let total = self.total_pages();
-        let page = global_idx / SLOTS_PER_PAGE;
-        if page != total - 1 {
-            return false;
-        }
-        let local = global_idx % SLOTS_PER_PAGE;
-        for i in (local + 1)..SLOTS_PER_PAGE {
-            let g = page * SLOTS_PER_PAGE + i;
-            if g < MAX_SLOTS && self.slots[g].is_none() {
-                return false;
-            }
-        }
-        true
     }
 
     pub fn tool_cmd(&self, tool_key: &str) -> &str {
@@ -274,7 +212,7 @@ impl App {
     /// Execute a tool call from the orchestrator agent. Returns the result.
     pub fn execute_tool(&mut self, call: &tools::ToolCall) -> tools::ToolResult {
         match call {
-            tools::ToolCall::Dispatch { repo: _, prompt } => {
+            tools::ToolCall::Dispatch { repo: _, prompt, callsign: requested_callsign } => {
                 // Find an idle slot (has PTY but no task) or an empty slot.
                 let slot_idx = self.slots.iter().enumerate().find_map(|(i, s)| {
                     match s {
@@ -294,19 +232,13 @@ impl App {
 
                 let target_repo = self.default_repo_root().to_string();
 
-                // Create task in tasks.md.
-                let task_id = match create_task_in_file(&target_repo, prompt) {
-                    Some(id) => id,
-                    None => return tools::ToolResult::Error {
-                        message: "failed to create task".to_string(),
-                    },
-                };
-
                 // Determine callsign before spawn so it can be included in the prompt.
-                let callsign_for_prompt = protocol::default_callsign((slot_idx + 1) as u32).to_string();
-                let full_prompt = format!("Your callsign is {}. Your task ID is {}. {}", callsign_for_prompt, task_id, prompt);
+                let callsign_for_prompt = requested_callsign
+                    .as_deref()
+                    .unwrap_or_else(|| protocol::default_callsign((slot_idx + 1) as u32));
+                let full_prompt = format!("Your callsign is {}. {}", callsign_for_prompt, prompt);
 
-                // Spawn PTY if slot is empty. Agent creates its own worktree (dispatch-bka).
+                // Spawn PTY if slot is empty. Agent creates its own worktree.
                 if self.slots[slot_idx].is_none() {
                     let cmd = self.tool_cmd("claude-code").to_string();
                     match dispatch_slot(
@@ -322,20 +254,18 @@ impl App {
                     }
                 }
 
-                // Assign task to slot.
                 let callsign = {
                     let slot = self.slots[slot_idx].as_mut().unwrap();
-                    update_task_in_file(&target_repo, &task_id, '~', Some(&slot.callsign));
-                    slot.task_id = Some(task_id.clone());
+                    slot.task_id = Some(prompt.clone());
                     slot.last_output_at = Instant::now();
                     slot.display_name().to_string()
                 };
 
-                self.push_orch(OrchestratorEventKind::TaskAssigned {
-                    id: task_id.clone(), agent: callsign.clone(), slot: slot_idx + 1,
+                self.push_orch(OrchestratorEventKind::Dispatched {
+                    agent: callsign.clone(), slot: slot_idx + 1, tool: "claude-code".to_string(),
                 });
                 self.push_ticker(format!(
-                    "DISPATCH: {} -> {} (slot {})", task_id, callsign, slot_idx + 1
+                    "DISPATCH: {} (slot {})", callsign, slot_idx + 1
                 ));
                 self.push_chat("Dispatcher", &format!("Dispatched agent {}.", callsign));
 
@@ -346,7 +276,7 @@ impl App {
                         callsign: callsign.clone(),
                         tool: "claude-code".to_string(),
                         status: ws_server::AgentStatus::Busy,
-                        task: Some(task_id.clone()),
+                        task: None,
                         repo: Some(repo_name_from_path(&target_repo).to_string()),
                     });
                 }
@@ -354,7 +284,7 @@ impl App {
                 tools::ToolResult::Dispatched {
                     slot: (slot_idx + 1) as u32,
                     callsign,
-                    task_id,
+                    task_id: "none".to_string(),
                 }
             }
 
@@ -375,13 +305,7 @@ impl App {
                 };
 
                 let callsign = self.slots[idx].as_ref().unwrap().display_name().to_string();
-                let slot_repo = self.slots[idx].as_ref().unwrap().repo_root.clone();
-                let task_id = crate::pty::terminate_slot(&mut self.slots[idx]);
-
-                // Reopen task if assigned.
-                if let Some(ref id) = task_id {
-                    update_task_in_file(&slot_repo, id, ' ', None);
-                }
+                crate::pty::terminate_slot(&mut self.slots[idx]);
 
                 self.push_orch(OrchestratorEventKind::Terminated {
                     agent: callsign.clone(), slot: idx + 1,
@@ -404,18 +328,15 @@ impl App {
                 }
             }
 
-            // dispatch-bka: agents now merge their own branches, so this just
-            // acknowledges the completion and updates the task file.
+            // Agents merge their own branches; this acknowledges the completion.
             tools::ToolCall::Merge { task_id } => {
-                let target_repo = self.default_repo_root().to_string();
-                update_task_in_file(&target_repo, task_id, 'x', None);
                 self.push_orch(OrchestratorEventKind::Merged { id: task_id.clone() });
-                self.push_ticker(format!("MERGED: task/{}", task_id));
-                self.push_chat("Dispatcher", &format!("task/{} merged.", task_id));
+                self.push_ticker(format!("MERGED: {}", task_id));
+                self.push_chat("Dispatcher", &format!("{} merged.", task_id));
                 tools::ToolResult::Merged {
                     task_id: task_id.clone(),
                     success: true,
-                    message: format!("task/{} merged by agent", task_id),
+                    message: format!("{} merged by agent", task_id),
                 }
             }
 
@@ -478,63 +399,4 @@ impl App {
         }
     }
 
-    /// Dispatch ready tasks from .dispatch/tasks.md to available agents. Returns the
-    /// number dispatched. Called after task completion to fill newly unblocked tasks.
-    pub fn dispatch_ready_tasks(&mut self) -> usize {
-        let ready = fetch_ready_tasks(&self.repo_root);
-        let pane_rows = self.pane_rows;
-        let pane_cols = self.pane_cols;
-        let repo_root = self.repo_root.clone();
-        let tool_cmd = self.tool_cmd("claude-code").to_string();
-        let scrollback = self.scrollback_lines;
-        let short_repo = repo_name_from_path(&repo_root).to_string();
-        let mut dispatched = 0;
-
-        for task in ready {
-            // Find an idle slot (has PTY but no task) or an empty slot.
-            let slot_idx = self.slots.iter().enumerate().find_map(|(i, s)| {
-                match s {
-                    Some(slot) if slot.task_id.is_none() => Some(i),
-                    _ => None,
-                }
-            }).or_else(|| {
-                self.slots.iter().position(|s| s.is_none())
-            });
-
-            let slot_idx = match slot_idx {
-                Some(i) => i,
-                None => break, // No available slots; remaining tasks stay queued.
-            };
-
-            // Spawn PTY if slot is empty. Agent creates its own worktree (dispatch-bka).
-            if self.slots[slot_idx].is_none() {
-                let prompt = format!("Your task ID is {}. {}", task.id, task.title);
-                if let Some(slot) = dispatch_slot(
-                    slot_idx, "claude-code", &tool_cmd, pane_rows, pane_cols,
-                    None, scrollback, &short_repo, &repo_root,
-                    Some(&prompt),
-                ) {
-                    self.slots[slot_idx] = Some(slot);
-                } else {
-                    continue;
-                }
-            }
-
-            // Assign the task to the slot.
-            let display_name = {
-                let slot = self.slots[slot_idx].as_mut().unwrap();
-                update_task_in_file(&repo_root, &task.id, '~', Some(&slot.callsign));
-                slot.task_id = Some(task.id.clone());
-                slot.last_output_at = Instant::now();
-                slot.display_name().to_string()
-            };
-            self.push_orch(OrchestratorEventKind::TaskAssigned { id: task.id.clone(), agent: display_name.clone(), slot: slot_idx + 1 });
-            self.push_ticker(format!(
-                "DISPATCH: {} -> {} (slot {})",
-                task.id, display_name, slot_idx + 1
-            ));
-            dispatched += 1;
-        }
-        dispatched
-    }
 }

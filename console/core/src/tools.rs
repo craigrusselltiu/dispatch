@@ -1,16 +1,16 @@
-// Orchestrator tool interface (dispatch-x94).
+// Orchestrator tool interface.
 //
 // Defines the tools available to the orchestrator agent and provides execution
 // logic. The console intercepts tool calls from the orchestrator, executes them,
 // and returns structured results.
 //
 // Tools:
-//   dispatch(repo, prompt)       — create task, worktree, spawn agent
-//   terminate(agent)             — kill agent by callsign or slot number
-//   merge(task_id)               — merge task branch into main
-//   list_agents()                — get all agent slot states
-//   list_repos()                 — list known repositories
-//   message_agent(agent, text)   — send text to an agent's PTY
+//   dispatch(repo, prompt, callsign?) — dispatch an agent with a prompt
+//   terminate(agent)                  — kill agent by callsign or slot number
+//   merge(task_id)                    — acknowledge a completed merge
+//   list_agents()                     — get all agent slot states
+//   list_repos()                      — list known repositories
+//   message_agent(agent, text)        — send text to an agent's PTY
 
 use serde::{Deserialize, Serialize};
 
@@ -21,7 +21,7 @@ use serde::{Deserialize, Serialize};
 #[serde(tag = "name", content = "input")]
 #[serde(rename_all = "snake_case")]
 pub enum ToolCall {
-    /// Create a task, set up a git worktree, and dispatch an agent.
+    /// Dispatch an agent with a prompt.
     Dispatch {
         /// Repository name or path to work in.
         repo: String,
@@ -36,7 +36,7 @@ pub enum ToolCall {
         /// Agent callsign (e.g. "Alpha") or slot number as string (e.g. "1").
         agent: String,
     },
-    /// Merge a completed task's worktree branch into main.
+    /// Acknowledge a completed merge.
     Merge {
         /// Task ID (e.g. "t1").
         task_id: String,
@@ -123,7 +123,7 @@ pub fn tool_definitions() -> serde_json::Value {
     serde_json::json!([
         {
             "name": "dispatch",
-            "description": "Create a task, set up a git worktree, and dispatch an AI agent to work on it. The agent is spawned in an isolated worktree and given the prompt as its task.",
+            "description": "Dispatch an AI agent with a prompt. The agent creates its own git worktree, works, commits, merges, and pushes.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -145,7 +145,7 @@ pub fn tool_definitions() -> serde_json::Value {
         },
         {
             "name": "terminate",
-            "description": "Terminate a running agent. The agent's process is killed and its slot is freed. If the agent had an active task, the task is reopened for reassignment.",
+            "description": "Terminate a running agent. The agent's process is killed and its slot is freed.",
             "input_schema": {
                 "type": "object",
                 "properties": {
@@ -159,7 +159,7 @@ pub fn tool_definitions() -> serde_json::Value {
         },
         {
             "name": "merge",
-            "description": "Acknowledge a completed task's merge. Validates that the agent actually merged its branch into main: returns success only if the task branch was merged and cleaned up, fails if the branch still exists or no merge commit is found.",
+            "description": "Acknowledge that an agent has completed its merge. Agents merge their own branches into main.",
             "input_schema": {
                 "type": "object",
                 "properties": {

@@ -2,8 +2,6 @@
 
 use std::time::Duration;
 
-use crate::types::RESERVED_CALLSIGNS;
-
 /// Extract the short directory name from a repo root path (dispatch-2dc).
 pub fn repo_name_from_path(path: &str) -> &str {
     std::path::Path::new(path)
@@ -33,18 +31,6 @@ pub fn scan_child_repos(parent: &str) -> Vec<String> {
 pub fn format_runtime(elapsed: Duration) -> String {
     let s = elapsed.as_secs();
     format!("{}m{:02}s", s / 60, s % 60)
-}
-
-/// Validate a custom callsign (dispatch-bgz.3).
-pub fn is_valid_callsign(name: &str) -> bool {
-    if name.is_empty() || name.len() > 20 {
-        return false;
-    }
-    if name.chars().any(|c| c.is_whitespace()) {
-        return false;
-    }
-    let upper = name.to_uppercase();
-    !RESERVED_CALLSIGNS.contains(&upper.as_str())
 }
 
 /// Truncate a string to `max` chars, appending "..." if trimmed.
@@ -104,43 +90,3 @@ pub fn compute_pane_size(term_rows: u16, term_cols: u16) -> (u16, u16) {
     (rows, cols)
 }
 
-/// Extract the text content of a single screen row, trimming trailing spaces.
-pub fn screen_row_text(screen: &vt100::Screen, row: u16) -> String {
-    let mut s = String::new();
-    for col in 0..screen.size().1 {
-        if let Some(cell) = screen.cell(row, col) {
-            let ch = cell.contents();
-            s.push_str(if ch.is_empty() { " " } else { &ch });
-        }
-    }
-    s.trim_end().to_string()
-}
-
-/// Hash all screen content to detect changes without storing the full buffer.
-pub fn compute_screen_hash(screen: &vt100::Screen) -> u64 {
-    use std::collections::hash_map::DefaultHasher;
-    use std::hash::{Hash, Hasher};
-    let mut hasher = DefaultHasher::new();
-    for row in 0..screen.size().0 {
-        screen_row_text(screen, row).hash(&mut hasher);
-    }
-    hasher.finish()
-}
-
-/// Return true if the last non-blank row of the screen matches the idle prompt
-/// pattern for the given tool.
-///
-/// claude-code idle: last non-blank row is exactly ">" or "> "
-pub fn is_idle_prompt(screen: &vt100::Screen, tool: &str) -> bool {
-    if tool != "claude-code" {
-        return false;
-    }
-    let (rows, _) = screen.size();
-    for r in (0..rows).rev() {
-        let text = screen_row_text(screen, r);
-        if !text.is_empty() {
-            return text == ">" || text == "> ";
-        }
-    }
-    false
-}

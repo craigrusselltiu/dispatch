@@ -23,10 +23,6 @@ pub struct TerminalConfig {
 #[derive(Debug, Serialize, Deserialize)]
 pub struct BeadsConfig {
     pub project_dir: String,
-    pub auto_track: bool,
-    pub auto_dispatch: bool,
-    pub default_tool: String,
-    pub completion_timeout_secs: u32,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -57,10 +53,6 @@ impl Default for Config {
             },
             beads: BeadsConfig {
                 project_dir: ".".to_string(),
-                auto_track: true,
-                auto_dispatch: true,
-                default_tool: "claude-code".to_string(),
-                completion_timeout_secs: 60,
             },
             tools,
         }
@@ -200,14 +192,6 @@ fn to_toml_with_comments(cfg: &Config) -> String {
          [beads]\n\
          # Working directory for bd commands. Defaults to cwd.\n\
          project_dir = \"{project_dir}\"\n\
-         # Auto-create tasks for voice prompts.\n\
-         auto_track = {auto_track}\n\
-         # Auto-dispatch agents for unaddressed prompts.\n\
-         auto_dispatch = {auto_dispatch}\n\
-         # Default tool for auto-dispatched agents.\n\
-         default_tool = \"{default_tool}\"\n\
-         # Inactivity timeout for task completion detection (seconds). 0 to disable.\n\
-         completion_timeout_secs = {completion_timeout_secs}\n\
          \n\
          [tools]\n\
          {tools}",
@@ -217,10 +201,6 @@ fn to_toml_with_comments(cfg: &Config) -> String {
         scrollback = cfg.terminal.scrollback_lines,
         max_agents = cfg.terminal.max_agents,
         project_dir = cfg.beads.project_dir,
-        auto_track = cfg.beads.auto_track,
-        auto_dispatch = cfg.beads.auto_dispatch,
-        default_tool = cfg.beads.default_tool,
-        completion_timeout_secs = cfg.beads.completion_timeout_secs,
         tools = tools_lines,
     )
 }

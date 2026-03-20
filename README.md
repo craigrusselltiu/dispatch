@@ -2,14 +2,14 @@
 
 > Voice-powered command center for AI coding agents.
 
-Turn your Android phone into a push-to-talk radio that dispatches tasks to AI coding agents. Voice a big task and the orchestrator breaks it into subtasks, dispatches agents into isolated git worktrees, and merges results back -- all tracked in a simple markdown file (`.dispatch/tasks.md`).
+Turn your Android phone into a push-to-talk radio that dispatches AI coding agents. Voice a prompt and the orchestrator dispatches agents that work in isolated git worktrees, merge to main, and push when done.
 
 ## Overview
 
 Dispatch has two components:
 
 - **Dispatch Radio** (Android) -- a minimal push-to-talk app controlled via hardware volume buttons. Hold Volume Down to speak; the app transcribes speech and sends raw transcripts to the console over a local WebSocket connection.
-- **Dispatch Console** (PC) -- a TUI command center with up to 26 embedded terminal panes, each running a live AI agent session. A persistent LLM orchestrator receives voice transcripts and decides what to do -- dispatch agents, decompose complex tasks, merge completed work, etc. Supports direct keyboard input into any agent pane via a vim-style modal interface.
+- **Dispatch Console** (PC) -- a TUI command center with up to 26 embedded terminal panes, each running a live AI agent session. A persistent LLM orchestrator receives voice transcripts and decides what to do -- dispatch agents, coordinate work, etc. Supports direct keyboard input into any agent pane via a vim-style modal interface.
 
 ```
 ┌──────────────┐    WebSocket TLS (LAN, PSK)   ┌──────────────────┐
@@ -44,8 +44,7 @@ When agents are first dispatched in a target repo, Dispatch creates a `.dispatch
 ```
 sample-repo/
   .dispatch/
-    tasks.md           # Live task plan (read/written by the console)
-    .worktrees/        # Git worktrees for active tasks
+    .worktrees/        # Git worktrees for active agents
   (repo's own files)
 ```
 
@@ -105,7 +104,6 @@ The console displays four agent panes at a time in a 2x2 grid with a scrolling t
 | `Right` / `Left`  | Next / previous page                                |
 | `PgUp` / `PgDn`   | Scroll pane output up/down                          |
 | `k`               | Kill agent in targeted slot                         |
-| `t`               | Show task list overlay                              |
 | `o`               | Toggle orchestrator view (event log)                |
 | `p`               | Show/hide full PSK                                  |
 | `x`               | Show connection info                                |
@@ -138,29 +136,26 @@ Speak naturally. The radio sends raw transcripts to the console's LLM orchestrat
 | "dispatch an agent to fix the bug"   | Dispatch a new agent                     |
 | "terminate bravo"                    | Terminate the Bravo agent                |
 | "what agents are running"            | List active agents                       |
-| "refactor the auth system"           | Decompose and dispatch subtasks          |
-| "merge alpha's work"                 | Merge the completed task                 |
+| "refactor the auth system"           | Dispatch agents to handle it             |
+| "what did alpha do"                  | Summarize Alpha's recent work            |
 
 No fixed command patterns -- the orchestrator understands natural language and uses conversational context.
 
-## How Task Management Works
+## How It Works
 
-1. **Voice a task** -- say something like "refactor the auth system".
-2. **Decomposition** -- the orchestrator breaks it down into subtasks with dependencies, written to `.dispatch/tasks.md`.
-3. **Dispatch** -- the orchestrator dispatches agents into isolated git worktrees (one branch per unblocked task).
-4. **Completion** -- when an agent finishes, the orchestrator merges the branch to main, marks the task done, and dispatches the next unblocked task.
-5. **Ticker** -- a scrolling LED-style marquee shows task events in real-time: decomposition status, dispatches, merges, and errors.
-
-Simple one-off prompts skip the decomposition step and dispatch directly.
+1. **Voice a prompt** -- say something like "refactor the auth system" or "fix the login bug".
+2. **Dispatch** -- the orchestrator sends the prompt to one or more agents via the `dispatch` tool. Each agent gets its own git worktree and branch.
+3. **Work** -- agents do their work, commit, merge to main, clean up their worktree, and push.
+4. **Ticker** -- a scrolling LED-style marquee shows events in real-time: dispatches, completions, and errors.
 
 ## Key Features
 
 - **LLM orchestrator** -- a persistent headless Claude process acts as the central coordinator. Voice transcripts go directly to the orchestrator, which decides what to do via tool calls. No command parsing -- just natural language.
 - **Embedded terminals** -- each pane is a real PTY, not text capture. Full color, interactive TUI apps, tab completion, Ctrl+C -- everything works.
-- **Git worktree isolation** -- each task runs on its own branch in its own worktree. Agents work in parallel without conflicts. Completed work is auto-merged.
-- **Task decomposition** -- voice a complex task and the orchestrator decomposes it into subtasks with dependencies, then dispatches agents automatically.
-- **LED ticker** -- scrolling marquee shows decomposition status, task completions, merge results, and errors without consuming pane space.
-- **Auto-dispatch** -- send a prompt without specifying an agent and the orchestrator decides the best action: message an existing agent, launch a new one, or queue the task.
+- **Git worktree isolation** -- each agent runs on its own branch in its own worktree. Agents work in parallel without conflicts and handle their own merging.
+- **Multi-agent dispatch** -- voice a complex task and the orchestrator can dispatch multiple agents to tackle different parts in parallel.
+- **LED ticker** -- scrolling marquee shows dispatches, completions, merge results, and errors without consuming pane space.
+- **Auto-dispatch** -- send a prompt without specifying an agent and the orchestrator decides the best action: message an existing agent or launch a new one.
 - **NATO callsigns** -- agents are assigned Alpha, Bravo, Charlie, ... in dispatch order. Addressable by voice from any page.
 - **Paged layout** -- up to 26 agents across 7 pages. Off-screen agents keep running and are still addressable.
 - **Clean target repo** -- all dispatch artifacts live in `.dispatch/` (gitignored). Your repo stays untouched.

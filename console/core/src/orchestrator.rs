@@ -308,7 +308,8 @@ fn parse_action_json(json_str: &str) -> Result<tools::ToolCall, serde_json::Erro
         "dispatch" => {
             let repo = v.get("repo").and_then(|r| r.as_str()).unwrap_or("").to_string();
             let prompt = v.get("prompt").and_then(|p| p.as_str()).unwrap_or("").to_string();
-            Ok(tools::ToolCall::Dispatch { repo, prompt })
+            let callsign = v.get("callsign").and_then(|c| c.as_str()).map(|s| s.to_string());
+            Ok(tools::ToolCall::Dispatch { repo, prompt, callsign })
         }
         "terminate" => {
             let agent = v.get("agent").and_then(|a| a.as_str()).unwrap_or("").to_string();

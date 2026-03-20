@@ -1,34 +1,12 @@
 // dispatch: Console TUI for Dispatch
 //
-// dispatch-e0k.1: PTY with claude via portable-pty + vt100 + ratatui
-// dispatch-e0k.2: keyboard input forwarding to PTY
-// dispatch-e0k.3: bd create integration from Rust
-// dispatch-bgz.1: quad-pane TUI layout with multi-page support
-// dispatch-bgz.2: embedded terminal per slot (portable-pty + vt100)
-// dispatch-bgz.3: agent naming (NATO phonetic alphabet, slot-bound, custom rename)
-// dispatch-bgz.4: modal input model (command mode / input mode)
-// dispatch-bgz.5: full command mode keybindings
-// dispatch-bgz.6: PTY management (dispatch, terminate, resize, prompt injection)
-// dispatch-bgz.7: WebSocket server with PSK authentication
-// dispatch-bgz.8: WebSocket protocol (ws_server + protocol modules)
-// dispatch-bgz.9: beads task lifecycle (create, assign, close, reopen)
-// dispatch-bgz.10: pane info strip and header bar
-// dispatch-bgz.11: standby pane (empty slot display + queued task list)
-// dispatch-bgz.12: config file and CLI subcommands
-// dispatch-ami: LED-style scrolling ticker line between header and panes
-// dispatch-1lc.1: task queuing — auto-dispatch unaddressed prompts from radio
-// dispatch-1lc.2: idle agent pickup — idle prompt detection, inactivity timeout, auto task pickup
-// dispatch-xje: git worktree-per-task isolation
-// dispatch-1lc.3: task dependencies — -> arrow syntax in .dispatch/tasks.md, file-based task ops
-// dispatch-1lc.4: task list overlay — full-screen plan view with status groups and agent assignments
-// dispatch-1lc.3: task dependencies — -> arrow syntax in .dispatch/tasks.md, dependency-aware dispatch
-// dispatch-ct2.4: terminal scrollback in panes — PgUp/PgDn in command mode, configurable buffer
-// dispatch-sa1: multi-repo support — detect non-repo parent, scan children for git repos
-// dispatch-ct2.8: prompt history — log voice/keyboard prompts to file, browsable history overlay
+// Quad-pane TUI with embedded terminals for AI coding agents.
+// Orchestrator sends prompts to agents via `dispatch` tool; agents create
+// their own git worktrees, work, commit, merge, and push.
 //
 // Layout:
 //   Header bar  : DISPATCH title, radio state, PSK, agent count, PAGE X/Y, clock
-//   Ticker bar  : single-line LED marquee scrolling right-to-left (dispatch-ami)
+//   Ticker bar  : single-line LED marquee scrolling right-to-left
 //   Quad pane   : 2x2 grid; each pane has info strip + terminal area
 //   Footer bar  : mode indicator, target, navigation hints
 //
@@ -39,7 +17,6 @@ mod app;
 mod config;
 mod mdns;
 mod pty;
-mod task_file;
 mod types;
 mod ui;
 mod util;
@@ -57,7 +34,7 @@ use std::{
 };
 
 use crossterm::{
-    event::{self, Event, KeyCode, KeyEventKind, KeyModifiers},
+    event::{self, Event, KeyCode, KeyEventKind},
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
@@ -115,7 +92,7 @@ fn main() -> io::Result<()> {
 
     // Load or generate TLS certificate (dispatch-ct2.6).
     let tls = config::load_or_create_tls();
-    let tls_fingerprint = tls.fingerprint.clone();
+    let _tls_fingerprint = tls.fingerprint.clone();
 
     // Broadcast channel for pushing chat messages to all connected radio clients (dispatch-chat).
     let (chat_tx, _) = tokio::sync::broadcast::channel::<String>(256);
@@ -142,9 +119,7 @@ fn main() -> io::Result<()> {
     let (term_cols, term_rows) = crossterm::terminal::size().unwrap_or((160, 40));
     let (pane_rows, pane_cols) = util::compute_pane_size(term_rows, term_cols);
 
-    let completion_timeout = Duration::from_secs(cfg.beads.completion_timeout_secs as u64);
-
-    // Resolve repo root and workspace mode (dispatch-xje, dispatch-sa1).
+    // Resolve repo root and workspace mode (dispatch-sa1).
     let git_toplevel = Command::new("git")
         .args(["rev-parse", "--show-toplevel"])
         .output()
@@ -155,7 +130,7 @@ fn main() -> io::Result<()> {
             None
         });
 
-    let (repo_root, workspace) = if let Some(root) = git_toplevel {
+    let (_repo_root, workspace) = if let Some(root) = git_toplevel {
         // Inside a git repo — single-repo mode (backwards compatible).
         (root.clone(), Workspace::SingleRepo { root })
     } else {
@@ -175,11 +150,8 @@ fn main() -> io::Result<()> {
         pane_rows,
         pane_cols,
         cfg.tools.clone(),
-        completion_timeout,
-        repo_root.clone(),
         workspace,
         cfg.terminal.scrollback_lines,
-        tls_fingerprint,
         chat_tx,
     );
 
@@ -211,19 +183,6 @@ fn main() -> io::Result<()> {
         st.event_tx = Some(ws_event_tx);
     }
 
-    // Background thread: poll .dispatch/tasks.md for ready tasks (dispatch-1lc.3).
-    // dispatch-sa1: in multi-repo mode, poll all repos.
-    let (tasks_tx, tasks_rx) = mpsc::channel::<Vec<QueuedTask>>();
-    let poll_repos: Vec<String> = app.repo_list().iter().map(|s| s.to_string()).collect();
-    thread::spawn(move || loop {
-        let mut all_tasks = Vec::new();
-        for repo in &poll_repos {
-            all_tasks.extend(task_file::fetch_ready_tasks(repo));
-        }
-        let _ = tasks_tx.send(all_tasks);
-        thread::sleep(Duration::from_secs(TASK_POLL_SECS));
-    });
-
     enable_raw_mode()?;
     let mut stdout = io::stdout();
     execute!(stdout, EnterAlternateScreen)?;
@@ -239,7 +198,6 @@ fn main() -> io::Result<()> {
                 if s.child_exited.load(Ordering::Relaxed) {
                     let callsign = s.display_name().to_string();
                     let task_id = s.task_id.clone();
-                    let slot_repo = s.repo_root.clone();
                     app.slots[i] = None;
                     // Sync ws_state so the handler knows this slot is empty (dispatch-boa).
                     {
@@ -249,15 +207,11 @@ fn main() -> io::Result<()> {
                     if let Some(id) = task_id {
                         app.push_orch(OrchestratorEventKind::TaskComplete { id: id.clone(), agent: callsign.clone() });
                         app.push_chat(&callsign, &format!("Task {} complete.", id));
-                        // dispatch-h62: notify orchestrator of completion so it can decide next steps.
+                        // Notify orchestrator of completion so it can decide next steps.
                         if let Some(orch) = &mut app.orchestrator {
                             orch.send_message(&format!("[EVENT] TASK_COMPLETE agent={} task={}", callsign, id));
                         }
-                        // dispatch-bka: agent merges its own branch before exiting.
                         app.push_ticker(format!("TASK COMPLETE: {} closed {} — slot {} now standby", callsign, id, i + 1));
-                        task_file::update_task_in_file(&slot_repo, &id, 'x', None);
-                        // Dispatch newly unblocked tasks after completion.
-                        app.dispatch_ready_tasks();
                     } else {
                         app.push_ticker(format!("AGENT EXITED: {} (slot {}) — standby", callsign, i + 1));
                         if let Some(orch) = &mut app.orchestrator {
@@ -268,125 +222,8 @@ fn main() -> io::Result<()> {
             }
         }
 
-        // Idle agent pickup: detect task completion via idle prompt or inactivity
-        // timeout, then assign the next queued task (dispatch-1lc.2).
-        let now = Instant::now();
-        let mut completed: Vec<(usize, String)> = Vec::new();
-        for i in 0..MAX_SLOTS {
-            let slot = match app.slots[i].as_mut() {
-                Some(s) if s.task_id.is_some() => s,
-                _ => continue,
-            };
-
-            // Update screen hash to track last output time.
-            let hash = {
-                let parser = slot.screen.lock().unwrap();
-                util::compute_screen_hash(parser.screen())
-            };
-            if hash != slot.last_screen_hash {
-                slot.last_screen_hash = hash;
-                slot.last_output_at = now;
-                slot.idle_since = None;
-                // dispatch-ct2.4: snap back to bottom on new output
-                slot.scroll_offset = 0;
-            }
-
-            // Layer 1: idle prompt detection with 500ms debounce.
-            let idle_prompt = {
-                let parser = slot.screen.lock().unwrap();
-                util::is_idle_prompt(parser.screen(), &slot.tool)
-            };
-            if idle_prompt {
-                match slot.idle_since {
-                    None => slot.idle_since = Some(now),
-                    Some(t) if now.duration_since(t) >= Duration::from_millis(500) => {
-                        completed.push((i, slot.task_id.clone().unwrap()));
-                    }
-                    _ => {}
-                }
-            } else {
-                slot.idle_since = None;
-            }
-
-            // Layer 2: inactivity timeout.
-            if app.completion_timeout.as_secs() > 0
-                && now.duration_since(slot.last_output_at) >= app.completion_timeout
-                && slot.idle_since.is_none() // avoid double-completing
-                && !completed.iter().any(|(idx, _)| *idx == i)
-            {
-                completed.push((i, slot.task_id.clone().unwrap()));
-            }
-        }
-
-        for (i, task_id) in completed {
-            let agent_name = app.slots[i].as_ref().map(|s| s.display_name().to_string()).unwrap_or_default();
-            let slot_repo = app.slots[i].as_ref().map(|s| s.repo_root.clone()).unwrap_or_else(|| app.default_repo_root().to_string());
-            app.push_orch(OrchestratorEventKind::TaskComplete { id: task_id.clone(), agent: agent_name.clone() });
-            app.push_chat(&agent_name, &format!("Task {} complete.", task_id));
-            // dispatch-h62: notify orchestrator of idle-detected completion.
-            if let Some(orch) = &mut app.orchestrator {
-                orch.send_message(&format!("[EVENT] TASK_COMPLETE agent={} task={}", agent_name, task_id));
-            }
-            if let Some(slot) = app.slots[i].as_mut() {
-                slot.task_id = None;
-                slot.idle_since = None;
-            }
-            // Sync ws_state so the WebSocket handler knows this slot is idle
-            // and can accept follow-up tasks (dispatch-boa).
-            {
-                let mut st = app.ws_state.lock().unwrap();
-                if let Some(ref mut agent) = st.slots[i] {
-                    agent.status = ws_server::AgentStatus::Idle;
-                    agent.task = None;
-                }
-            }
-            task_file::update_task_in_file(&slot_repo, &task_id, 'x', None);
-
-            // Dispatch newly unblocked tasks after completion.
-            app.dispatch_ready_tasks();
-
-            // Pick up next available queued task and assign it to the idle slot.
-            let next = task_file::fetch_ready_tasks(&slot_repo).into_iter().next();
-            if let Some(qt) = next {
-                let mut assigned = false;
-                let mut assigned_callsign = String::new();
-                if let Some(slot) = app.slots[i].as_mut() {
-                    let callsign = slot.callsign.clone();
-                    if task_file::update_task_in_file(&slot_repo, &qt.id, '~', Some(&callsign)) {
-                        let prompt = format!("Your task ID is {}. {}\r", qt.id, qt.title);
-                        let _ = slot.writer.write_all(prompt.as_bytes());
-                        let _ = slot.writer.flush();
-                        slot.task_id = Some(qt.id.clone());
-                        slot.last_output_at = Instant::now();
-                        assigned = true;
-                        assigned_callsign = callsign;
-                    }
-                }
-                if assigned {
-                    app.push_orch(OrchestratorEventKind::TaskAssigned { id: qt.id.clone(), agent: assigned_callsign.clone(), slot: i + 1 });
-                    // Sync ws_state for the new task assignment (dispatch-boa).
-                    let mut st = app.ws_state.lock().unwrap();
-                    if let Some(ref mut agent) = st.slots[i] {
-                        agent.status = ws_server::AgentStatus::Busy;
-                        agent.task = Some(qt.id.clone());
-                    }
-                }
-                app.queued_tasks.retain(|t| t.id != qt.id);
-            }
-        }
-
         if quit_requested && app.active_count() == 0 {
             break;
-        }
-
-        while let Ok(tasks) = tasks_rx.try_recv() {
-            let prev_count = app.queued_tasks.len();
-            let new_count = tasks.len();
-            if new_count > prev_count {
-                let added = new_count - prev_count;
-                app.push_ticker(format!("TASKS: {} new task{} queued — {} total ready", added, if added == 1 { "" } else { "s" }, new_count));
-            }
-            app.queued_tasks = tasks;
         }
 
         // Advance ticker animation each frame (dispatch-ami).
@@ -504,7 +341,6 @@ fn main() -> io::Result<()> {
             match app.overlay {
                 Overlay::None => {}
                 Overlay::Help => ui::render_help_overlay(f, full),
-                Overlay::TaskList => ui::render_task_list_overlay(f, full, &app),
                 Overlay::ConnectionInfo => ui::render_connection_info_overlay(f, full, &app),
                 Overlay::ConfirmQuit => ui::render_confirm_overlay(
                     f, full, "QUIT", "Agents are running. Really quit?",
@@ -517,10 +353,7 @@ fn main() -> io::Result<()> {
                         .unwrap_or_else(|| format!("slot {}", target_g + 1));
                     ui::render_confirm_overlay(f, full, "TERMINATE", &format!("Terminate {}?", name));
                 }
-                Overlay::DispatchSlot => ui::render_dispatch_overlay(f, full, &app),
-                Overlay::Rename => ui::render_rename_overlay(f, full, &app),
                 Overlay::RepoSelect => ui::render_repo_select_overlay(f, full, &app),
-                Overlay::PromptHistory => ui::render_prompt_history_overlay(f, full, &app),
             }
         })?;
 
@@ -540,33 +373,11 @@ fn main() -> io::Result<()> {
                 Event::Key(key) if key.kind == KeyEventKind::Press => match app.mode {
                     // Input mode: keystrokes forwarded to targeted PTY (dispatch-bgz.4)
                     Mode::Input => {
-                        // dispatch-qwd: Esc immediately exits input mode
+                        // Esc immediately exits input mode
                         if key.code == KeyCode::Esc {
                             app.mode = Mode::Command;
                             app.esc_exit_time = Some(Instant::now());
-                            app.input_line_buf.clear(); // dispatch-ct2.8
                             continue 'main;
-                        }
-
-                        // dispatch-ct2.8: shadow-track keyboard input for history
-                        match key.code {
-                            KeyCode::Enter => {
-                                let text = app.input_line_buf.trim().to_string();
-                                if !text.is_empty() {
-                                    let target_g = app.target_global();
-                                    let target_name = app.slots.get(target_g)
-                                        .and_then(|s| s.as_ref())
-                                        .map(|s| s.display_name().to_string())
-                                        .unwrap_or_else(|| format!("slot-{}", target_g + 1));
-                                    app.log_prompt(PromptSource::Keyboard, &target_name, &text);
-                                }
-                                app.input_line_buf.clear();
-                            }
-                            KeyCode::Backspace => { app.input_line_buf.pop(); }
-                            KeyCode::Char(c) if !key.modifiers.contains(KeyModifiers::CONTROL) => {
-                                app.input_line_buf.push(c);
-                            }
-                            _ => {}
                         }
 
                         let target_g = app.target_global();
@@ -583,7 +394,7 @@ fn main() -> io::Result<()> {
                     Mode::Command => {
                         if app.overlay != Overlay::None {
                             match app.overlay {
-                                Overlay::Help | Overlay::TaskList | Overlay::ConnectionInfo => {
+                                Overlay::Help | Overlay::ConnectionInfo => {
                                     app.overlay = Overlay::None;
                                 }
 
@@ -593,13 +404,9 @@ fn main() -> io::Result<()> {
                                             break 'main;
                                         }
                                         for i in 0..MAX_SLOTS {
-                                            let slot_repo = app.slots[i].as_ref().map(|s| s.repo_root.clone());
-                                            if let Some(task_id) = pty::terminate_slot(&mut app.slots[i]) {
-                                                let repo = slot_repo.unwrap_or_else(|| app.default_repo_root().to_string());
-                                                task_file::update_task_in_file(&repo, &task_id, ' ', None);
-                                            }
+                                            pty::terminate_slot(&mut app.slots[i]);
                                         }
-                                        // dispatch-h62: kill orchestrator on quit.
+                                        // Kill orchestrator on quit.
                                         if let Some(orch) = &mut app.orchestrator {
                                             orch.kill();
                                         }
@@ -613,88 +420,18 @@ fn main() -> io::Result<()> {
                                     KeyCode::Char('y') | KeyCode::Char('Y') => {
                                         let target_g = app.target_global();
                                         let callsign = app.slots[target_g].as_ref().map(|s| s.display_name().to_string()).unwrap_or_default();
-                                        let slot_repo = app.slots[target_g].as_ref().map(|s| s.repo_root.clone()).unwrap_or_else(|| app.default_repo_root().to_string());
                                         if !callsign.is_empty() {
                                             app.push_orch(OrchestratorEventKind::Terminated { agent: callsign.clone(), slot: target_g + 1 });
                                         }
-                                        if let Some(task_id) = pty::terminate_slot(&mut app.slots[target_g]) {
-                                            task_file::update_task_in_file(&slot_repo, &task_id, ' ', None);
-                                            app.push_ticker(format!("TERMINATED: {} (slot {}) — task {} reopened", callsign, target_g + 1, task_id));
+                                        let task_id = pty::terminate_slot(&mut app.slots[target_g]);
+                                        if task_id.is_some() {
+                                            app.push_ticker(format!("TERMINATED: {} (slot {})", callsign, target_g + 1));
                                         } else if !callsign.is_empty() {
                                             app.push_ticker(format!("TERMINATED: {} (slot {})", callsign, target_g + 1));
                                         }
                                         app.overlay = Overlay::None;
                                     }
                                     _ => app.overlay = Overlay::None,
-                                },
-
-                                Overlay::DispatchSlot => match key.code {
-                                    KeyCode::Esc => {
-                                        app.input_buf.clear();
-                                        app.overlay = Overlay::None;
-                                    }
-                                    KeyCode::Backspace => { app.input_buf.pop(); }
-                                    KeyCode::Enter => {
-                                        if let Ok(n) = app.input_buf.trim().parse::<usize>() {
-                                            if n >= 1 && n <= MAX_SLOTS {
-                                                let g = n - 1;
-                                                let page = g / SLOTS_PER_PAGE;
-                                                let local = g % SLOTS_PER_PAGE;
-                                                app.current_page = page;
-                                                app.target = local;
-                                                if app.slots[g].is_none() {
-                                                    let target_repo = app.default_repo_root().to_string();
-                                                    let cmd = app.tool_cmd("claude-code").to_string();
-                                                    if let Some(slot) = pty::dispatch_slot(
-                                                        g, "claude-code", &cmd, app.pane_rows, app.pane_cols, None,
-                                                        app.scrollback_lines, util::repo_name_from_path(&target_repo), &target_repo,
-                                                        None,
-                                                    ) {
-                                                        let name = slot.display_name().to_string();
-                                                        app.push_orch(OrchestratorEventKind::Dispatched { agent: name.clone(), slot: g + 1, tool: "claude-code".to_string() });
-                                                        app.push_ticker(format!("DISPATCH: {} launched in slot {}", name, g + 1));
-                                                        app.slots[g] = Some(slot);
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        app.input_buf.clear();
-                                        app.overlay = Overlay::None;
-                                    }
-                                    KeyCode::Char(c) if c.is_ascii_digit() => {
-                                        if app.input_buf.len() < 2 {
-                                            app.input_buf.push(c);
-                                        }
-                                    }
-                                    _ => {}
-                                },
-
-                                // Rename overlay (dispatch-bgz.3)
-                                Overlay::Rename => match key.code {
-                                    KeyCode::Esc => {
-                                        app.input_buf.clear();
-                                        app.overlay = Overlay::None;
-                                    }
-                                    KeyCode::Backspace => { app.input_buf.pop(); }
-                                    KeyCode::Enter => {
-                                        let name = app.input_buf.trim().to_string();
-                                        let target_g = app.target_global();
-                                        if let Some(Some(slot)) = app.slots.get_mut(target_g) {
-                                            if name.is_empty() {
-                                                slot.custom_name = None; // reset to NATO
-                                            } else if util::is_valid_callsign(&name) {
-                                                slot.custom_name = Some(name);
-                                            }
-                                        }
-                                        app.input_buf.clear();
-                                        app.overlay = Overlay::None;
-                                    }
-                                    KeyCode::Char(c) if !c.is_control() => {
-                                        if app.input_buf.len() < 20 {
-                                            app.input_buf.push(c);
-                                        }
-                                    }
-                                    _ => {}
                                 },
 
                                 // Repo selection overlay (dispatch-sa1)
@@ -754,42 +491,6 @@ fn main() -> io::Result<()> {
                                     _ => {}
                                 },
 
-                                // Prompt history overlay (dispatch-ct2.8)
-                                Overlay::PromptHistory => match key.code {
-                                    KeyCode::Esc | KeyCode::Char('h') => {
-                                        app.overlay = Overlay::None;
-                                    }
-                                    KeyCode::Char('j') | KeyCode::Down => {
-                                        if !app.prompt_history.is_empty() && app.history_scroll + 1 < app.prompt_history.len() {
-                                            app.history_scroll += 1;
-                                        }
-                                    }
-                                    KeyCode::Char('k') | KeyCode::Up => {
-                                        app.history_scroll = app.history_scroll.saturating_sub(1);
-                                    }
-                                    KeyCode::Char('G') => {
-                                        if !app.prompt_history.is_empty() {
-                                            app.history_scroll = app.prompt_history.len() - 1;
-                                        }
-                                    }
-                                    KeyCode::Char('g') => {
-                                        app.history_scroll = 0;
-                                    }
-                                    KeyCode::Enter => {
-                                        // Re-send the selected prompt to the current target
-                                        if let Some(entry) = app.prompt_history.get(app.history_scroll).cloned() {
-                                            let target_g = app.target_global();
-                                            if let Some(Some(slot)) = app.slots.get_mut(target_g) {
-                                                let with_enter = format!("{}\r", entry.text);
-                                                let _ = slot.writer.write_all(with_enter.as_bytes());
-                                                let _ = slot.writer.flush();
-                                            }
-                                            app.overlay = Overlay::None;
-                                        }
-                                    }
-                                    _ => {}
-                                },
-
                                 Overlay::None => unreachable!(),
                             }
                         } else {
@@ -806,14 +507,13 @@ fn main() -> io::Result<()> {
                                 }
 
                                 KeyCode::Enter => {
-                                    // dispatch-ct2.4: reset scroll when entering input mode
+                                    // Reset scroll when entering input mode
                                     let target_g = app.target_global();
                                     if let Some(Some(slot)) = app.slots.get_mut(target_g) {
                                         slot.scroll_offset = 0;
                                     }
                                     app.mode = Mode::Input;
                                     app.esc_exit_time = None;
-                                    app.input_line_buf.clear(); // dispatch-ct2.8
                                 }
 
                                 KeyCode::Char('1') => app.target = 0,
@@ -850,68 +550,12 @@ fn main() -> io::Result<()> {
                                     }
                                 }
 
-                                // Dispatch into first empty slot (dispatch-bgz.6)
-                                // dispatch-sa1: in multi-repo mode, open repo selector first.
-                                KeyCode::Char('n') => {
-                                    if app.is_multi_repo() {
-                                        app.repo_select_idx = 0;
-                                        app.overlay = Overlay::RepoSelect;
-                                    } else {
-                                        let target_repo = app.default_repo_root().to_string();
-                                        if let Some(g) = app.slots.iter().position(|s| s.is_none()) {
-                                            let cmd = app.tool_cmd("claude-code").to_string();
-                                            if let Some(slot) = pty::dispatch_slot(
-                                                g, "claude-code", &cmd, app.pane_rows, app.pane_cols, None,
-                                                app.scrollback_lines, util::repo_name_from_path(&target_repo), &target_repo,
-                                                None,
-                                            ) {
-                                                let page = g / SLOTS_PER_PAGE;
-                                                let local = g % SLOTS_PER_PAGE;
-                                                let name = slot.display_name().to_string();
-                                                app.push_orch(OrchestratorEventKind::Dispatched { agent: name.clone(), slot: g + 1, tool: "claude-code".to_string() });
-                                                app.push_ticker(format!("DISPATCH: {} launched in slot {}", name, g + 1));
-                                                app.slots[g] = Some(slot);
-                                                app.current_page = page;
-                                                app.target = local;
-                                            }
-                                        }
-                                    }
-                                }
-
-                                KeyCode::Char('N') => {
-                                    app.input_buf.clear();
-                                    app.overlay = Overlay::DispatchSlot;
-                                }
-
-                                // Terminate target agent (dispatch-bgz.6)
+                                // Terminate target agent
                                 KeyCode::Char('k') => {
                                     let target_g = app.target_global();
                                     if app.slots[target_g].is_some() {
                                         app.overlay = Overlay::ConfirmTerminate;
                                     }
-                                }
-
-                                // Rename target agent (dispatch-bgz.3)
-                                KeyCode::Char('R') => {
-                                    let target_g = app.target_global();
-                                    if app.slots[target_g].is_some() {
-                                        app.input_buf.clear();
-                                        app.overlay = Overlay::Rename;
-                                    }
-                                }
-
-                                KeyCode::Char('t') => {
-                                    // dispatch-sa1: aggregate tasks from all repos in multi-repo mode.
-                                    app.task_list_data = Vec::new();
-                                    for repo in &app.repo_list().iter().map(|s| s.to_string()).collect::<Vec<_>>() {
-                                        app.task_list_data.extend(task_file::fetch_task_list_from_file(repo, &app.slots));
-                                    }
-                                    app.overlay = Overlay::TaskList;
-                                }
-                                // Prompt history overlay (dispatch-ct2.8)
-                                KeyCode::Char('h') => {
-                                    app.history_scroll = 0;
-                                    app.overlay = Overlay::PromptHistory;
                                 }
 
                                 KeyCode::Char('p') => app.psk_expanded = !app.psk_expanded,
@@ -927,15 +571,7 @@ fn main() -> io::Result<()> {
                                     app.orch_scroll = 0;
                                 }
 
-                                // Rescan repos in multi-repo mode (dispatch-sa1)
-                                KeyCode::Char('S') if app.is_multi_repo() => {
-                                    let old_count = app.repo_list().len();
-                                    app.rescan_repos();
-                                    let new_count = app.repo_list().len();
-                                    app.push_ticker(format!("RESCAN: {} repos detected (was {})", new_count, old_count));
-                                }
-
-                                // Orchestrator scroll (dispatch-6nm)
+                                // Orchestrator scroll
                                 KeyCode::Up if app.view_mode == ViewMode::Orchestrator => {
                                     app.orch_scroll = app.orch_scroll.saturating_add(1);
                                 }
