@@ -5,26 +5,26 @@ High-level architecture of the Dispatch system.
 ## System Overview
 
 ```
-┌──────────────┐     WebSocket (LAN, PSK)     ┌──────────────────────────┐
+┌──────────────┐     WebSocket (LAN, PSK)      ┌──────────────────────────┐
 │  Dispatch    │  <------------------------->  │  Dispatch Console        │
 │  Radio       │                               │                          │
-│  (Android)   │                               │  ┌─────────────────┐    │
+│  (Android)   │                               │  ┌──────────────────┐    │
 │              │                               │  │  Orchestrator    │    │
 │  Voice input │                               │  │  (persistent LLM)│    │
 │  Speech-to-  │                               │  │  - Tool calls    │    │
 │  text        │                               │  │  - Voice interp  │    │
 │              │                               │  │  - Dispatch      │    │
-│              │                               │  └────────┬────────┘    │
-│              │                               │           │             │
-│              │                               │  ┌────────▼────────┐    │
-│              │                               │  │  Agent Slots    │    │
-│              │                               │  │  (up to 26)     │    │
-│              │                               │  │                 │    │
-│              │                               │  │  Each slot:     │    │
-│              │                               │  │  - PTY process  │    │
-│              │                               │  │  - vt100 parser │    │
-│              │                               │  │  - ratatui pane │    │
-│              │                               │  └─────────────────┘    │
+│              │                               │  └────────┬─────────┘    │
+│              │                               │           │              │
+│              │                               │  ┌────────▼────────┐     │
+│              │                               │  │  Agent Slots    │     │
+│              │                               │  │  (up to 26)     │     │
+│              │                               │  │                 │     │
+│              │                               │  │  Each slot:     │     │
+│              │                               │  │  - PTY process  │     │
+│              │                               │  │  - vt100 parser │     │
+│              │                               │  │  - ratatui pane │     │
+│              │                               │  └─────────────────┘     │
 │              │                               │                          │
 └──────────────┘                               └──────────────────────────┘
 ```
@@ -50,25 +50,25 @@ Each slot holds one running agent. Up to 26 slots, displayed 4 at a time in a 2x
 **Per-slot architecture:**
 
 ```
-┌─────────────────────────────────────────┐
-│  Agent Slot                             │
-│                                         │
-│  PTY (portable-pty)                     │
-│    └─ Child process (e.g. `claude`)     │
+┌─────────────────────────────────────────────────────────┐
+│  Agent Slot                                             │
+│                                                         │
+│  PTY (portable-pty)                                     │
+│    └─ Child process (e.g. `claude`)                     │
 │       └─ Working dir: .dispatch/.worktrees/{agent_id}/  │
-│                                         │
-│  vt100::Parser                          │
-│    └─ Reads PTY output stream           │
-│    └─ Maintains virtual terminal grid   │
-│    └─ Completion detection              │
-│                                         │
-│  ratatui pane widget                    │
-│    └─ Renders vt100::Screen to TUI      │
-│    └─ Info strip (callsign, time)       │
-│                                         │
-│  Input (keyboard in input mode)         │
-│    └─ Writes directly to PTY fd         │
-└─────────────────────────────────────────┘
+│                                                         │
+│  vt100::Parser                                          │
+│    └─ Reads PTY output stream                           │
+│    └─ Maintains virtual terminal grid                   │
+│    └─ Completion detection                              │
+│                                                         │
+│  ratatui pane widget                                    │
+│    └─ Renders vt100::Screen to TUI                      │
+│    └─ Info strip (callsign, time)                       │
+│                                                         │
+│  Input (keyboard in input mode)                         │
+│    └─ Writes directly to PTY fd                         │
+└─────────────────────────────────────────────────────────┘
 ```
 
 ### Ticker

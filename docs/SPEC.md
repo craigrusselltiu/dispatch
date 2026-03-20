@@ -15,7 +15,7 @@ Both components live in a single monorepo.
 
 ```
 ┌──────────────┐    WebSocket TLS (LAN, PSK)   ┌──────────────────┐
-│  Dispatch    │  ◄────────────────────────►  │  Dispatch        │
+│  Dispatch    │  ◄────────────────────────►   │  Dispatch        │
 │  Radio       │                               │  Console         │
 │  (Android)   │                               │  (PC TUI)        │
 │              │                               │                  │
@@ -415,35 +415,35 @@ Pages are cycled with `Left` / `Right` arrow keys. The header shows the current 
 
 ```
 ┌─ DISPATCH ──────────────────────────────────────────────────────────┐
-│ RADIO: ● CONNECTED   PSK: a7f3...  PAGE 1/2                14:32 │
-│ ◄◄ Alpha dispatched to myrepo... Bravo merged to main             │
+│ RADIO: ● CONNECTED   PSK: a7f3...  PAGE 1/2                14:32    │
+│ ◄◄ Alpha dispatched to myrepo... Bravo merged to main               │
 ├────────────────────────────────┬────────────────────────────────────┤
-│ ▸ [1] ALPHA                    │ [2] BRAVO                         │
-│   CLAUDE-CODE | busy           │ CLAUDE-CODE | idle                │
-│   dispatched 14:20 | 12m03s   │ dispatched 14:28 | 4m11s          │
-│ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄   │ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄  │
+│ ▸ [1] ALPHA                    │ [2] BRAVO                          │
+│   CLAUDE-CODE | busy           │ CLAUDE-CODE | idle                 │
+│   dispatched 14:20 | 12m03s    │ dispatched 14:28 | 4m11s           │
+│ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄      │ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄      │
 │ ~/project$ claude              │ ~/project$ claude                  │
 │                                │                                    │
-│ > I'll start by updating the   │ > I'll create a comprehensive     │
-│   auth middleware. First, let  │   test suite covering the core    │
-│   me examine the current...    │   payment flows...                │
+│ > I'll start by updating the   │ > I'll create a comprehensive      │
+│   auth middleware. First, let  │   test suite covering the core     │
+│   me examine the current...    │   payment flows...                 │
 │                                │                                    │
 │                                │                                    │
 │                                │                                    │
 ├────────────────────────────────┼────────────────────────────────────┤
-│ [3] CHARLIE                    │ [4] DELTA                         │
-│ COPILOT | idle                 │ CLAUDE-CODE | busy                │
-│ dispatched 14:15 | 17m12s     │ dispatched 14:30 | 2m04s          │
-│ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄   │ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄  │
+│ [3] CHARLIE                    │ [4] DELTA                          │
+│ COPILOT | idle                 │ CLAUDE-CODE | busy                 │
+│ dispatched 14:15 | 17m12s      │ dispatched 14:30 | 2m04s           │
+│ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄      │ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄      │
 │ ~/project$ gh copilot suggest  │ ~/project$ claude                  │
 │                                │                                    │
-│ ? What would you like help     │ > Setting up the CI pipeline...   │
+│ ? What would you like help     │ > Setting up the CI pipeline...    │
 │   with?                        │                                    │
 │ █                              │                                    │
 │                                │                                    │
 │                                │                                    │
 ├────────────────────────────────┴────────────────────────────────────┤
-│ ▸ RADIO IDLE │ TARGET: ALPHA │ ⏎ input │ ←→ page │ ?              │
+│ ▸ RADIO IDLE │ TARGET: ALPHA │ ⏎ input │ ←→ page │ ?               │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -451,23 +451,23 @@ Page 2 of the same session:
 
 ```
 ┌─ DISPATCH ──────────────────────────────────────────────────────────┐
-│ RADIO: ● CONNECTED   PSK: a7f3...  PAGE 2/2                14:32 │
-│ ◄◄ Echo merged to main                                            │
+│ RADIO: ● CONNECTED   PSK: a7f3...  PAGE 2/2                14:32    │
+│ ◄◄ Echo merged to main                                              │
 ├────────────────────────────────┬────────────────────────────────────┤
-│ [5] ECHO                       │ [6] FOXTROT                       │
-│ CLAUDE-CODE | busy             │ CLAUDE-CODE | busy                │
-│ dispatched 14:31 | 1m22s      │ dispatched 14:32 | 0m15s          │
-│ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄   │ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄  │
+│ [5] ECHO                       │ [6] FOXTROT                        │
+│ CLAUDE-CODE | busy             │ CLAUDE-CODE | busy                 │
+│ dispatched 14:31 | 1m22s       │ dispatched 14:32 | 0m15s           │
+│ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄      │ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄      │
 │ ~/project$ claude              │ ~/project$ claude                  │
 │                                │                                    │
-│ > Analyzing the database       │ > Starting linter configuration   │
-│   schema for migration...      │   ...                             │
+│ > Analyzing the database       │ > Starting linter configuration    │
+│   schema for migration...      │   ...                              │
 │                                │                                    │
 │                                │                                    │
 │                                │                                    │
 │                                │                                    │
 ├────────────────────────────────┼────────────────────────────────────┤
-│ [7] ── STANDBY ──              │ [8] ── STANDBY ──                 │
+│ [7] ── STANDBY ──              │ [8] ── STANDBY ──                  │
 │                                │                                    │
 │                                │                                    │
 │                                │                                    │
@@ -479,7 +479,7 @@ Page 2 of the same session:
 │                                │                                    │
 │                                │                                    │
 ├────────────────────────────────┴────────────────────────────────────┤
-│ ▸ RADIO IDLE │ TARGET: ALPHA │ ⏎ input │ ←→ page │ ?              │
+│ ▸ RADIO IDLE │ TARGET: ALPHA │ ⏎ input │ ←→ page │ ?               │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -489,13 +489,13 @@ Page 2 of the same session:
 
 ```
 ┌─ DISPATCH ──────────────────────────────────────────────────────────┐
-│ RADIO: ● CONNECTED   PSK: a7f3...  PAGE 1/2                14:32 │
-│ ◄◄ Alpha merged to main                                           │
+│ RADIO: ● CONNECTED   PSK: a7f3...  PAGE 1/2                14:32    │
+│ ◄◄ Alpha merged to main                                             │
 ├────────────────────────────────┬────────────────────────────────────┤
-│ ┃ [1] ALPHA                    │ [2] BRAVO                         │
+│ ┃ [1] ALPHA                    │ [2] BRAVO                          │
 │ ┃ CLAUDE-CODE | busy           │ ...                                │
-│ ┃ dispatched 14:20 | 12m03s   │                                    │
-│ ┃┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄   │                                    │
+│ ┃ dispatched 14:20 | 12m03s    │                                    │
+│ ┃┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄      │                                    │
 │ ┃~/project$ claude             │                                    │
 │ ┃                              │                                    │
 │ ┃> I'll start by updating...   │                                    │
@@ -727,7 +727,7 @@ Minimal, high-contrast, dark theme. Uppercase labels, monospaced accents.
 │  CLAUDE-CODE | busy         │  <- tool + status
 │                             │
 │  ┌───────────────────────┐  │
-│  │   ◉ LISTENING          │  │
+│  │   ◉ LISTENING        │  │
 │  │   ░░░░░███████░░░░░░  │  │
 │  └───────────────────────┘  │
 │                             │
@@ -737,10 +737,10 @@ Minimal, high-contrast, dark theme. Uppercase labels, monospaced accents.
 │    Alpha.                   │
 │  Dispatcher: Dispatched     │
 │    agent Alpha.             │
-│  Alpha: Merged to main.    │
+│  Alpha: Merged to main.     │
 │                             │
 │  AGENTS                     │
-│  ▸α  β  χ  δ  ε  φ        │  <- scrollable, initials for all active agents
+│  ▸α  β  χ  δ  ε  φ          │  <- scrollable, initials for all active agents
 │                             │
 └─────────────────────────────┘
 ```
