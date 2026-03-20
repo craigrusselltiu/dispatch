@@ -894,6 +894,12 @@ fn dispatch_slot(
         }
         c
     };
+    // Inject agent instructions from docs/AGENTS.md as system prompt.
+    let agents_md_path = format!("{}/docs/AGENTS.md", repo_root);
+    if let Ok(instructions) = std::fs::read_to_string(&agents_md_path) {
+        cmd.arg("--system-prompt");
+        cmd.arg(&instructions);
+    }
     cmd.arg("--dangerously-skip-permissions");
     if let Some(prompt) = initial_prompt {
         cmd.arg(prompt);
@@ -1172,28 +1178,6 @@ fn fetch_task_list_from_file(
 
 // ── headless planner (dispatch-fnx) ───────────────────────────────────────────
 
-const PLANNER_PROMPT: &str = r#"You are the Dispatch task planner. Decompose the following task into a structured plan.
-
-Output ONLY a markdown task list in this exact format (no other text, no code fences):
-
-# Short plan title
-
-- [ ] t1: First task description
-- [ ] t2: Second task that depends on t1 -> t1
-  - [ ] t2.1: Subtask of t2
-  - [ ] t2.2: Another subtask that depends on t2.1 -> t2.1
-- [ ] t3: Third task that depends on t1 and t2 -> t1, t2
-
-Rules:
-- Use t1, t2, t3 for top-level tasks. Use t1.1, t1.2 for subtasks.
-- Add -> id1, id2 when a task depends on other tasks being done first.
-- No arrow means the task can start immediately (no blockers).
-- Keep each task small: one agent should complete it in one session.
-- If the request is simple enough for one agent, output just one task entry.
-- Output ONLY the markdown. No explanation, no commentary.
-
-Task to plan:
-"#;
 
 /// Spawn a headless planner agent in a background thread. Returns a receiver
 /// that delivers the plan text (or None on failure) when the planner exits.
@@ -1204,7 +1188,12 @@ fn spawn_planner(
 ) -> mpsc::Receiver<Option<String>> {
     let (tx, rx) = mpsc::channel();
     let parts: Vec<String> = tool_cmd.split_whitespace().map(|s| s.to_string()).collect();
-    let full_prompt = format!("{}{}", PLANNER_PROMPT, prompt);
+    let planner_instructions = {
+        let path = format!("{}/docs/PLANNER.md", repo_root);
+        std::fs::read_to_string(&path)
+            .unwrap_or_else(|_| "Decompose the following task into subtasks.".to_string())
+    };
+    let full_prompt = format!("{}\n\nTask to plan:\n{}", planner_instructions, prompt);
     let repo_root = repo_root.to_string();
 
     thread::spawn(move || {
