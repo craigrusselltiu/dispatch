@@ -1,0 +1,19 @@
+[server]
+port = 9800
+bind = "0.0.0.0"
+
+[auth]
+# Auto-generated on first run. Run `dispatch regenerate-psk` to rotate.
+psk = ""
+
+[terminal]
+scrollback_lines = 1000
+
+[agents]
+# Agent names, in slot order. The number of entries determines the slot count.
+# Pages are allocated automatically (4 slots per page).
+callsigns = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel"]
+
+[tools]
+claude-code = "claude"
+copilot = "gh copilot suggest"
