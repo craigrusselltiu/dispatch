@@ -222,6 +222,8 @@ struct SlotState {
     idle_since: Option<Instant>, // when idle prompt was first seen (for 500ms debounce)
     // Scrollback (dispatch-ct2.4): lines scrolled back from bottom
     scroll_offset: usize,
+    // Merge conflict retry count (dispatch-0ci). 0 = first attempt, 1 = resolution agent.
+    merge_retries: u8,
 }
 
 impl SlotState {
@@ -929,6 +931,7 @@ fn dispatch_slot(
         last_screen_hash: 0,
         idle_since: None,
         scroll_offset: 0,
+        merge_retries: 0,
     })
 }
 
@@ -1272,9 +1275,30 @@ fn create_worktree(task_id: &str, repo_root: &str) -> Option<String> {
 
 /// Merge `task/{task_id}` into the current branch. On success, removes the
 /// worktree and branch and returns true. On conflict, aborts and returns false.
+/// dispatch-0ci: rebases the task branch onto main before merging to auto-resolve
+/// non-overlapping conflicts from parallel agents.
 fn merge_worktree(task_id: &str, repo_root: &str) -> bool {
     let branch = format!("task/{}", task_id);
     let worktree_path = format!("{}/.dispatch/.worktrees/{}", repo_root, task_id);
+
+    // dispatch-0ci: rebase task branch onto main before merging.
+    if std::path::Path::new(&worktree_path).exists() {
+        let rebased = Command::new("git")
+            .args(["rebase", "main"])
+            .current_dir(&worktree_path)
+            .stdin(Stdio::null())
+            .status()
+            .map(|s| s.success())
+            .unwrap_or(false);
+        if !rebased {
+            let _ = Command::new("git")
+                .args(["rebase", "--abort"])
+                .current_dir(&worktree_path)
+                .stdin(Stdio::null())
+                .status();
+            return false;
+        }
+    }
 
     let merged = Command::new("git")
         .args(["merge", &branch, "--no-ff", "-m", &format!("merge {}", branch)])
@@ -2616,6 +2640,7 @@ fn main() -> io::Result<()> {
                     let task_id = s.task_id.clone();
                     let worktree_path = s.worktree_path.clone();
                     let slot_repo = s.repo_root.clone();
+                    let merge_retries = s.merge_retries;
                     app.slots[i] = None;
                     if let Some(id) = task_id {
                         app.push_orch(OrchestratorEventKind::TaskComplete { id: id.clone(), agent: callsign.clone() });
@@ -2630,10 +2655,48 @@ fn main() -> io::Result<()> {
                                 app.push_orch(OrchestratorEventKind::Merged { id: id.clone() });
                                 app.push_ticker(format!("TASK COMPLETE: {} merged {} — slot {} now standby", callsign, id, i + 1));
                                 app.push_chat("Dispatcher", &format!("Merged task/{} into main.", id));
-                            } else {
+                            } else if merge_retries == 0 {
+                                // dispatch-0ci: dispatch a resolution agent on first conflict.
+                                let cmd = app.tool_cmd("claude-code").to_string();
+                                let resolve_prompt = format!(
+                                    "The branch task/{} has merge conflicts with main. \
+                                     Run `git rebase main`, resolve all conflicts in each file, \
+                                     then `git add` the resolved files and `git rebase --continue`. \
+                                     Repeat until the rebase is complete. Ensure a clean worktree \
+                                     before returning to the prompt.",
+                                    id
+                                );
+                                if let Some(mut slot) = dispatch_slot(
+                                    i, "claude-code", &cmd, app.pane_rows, app.pane_cols,
+                                    worktree_path.as_deref(), app.scrollback_lines,
+                                    repo_name_from_path(&slot_repo), &slot_repo,
+                                    Some(&resolve_prompt),
+                                ) {
+                                    slot.task_id = Some(id.clone());
+                                    slot.worktree_path = worktree_path;
+                                    slot.merge_retries = 1;
+                                    app.slots[i] = Some(slot);
+                                    app.push_ticker(format!(
+                                        "CONFLICT: dispatching agent to resolve {} in slot {}", id, i + 1
+                                    ));
+                                    app.push_chat("Dispatcher", &format!(
+                                        "Merge conflict on task/{}. Dispatching resolution agent.", id
+                                    ));
+                                    continue;
+                                }
+                                // dispatch_slot failed — fall through to manual conflict.
                                 app.push_orch(OrchestratorEventKind::MergeConflict { id: id.clone() });
                                 app.conflict_tasks.push(id.clone());
-                                app.push_ticker(format!("MERGE CONFLICT: {} in {} — resolve manually", id, callsign));
+                                app.push_ticker(format!("MERGE CONFLICT: {} — resolve manually", id));
+                                app.push_chat("Dispatcher", &format!("Merge conflict on task/{}.", id));
+                                if let Some(orch) = &mut app.orchestrator {
+                                    orch.send_message(&format!("[EVENT] MERGE_CONFLICT task={}", id));
+                                }
+                            } else {
+                                // dispatch-0ci: max retries exhausted — flag for manual resolution.
+                                app.push_orch(OrchestratorEventKind::MergeConflict { id: id.clone() });
+                                app.conflict_tasks.push(id.clone());
+                                app.push_ticker(format!("MERGE CONFLICT: {} — resolve manually", id));
                                 app.push_chat("Dispatcher", &format!("Merge conflict on task/{}.", id));
                                 if let Some(orch) = &mut app.orchestrator {
                                     orch.send_message(&format!("[EVENT] MERGE_CONFLICT task={}", id));

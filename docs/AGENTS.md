@@ -43,7 +43,7 @@ Before finishing:
 2. **Verify a clean worktree.** `git status` should report `nothing to commit, working tree clean`. Uncommitted changes will be lost when the console removes the worktree after merging.
 3. **Return to the prompt.** The console's completion detector watches for an idle prompt pattern. Once it sees you are idle, it triggers the merge. Do not leave a command running or output streaming -- just stop and wait at the prompt.
 
-If the merge fails due to conflicts, the console flags it on the ticker and preserves your worktree for manual review.
+If the merge fails due to conflicts, the console automatically dispatches a resolution agent into your worktree to rebase onto main and resolve the conflicts. If resolution also fails, the console flags it on the ticker for manual review.
 
 ## Rules
 

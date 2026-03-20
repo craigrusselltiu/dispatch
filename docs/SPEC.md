@@ -159,9 +159,10 @@ The agent's PTY is launched with its working directory set to the worktree path.
 
 **On task completion:**
 
-1. The console merges the task branch back to the main branch.
+1. The console rebases the task branch onto main (auto-resolves non-overlapping conflicts from parallel agents), then merges the rebased branch back to main with `--no-ff`.
 2. If the merge succeeds, the worktree is cleaned up: `git worktree remove .dispatch/.worktrees/{task_id}`.
-3. If the merge has conflicts, the console flags it on the ticker and leaves the worktree intact for manual review.
+3. If the rebase has conflicts, the console dispatches a resolution agent into the existing worktree to resolve them. The resolution agent rebases onto main, resolves conflicts, and returns to the prompt. On completion, the console retries the merge.
+4. If the resolution agent also fails to merge, the console flags it on the ticker and leaves the worktree intact for manual review.
 
 **On agent termination:**
 
