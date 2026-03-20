@@ -35,6 +35,7 @@ dispatch/
     SPEC.md            # Full system specification
     ARCHITECTURE.md    # High-level architecture overview
     ORCHESTRATOR.md    # Orchestrator behavior and tool reference
+    PLANNER.md         # Headless planner agent behavior
     AGENTS.md          # Template injected into agent prompts
   README.md
 ```
@@ -164,7 +165,7 @@ Simple one-off prompts skip the planning step and dispatch directly.
 - **Git worktree isolation** -- each task runs on its own branch in its own worktree. Agents work in parallel without conflicts. Completed work is auto-merged.
 - **Task planning** -- voice a complex task and the console decomposes it into subtasks with dependencies, then orchestrates execution automatically.
 - **LED ticker** -- scrolling marquee shows planner status, task completions, merge results, and errors without consuming pane space.
-- **Auto-dispatch** -- send a prompt without specifying an agent and the console finds an idle agent, launches a new one, or queues the task if all slots are busy.
+- **Auto-dispatch** -- send a prompt without specifying an agent and the orchestrator decides the best action: message an existing agent, launch a new one, or queue the task.
 - **NATO callsigns** -- agents are assigned Alpha, Bravo, Charlie, ... in dispatch order. Addressable by voice from any page.
 - **Paged layout** -- up to 26 agents across 7 pages. Off-screen agents keep running and are still addressable.
 - **Clean target repo** -- all dispatch artifacts live in `.dispatch/` (gitignored). Your repo stays untouched.
