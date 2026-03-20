@@ -42,7 +42,7 @@ pub struct Orchestrator {
     rx: mpsc::Receiver<OrchestratorOutput>,
     pub state: OrchestratorState,
     /// Queued messages to send once the current turn completes.
-    pending: Vec<String>,
+    pending: std::collections::VecDeque<String>,
     /// Session ID from the init message.
     session_id: String,
 }
@@ -165,7 +165,7 @@ pub fn spawn(system_prompt: &str, cwd: &str) -> Option<Orchestrator> {
         stdin,
         rx,
         state: OrchestratorState::Idle,
-        pending: Vec::new(),
+        pending: std::collections::VecDeque::new(),
         session_id,
     })
 }
@@ -180,7 +180,7 @@ impl Orchestrator {
             return;
         }
         if self.state == OrchestratorState::Responding {
-            self.pending.push(content.to_string());
+            self.pending.push_back(content.to_string());
             return;
         }
         self.send_raw(content);
@@ -213,8 +213,7 @@ impl Orchestrator {
                     OrchestratorOutput::TurnComplete => {
                         self.state = OrchestratorState::Idle;
                         // Flush pending messages.
-                        if let Some(msg) = self.pending.first().cloned() {
-                            self.pending.remove(0);
+                        if let Some(msg) = self.pending.pop_front() {
                             self.send_raw(&msg);
                         }
                     }

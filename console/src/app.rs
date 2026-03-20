@@ -49,7 +49,7 @@ impl App {
             repo_select_idx: 0,
             scrollback_lines,
             view_mode: ViewMode::Agents,
-            orch_log: Vec::new(),
+            orch_log: std::collections::VecDeque::new(),
             orch_scroll: 0,
             orchestrator: None,
             pending_voice: Vec::new(),
@@ -62,10 +62,10 @@ impl App {
     /// Push an event to the orchestrator log (dispatch-6nm).
     pub fn push_orch(&mut self, kind: OrchestratorEventKind) {
         let time = Local::now().format("%H:%M:%S").to_string();
-        self.orch_log.push(OrchestratorEvent { time, kind });
+        self.orch_log.push_back(OrchestratorEvent { time, kind });
         // Cap at 500 entries to bound memory.
         if self.orch_log.len() > 500 {
-            self.orch_log.remove(0);
+            self.orch_log.pop_front();
             self.orch_scroll = self.orch_scroll.saturating_sub(1);
         }
     }

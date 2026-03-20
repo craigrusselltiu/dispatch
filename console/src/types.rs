@@ -155,7 +155,7 @@ pub struct App {
     pub scrollback_lines: u32,
     // Orchestrator log view
     pub view_mode: ViewMode,
-    pub orch_log: Vec<OrchestratorEvent>,
+    pub orch_log: std::collections::VecDeque<OrchestratorEvent>,
     pub orch_scroll: usize, // scroll offset from bottom
     // Persistent LLM orchestrator
     pub orchestrator: Option<orchestrator::Orchestrator>,
