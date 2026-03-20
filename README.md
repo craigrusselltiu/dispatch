@@ -99,7 +99,7 @@ The console displays four agent panes at a time in a 2x2 grid with a scrolling t
 
 | Key               | Action                                              |
 |-------------------|-----------------------------------------------------|
-| `Enter` / `i`     | Enter input mode on targeted pane                   |
+| `Enter`           | Enter input mode on targeted pane                   |
 | `1`-`4`           | Select target slot on current page                  |
 | `Tab`             | Cycle target forward across all agents              |
 | `]` / `[`         | Next / previous page                                |
