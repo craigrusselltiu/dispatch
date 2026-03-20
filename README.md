@@ -102,7 +102,7 @@ The console displays four agent panes at a time in a 2x2 grid with a scrolling t
 | `Enter` / `i`     | Enter input mode on targeted pane                   |
 | `1`-`4`           | Select target slot on current page                  |
 | `Tab`             | Cycle target forward across all agents              |
-| `]` / `[`         | Next / previous page                                |
+| `Right` / `Left`  | Next / previous page                                |
 | `PgUp` / `PgDn`   | Scroll pane output up/down                          |
 | `n`               | Dispatch new agent (repo select in multi-repo mode) |
 | `x`               | Terminate agent in targeted slot                    |

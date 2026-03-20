@@ -1962,8 +1962,8 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         Line::from(Span::raw("  1-4          Select slot on current page")),
         Line::from(Span::raw("  Tab          Next slot (all pages)")),
         Line::from(Span::raw("  Shift+Tab    Prev slot (all pages)")),
-        Line::from(Span::raw("  ] / Shift+→  Next page")),
-        Line::from(Span::raw("  [ / Shift+←  Prev page")),
+        Line::from(Span::raw("  →            Next page")),
+        Line::from(Span::raw("  ←            Prev page")),
         Line::from(Span::raw("  PgUp / PgDn  Scroll pane output")),
         Line::from(Span::raw("  n            Dispatch (repo select in multi-repo)")),
         Line::from(Span::raw("  N            Dispatch into specific slot")),
@@ -3261,25 +3261,14 @@ fn main() -> io::Result<()> {
                                     app.target = prev % SLOTS_PER_PAGE;
                                 }
 
-                                KeyCode::Char(']') => {
-                                    let total = app.total_pages();
-                                    if app.current_page + 1 < total {
-                                        app.current_page += 1;
-                                    }
-                                }
-                                KeyCode::Right if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                                KeyCode::Right => {
                                     let total = app.total_pages();
                                     if app.current_page + 1 < total {
                                         app.current_page += 1;
                                     }
                                 }
 
-                                KeyCode::Char('[') => {
-                                    if app.current_page > 0 {
-                                        app.current_page -= 1;
-                                    }
-                                }
-                                KeyCode::Left if key.modifiers.contains(KeyModifiers::SHIFT) => {
+                                KeyCode::Left => {
                                     if app.current_page > 0 {
                                         app.current_page -= 1;
                                     }

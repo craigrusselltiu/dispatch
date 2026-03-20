@@ -546,7 +546,7 @@ The console displays four agent panes at a time in a 2x2 grid. With more than fo
 - Page 3: slots 9-12 (India through Lima)
 - ...up to page 7 (26 slots max)
 
-Pages are cycled with `[` / `]` or `Shift+Left` / `Shift+Right`. The header shows the current page and total pages.
+Pages are cycled with `Left` / `Right` arrow keys. The header shows the current page and total pages.
 
 ```
 ┌─ DISPATCH ──────────────────────────────────────────────────────────┐
@@ -578,7 +578,7 @@ Pages are cycled with `[` / `]` or `Shift+Left` / `Shift+Right`. The header show
 │                                │                                    │
 │                                │                                    │
 ├────────────────────────────────┴────────────────────────────────────┤
-│ ▸ RADIO IDLE │ TARGET: ALPHA │ i input │ [] page │ n new │ ?      │
+│ ▸ RADIO IDLE │ TARGET: ALPHA │ Enter input │ ←→ page │ n new │ ?  │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -614,7 +614,7 @@ Page 2 of the same session:
 │                                │                                    │
 │                                │                                    │
 ├────────────────────────────────┴────────────────────────────────────┤
-│ ▸ RADIO IDLE │ TARGET: ALPHA │ i input │ [] page │ n new │ ?      │
+│ ▸ RADIO IDLE │ TARGET: ALPHA │ Enter input │ ←→ page │ n new │ ?  │
 └─────────────────────────────────────────────────────────────────────┘
 ```
 
@@ -682,8 +682,8 @@ While in input mode, `Escape` is the only key intercepted by the console. Everyt
 | `1-4`             | Select target slot on current page (slot = page offset + key)|
 | `Tab`             | Cycle target forward across all pages (skips empty slots, auto-navigates) |
 | `Shift+Tab`       | Cycle target backward across all pages                       |
-| `]` / `Shift+Right` | Next page                                                 |
-| `[` / `Shift+Left`  | Previous page                                             |
+| `Right`             | Next page                                                  |
+| `Left`              | Previous page                                              |
 | `n`               | Dispatch new agent (repo selector in multi-repo mode)        |
 | `N`               | Dispatch new agent into a specific slot (prompts for slot number) |
 | `x`               | Terminate agent in currently targeted slot (confirms first)  |
