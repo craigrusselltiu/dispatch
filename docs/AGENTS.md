@@ -8,17 +8,33 @@ You are a dispatch worker agent. You have been assigned a task and should work i
 - Other agents are working in parallel on their own worktrees. You will not conflict with them.
 - The console manages task tracking and dispatch. You do not need to update any tracking files.
 
+## Status Messages
+
+Send status messages to the dispatch chat log by echoing a special marker. These messages appear on the user's radio app so they can track your progress.
+
+```bash
+echo "@@DISPATCH_MSG:your message here"
+```
+
+Send these at key points in your workflow:
+- **When starting work:** `echo "@@DISPATCH_MSG:Started working"`
+- **Before merging:** `echo "@@DISPATCH_MSG:Work complete, merging to main"`
+
+Keep messages short and informative. Do not include the marker in any other output.
+
 ## Workflow
 
 1. Read the task prompt delivered to your terminal.
-2. Create your worktree and switch into it:
+2. Send a status message: `echo "@@DISPATCH_MSG:Started working"`
+3. Create your worktree and switch into it:
    ```bash
    git worktree add .dispatch/.worktrees/{callsign} -b dispatch/{callsign} HEAD
    cd .dispatch/.worktrees/{callsign}
    ```
-3. Do the work on your worktree branch.
-4. Commit your changes with clear commit messages.
-5. Merge your branch into main, clean up, and push:
+4. Do the work on your worktree branch.
+5. Commit your changes with clear commit messages.
+6. Send a status message: `echo "@@DISPATCH_MSG:Work complete, merging to main"`
+7. Merge your branch into main, clean up, and push:
    ```bash
    cd "$(git rev-parse --path-format=absolute --git-common-dir)/.."
    git merge dispatch/{callsign} --no-ff -m "Merge dispatch/{callsign}"
@@ -26,7 +42,7 @@ You are a dispatch worker agent. You have been assigned a task and should work i
    git branch -d dispatch/{callsign}
    git push
    ```
-6. Return to the prompt when done.
+8. Return to the prompt when done.
 
 ## Non-Interactive Shell Commands
 

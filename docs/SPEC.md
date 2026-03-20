@@ -337,7 +337,9 @@ Sent to the current target.
 <- { "type": "chat", "sender": "You", "text": "refactor the auth module" }
 ```
 
-Pushed to all connected clients whenever the orchestrator produces text or other significant events occur. Not a response to any request -- the console pushes these proactively. The `sender` field identifies who said it: `"You"` for voice transcripts, `"Dispatcher"` for orchestrator decisions, or an agent callsign (e.g. `"Alpha"`) for agent events.
+Pushed to all connected clients whenever the orchestrator produces text or other significant events occur. Not a response to any request -- the console pushes these proactively. The `sender` field identifies who said it: `"You"` for voice transcripts, `"Dispatcher"` for orchestrator decisions, or an agent callsign (e.g. `"Alpha"`) for agent status messages.
+
+**Agent status messages:** Agents send chat messages by echoing a special marker to their PTY: `echo "@@DISPATCH_MSG:message text"`. The console's PTY reader detects this marker in the byte stream and broadcasts it as a chat message with the agent's callsign as the sender. Agents are instructed to emit these at key workflow points (started, completed).
 
 **Error**
 

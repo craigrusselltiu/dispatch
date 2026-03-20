@@ -24,6 +24,7 @@ impl App {
         workspace: Workspace,
         scrollback_lines: u32,
         chat_tx: tokio::sync::broadcast::Sender<String>,
+        agent_msg_tx: std::sync::mpsc::Sender<(usize, String)>,
     ) -> Self {
         App {
             slots: std::array::from_fn(|_| None),
@@ -53,6 +54,7 @@ impl App {
             orchestrator: None,
             pending_voice: Vec::new(),
             chat_tx,
+            agent_msg_tx,
         }
     }
 
@@ -246,6 +248,7 @@ impl App {
                         None, self.scrollback_lines,
                         repo_name_from_path(&target_repo), &target_repo,
                         Some(&full_prompt),
+                        self.agent_msg_tx.clone(),
                     ) {
                         Some(slot) => { self.slots[slot_idx] = Some(slot); }
                         None => return tools::ToolResult::Error {

@@ -14,9 +14,14 @@ use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
 use crate::types::{SlotState, NATO, MAX_SLOTS};
 
+/// Marker prefix that agents echo to send chat messages to the radio app.
+/// Usage: `echo "@@DISPATCH_MSG:your message here"`
+pub const DISPATCH_MSG_MARKER: &str = "@@DISPATCH_MSG:";
+
 /// Open a PTY and spawn a process. Returns a SlotState on success.
 /// `cwd` sets the working directory for the PTY (dispatch-xje: worktree path).
 /// `initial_prompt` is passed as a CLI argument so the agent starts working immediately.
+/// `agent_msg_tx` receives (slot_index, message_text) when the agent emits a @@DISPATCH_MSG marker.
 pub fn dispatch_slot(
     global_idx: usize,
     tool_key: &str,
@@ -28,6 +33,7 @@ pub fn dispatch_slot(
     repo_name: &str,
     repo_root: &str,
     initial_prompt: Option<&str>,
+    agent_msg_tx: std::sync::mpsc::Sender<(usize, String)>,
 ) -> Option<SlotState> {
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -81,10 +87,30 @@ pub fn dispatch_slot(
     thread::spawn(move || {
         let mut child = child;
         let mut buf = [0u8; 4096];
+        let mut line_buf: Vec<u8> = Vec::with_capacity(512);
         loop {
             match pty_reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
+                    // Scan for @@DISPATCH_MSG: markers in the byte stream.
+                    for &byte in &buf[..n] {
+                        if byte == b'\n' {
+                            if let Ok(line) = std::str::from_utf8(&line_buf) {
+                                if let Some(pos) = line.find(DISPATCH_MSG_MARKER) {
+                                    let msg = line[pos + DISPATCH_MSG_MARKER.len()..].trim();
+                                    if !msg.is_empty() {
+                                        let _ = agent_msg_tx.send((global_idx, msg.to_string()));
+                                    }
+                                }
+                            }
+                            line_buf.clear();
+                        } else if byte != b'\r' {
+                            line_buf.push(byte);
+                            if line_buf.len() > 4096 {
+                                line_buf.clear();
+                            }
+                        }
+                    }
                     screen_w.lock().unwrap().process(&buf[..n]);
                 }
             }

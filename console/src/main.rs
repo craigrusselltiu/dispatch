@@ -143,6 +143,9 @@ fn main() -> io::Result<()> {
         (cwd.clone(), Workspace::MultiRepo { parent: cwd, repos })
     };
 
+    // Channel for agent status messages from PTY reader threads (dispatch-agentchat).
+    let (agent_msg_tx, agent_msg_rx) = mpsc::channel::<(usize, String)>();
+
     let mut app = App::new(
         cfg.auth.psk.clone(),
         cfg.server.port,
@@ -153,6 +156,7 @@ fn main() -> io::Result<()> {
         workspace,
         cfg.terminal.scrollback_lines,
         chat_tx,
+        agent_msg_tx,
     );
 
     // dispatch-guj: eagerly spawn orchestrator in background so it's warm
@@ -255,6 +259,15 @@ fn main() -> io::Result<()> {
             } else {
                 app.pending_voice.push(text);
             }
+        }
+
+        // dispatch-agentchat: poll agent status messages from PTY reader threads.
+        while let Ok((slot_idx, text)) = agent_msg_rx.try_recv() {
+            let callsign = app.slots.get(slot_idx)
+                .and_then(|s| s.as_ref())
+                .map(|s| s.display_name().to_string())
+                .unwrap_or_else(|| format!("Agent-{}", slot_idx + 1));
+            app.push_chat(&callsign, &text);
         }
 
         // dispatch-h62: poll orchestrator output and execute tool calls.
@@ -467,6 +480,7 @@ fn main() -> io::Result<()> {
                                                     Some(&selected_repo), app.scrollback_lines,
                                                     util::repo_name_from_path(&selected_repo), &selected_repo,
                                                     None,
+                                                    app.agent_msg_tx.clone(),
                                                 ) {
                                                     let page = g / SLOTS_PER_PAGE;
                                                     let local = g % SLOTS_PER_PAGE;
