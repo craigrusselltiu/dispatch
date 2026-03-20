@@ -10,7 +10,6 @@
 //   merge(task_id)               — merge task branch into main
 //   list_agents()                — get all agent slot states
 //   list_repos()                 — list known repositories
-//   plan(repo, prompt)           — spawn headless planner for task decomposition
 //   message_agent(agent, text)   — send text to an agent's PTY
 
 use serde::{Deserialize, Serialize};
@@ -43,13 +42,6 @@ pub enum ToolCall {
     ListAgents,
     /// List available repositories.
     ListRepos,
-    /// Spawn a headless planner to decompose a complex prompt into subtasks.
-    Plan {
-        /// Repository name or path.
-        repo: String,
-        /// Complex task description to decompose.
-        prompt: String,
-    },
     /// Send text to a running agent's terminal.
     MessageAgent {
         /// Agent callsign (e.g. "Alpha") or slot number as string (e.g. "1").
@@ -108,10 +100,6 @@ pub enum ToolResult {
     /// Repository listing.
     Repos {
         repos: Vec<RepoInfo>,
-    },
-    /// Planning started.
-    PlanStarted {
-        prompt: String,
     },
     /// Message sent to agent.
     MessageSent {
@@ -190,24 +178,6 @@ pub fn tool_definitions() -> serde_json::Value {
             "input_schema": {
                 "type": "object",
                 "properties": {}
-            }
-        },
-        {
-            "name": "plan",
-            "description": "Spawn a headless planner agent to decompose a complex task into subtasks. The planner writes a structured task breakdown to .dispatch/tasks.md, which the console then uses to dispatch worker agents.",
-            "input_schema": {
-                "type": "object",
-                "properties": {
-                    "repo": {
-                        "type": "string",
-                        "description": "Repository name or path."
-                    },
-                    "prompt": {
-                        "type": "string",
-                        "description": "Complex task description to decompose into subtasks."
-                    }
-                },
-                "required": ["repo", "prompt"]
             }
         },
         {
@@ -339,19 +309,6 @@ mod tests {
     }
 
     #[test]
-    fn parse_plan_call() {
-        let text = r#"<tool_call>{"name": "plan", "input": {"repo": "dispatch", "prompt": "refactor auth"}}</tool_call>"#;
-        let call = parse_tool_call(text).unwrap();
-        match call {
-            ToolCall::Plan { repo, prompt } => {
-                assert_eq!(repo, "dispatch");
-                assert_eq!(prompt, "refactor auth");
-            }
-            _ => panic!("expected Plan"),
-        }
-    }
-
-    #[test]
     fn parse_message_agent_call() {
         let text = r#"<tool_call>{"name": "message_agent", "input": {"agent": "1", "text": "hello"}}</tool_call>"#;
         let call = parse_tool_call(text).unwrap();
@@ -416,9 +373,8 @@ mod tests {
         assert!(names.contains(&"merge"));
         assert!(names.contains(&"list_agents"));
         assert!(names.contains(&"list_repos"));
-        assert!(names.contains(&"plan"));
         assert!(names.contains(&"message_agent"));
-        assert_eq!(names.len(), 7);
+        assert_eq!(names.len(), 6);
     }
 
     #[test]

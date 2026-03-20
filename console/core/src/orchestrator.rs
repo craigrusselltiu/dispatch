@@ -320,11 +320,6 @@ fn parse_action_json(json_str: &str) -> Result<tools::ToolCall, serde_json::Erro
         }
         "list_agents" => Ok(tools::ToolCall::ListAgents),
         "list_repos" => Ok(tools::ToolCall::ListRepos),
-        "plan" => {
-            let repo = v.get("repo").and_then(|r| r.as_str()).unwrap_or("").to_string();
-            let prompt = v.get("prompt").and_then(|p| p.as_str()).unwrap_or("").to_string();
-            Ok(tools::ToolCall::Plan { repo, prompt })
-        }
         "message_agent" => {
             let agent = v.get("agent").and_then(|a| a.as_str()).unwrap_or("").to_string();
             let text = v.get("text").and_then(|t| t.as_str()).unwrap_or("").to_string();
