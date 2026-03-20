@@ -41,21 +41,10 @@ No fixed command patterns. The orchestrator understands natural language and use
 
 ### Console (PC)
 
-Install from GitHub:
-
 ```sh
-cargo install --git https://github.com/craigrusselltiu/dispatch.git --path console
-```
-
-Or clone and install locally:
-
-```sh
-git clone https://github.com/craigrusselltiu/dispatch.git
-cd dispatch/console
+cd console
 cargo install --path .
 ```
-
-This compiles the `dispatch` binary and places it in your Cargo bin directory (`~/.cargo/bin` on Linux/macOS, `%USERPROFILE%\.cargo\bin` on Windows). Make sure this directory is in your `PATH`.
 
 Then `cd` into any git repo and run:
 

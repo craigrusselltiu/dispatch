@@ -360,39 +360,6 @@ Pushed to all connected clients whenever the orchestrator produces text or other
 - Dependencies: `ratatui`, `crossterm`, `tokio`, `tokio-tungstenite`, `serde`, `serde_json`, `toml`, `portable-pty`, `vt100`, `dirs`, `mdns-sd` (mDNS advertisement), `hostname`
 - Single binary, cross-platform (Windows, macOS, Linux)
 
-### Installation
-
-Requires the Rust toolchain (`rustup`, `cargo`) and Git.
-
-**Install from GitHub:**
-
-```sh
-cargo install --git https://github.com/craigrusselltiu/dispatch.git --path console
-```
-
-**Install from a local clone:**
-
-```sh
-git clone https://github.com/craigrusselltiu/dispatch.git
-cd dispatch/console
-cargo install --path .
-```
-
-Both methods compile the `dispatch` binary and place it in the Cargo bin directory:
-
-| Platform      | Default path                          |
-|---------------|---------------------------------------|
-| Linux / macOS | `~/.cargo/bin/dispatch`               |
-| Windows       | `%USERPROFILE%\.cargo\bin\dispatch.exe`|
-
-Ensure the Cargo bin directory is in your `PATH`. The `rustup` installer adds it by default.
-
-**Verify:**
-
-```sh
-dispatch --help
-```
-
 ### Embedded Terminals
 
 Each agent pane is a real terminal emulator, not a text capture. The console manages PTYs directly -- there is no tmux dependency.
