@@ -32,13 +32,14 @@ Both components live in a single monorepo.
 
 ```
 dispatch/
-  radio/               # Android app (Kotlin, Gradle)
-  console/             # PC TUI (Rust, Cargo)
+  radio/                      # Android app (Kotlin, Gradle)
+  console/                    # PC TUI (Rust, Cargo)
+    config.default.toml       # Default configuration template
   docs/
-    SPEC.md            # Full system specification
-    ARCHITECTURE.md    # High-level architecture overview
-    ORCHESTRATOR.md    # Orchestrator behavior and action reference
-    AGENTS.md          # Template injected into agent prompts
+    SPEC.md                   # Full system specification
+    ARCHITECTURE.md           # High-level architecture overview
+    ORCHESTRATOR.md           # Orchestrator behavior and action reference
+    AGENTS.md                 # Template injected into agent prompts
   README.md
 ```
 
@@ -641,7 +642,7 @@ Stored in a platform-appropriate config directory, auto-generated on first run:
 - **macOS**: `~/Library/Application Support/dispatch/config.toml`
 - **Windows**: `%APPDATA%\dispatch\config.toml`
 
-The `dirs` crate handles path resolution.
+The `dirs` crate handles path resolution. A default configuration template is provided at `console/config.default.toml`.
 
 ```toml
 [server]
@@ -649,7 +650,7 @@ port = 9800
 bind = "0.0.0.0"
 
 [auth]
-# Auto-generated. Run `dispatch regenerate-psk` to rotate.
+# Auto-generated on first run. Run `dispatch regenerate-psk` to rotate.
 psk = "a7f3e9b1c4d8..."
 
 [terminal]

@@ -62,6 +62,8 @@ On first run, a config file is generated with a random pre-shared key (PSK):
 
 The PSK is displayed in the console header bar. You will need it to connect the radio.
 
+Agent callsigns are configured in the `[agents]` section. See [`console/config.default.toml`](console/config.default.toml) for the full default configuration.
+
 ### Radio (Android)
 
 1. Open the `radio/` directory in Android Studio (File > Open).
@@ -148,13 +150,14 @@ dispatch config             # Print config file path
 
 ```
 dispatch/
-  console/             # PC TUI (Rust)
-  radio/               # Android app (Kotlin)
+  console/                    # PC TUI (Rust)
+    config.default.toml       # Default configuration template
+  radio/                      # Android app (Kotlin)
   docs/
-    SPEC.md            # Full system specification
-    ARCHITECTURE.md    # Architecture overview
-    ORCHESTRATOR.md    # Orchestrator behavior and tool reference
-    AGENTS.md          # Template injected into agent prompts
+    SPEC.md                   # Full system specification
+    ARCHITECTURE.md           # Architecture overview
+    ORCHESTRATOR.md           # Orchestrator behavior and tool reference
+    AGENTS.md                 # Template injected into agent prompts
 ```
 
 ## Inspiration
