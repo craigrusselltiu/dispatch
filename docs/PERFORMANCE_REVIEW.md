@@ -68,28 +68,28 @@ Note: the current `set_scrollback()`/`set_scrollback(0)` sandwich in ui.rs lines
 
 ---
 
-## 4. O(n) Vec::remove(0) on orch_log and orchestrator pending queue
+~~## 4. O(n) Vec::remove(0) on orch_log and orchestrator pending queue~~
 
-**Files:** `console/src/app.rs` line 68, `console/core/src/orchestrator.rs` line 218
+~~**Files:** `console/src/app.rs` line 68, `console/core/src/orchestrator.rs` line 218~~
 
-**Issue:** `orch_log` is a `Vec<OrchestratorEvent>` capped at 500 entries. When it overflows, `self.orch_log.remove(0)` shifts all ~500 elements left. This is O(n) per removal.
+~~**Issue:** `orch_log` is a `Vec<OrchestratorEvent>` capped at 500 entries. When it overflows, `self.orch_log.remove(0)` shifts all ~500 elements left. This is O(n) per removal.~~
 
-Similarly, in orchestrator.rs:218, `self.pending.remove(0)` removes the first pending message. While the pending queue is typically small, it's still an avoidable O(n).
+~~Similarly, in orchestrator.rs:218, `self.pending.remove(0)` removes the first pending message. While the pending queue is typically small, it's still an avoidable O(n).~~
 
-**Recommendation:** Change `orch_log` from `Vec` to `VecDeque`. Use `pop_front()` instead of `remove(0)`. For the orchestrator pending queue, also use `VecDeque` or `drain(..1)`.
+~~**Recommendation:** Change `orch_log` from `Vec` to `VecDeque`. Use `pop_front()` instead of `remove(0)`. For the orchestrator pending queue, also use `VecDeque` or `drain(..1)`.~~
 
-```rust
-// app.rs - before:
-if self.orch_log.len() > 500 {
-    self.orch_log.remove(0);
-}
-// after:
-if self.orch_log.len() > 500 {
-    self.orch_log.pop_front();
-}
-```
+~~```rust~~
+~~// app.rs - before:~~
+~~if self.orch_log.len() > 500 {~~
+~~    self.orch_log.remove(0);~~
+~~}~~
+~~// after:~~
+~~if self.orch_log.len() > 500 {~~
+~~    self.orch_log.pop_front();~~
+~~}~~
+~~```~~
 
-**Impact:** LOW (500 elements is small) but trivial to fix.
+~~**Impact:** LOW (500 elements is small) but trivial to fix.~~
 
 ---
 
@@ -250,7 +250,7 @@ The main memory consumers are the 4-26 vt100 parsers (each holding scrollback) a
 | HIGH | Add dirty-tracking to skip idle redraws | main.rs | Medium |
 | HIGH | Reduce allocations in screen_to_lines() | ui.rs | Low |
 | MEDIUM | Reduce mutex hold time for VT100 screens | pty.rs, ui.rs | Medium |
-| MEDIUM | Use VecDeque for orch_log | app.rs, types.rs | Trivial |
+| ~~MEDIUM~~ | ~~Use VecDeque for orch_log~~ | ~~app.rs, types.rs~~ | ~~Trivial~~ |
 | MEDIUM | Fix resize_all_slots scrollback loss | pty.rs | Low |
 | MEDIUM | Cache per-frame strings (clock, ticker) | ui.rs, app.rs | Low |
 | LOW | Fix truncate() UTF-8 safety | util.rs | Trivial |
