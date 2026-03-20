@@ -228,15 +228,44 @@ impl App {
     pub fn execute_tool(&mut self, call: &tools::ToolCall) -> tools::ToolResult {
         match call {
             tools::ToolCall::Dispatch { repo: _, prompt, callsign: requested_callsign } => {
-                // Find an idle slot (has PTY but no task) or an empty slot.
-                let slot_idx = self.slots.iter().enumerate().find_map(|(i, s)| {
-                    match s {
-                        Some(slot) if slot.task_id.is_none() => Some(i),
-                        _ => None,
+                // When a callsign is explicitly requested, dispatch to its
+                // matching slot (e.g. Delta -> slot 4) instead of picking the
+                // first empty slot.
+                let slot_idx = if let Some(cs) = requested_callsign.as_deref() {
+                    match protocol::nato_slot(cs) {
+                        Some(idx) => {
+                            if idx >= MAX_SLOTS {
+                                return tools::ToolResult::Error {
+                                    message: format!("invalid callsign '{}'", cs),
+                                };
+                            }
+                            // Slot must be empty or idle (no active task).
+                            match &self.slots[idx] {
+                                Some(slot) if slot.task_id.is_some() => {
+                                    return tools::ToolResult::Error {
+                                        message: format!("{} (slot {}) is busy", cs, idx + 1),
+                                    };
+                                }
+                                _ => Some(idx),
+                            }
+                        }
+                        None => {
+                            return tools::ToolResult::Error {
+                                message: format!("unknown callsign '{}'", cs),
+                            };
+                        }
                     }
-                }).or_else(|| {
-                    self.slots.iter().position(|s| s.is_none())
-                });
+                } else {
+                    // No callsign requested: find an idle slot or empty slot.
+                    self.slots.iter().enumerate().find_map(|(i, s)| {
+                        match s {
+                            Some(slot) if slot.task_id.is_none() => Some(i),
+                            _ => None,
+                        }
+                    }).or_else(|| {
+                        self.slots.iter().position(|s| s.is_none())
+                    })
+                };
 
                 let slot_idx = match slot_idx {
                     Some(i) => i,
