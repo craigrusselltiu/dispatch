@@ -1905,7 +1905,7 @@ fn render_footer(f: &mut Frame, area: Rect, app: &App) {
             let hints = if app.view_mode == ViewMode::Orchestrator {
                 " o:back  ?:help  q:quit"
             } else {
-                " i:input  n:new  x:kill  t:tasks  o:orch  ?:help  q:quit"
+                " Enter:input  n:new  x:kill  t:tasks  o:orch  ?:help  q:quit"
             };
             Line::from(vec![
                 Span::styled(
@@ -1957,7 +1957,7 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
             Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
         )),
         Line::default(),
-        Line::from(Span::raw("  Enter / i    Enter input mode")),
+        Line::from(Span::raw("  Enter        Enter input mode")),
         Line::from(Span::raw("  1-4          Select slot on current page")),
         Line::from(Span::raw("  Tab          Next slot (all pages)")),
         Line::from(Span::raw("  Shift+Tab    Prev slot (all pages)")),
@@ -3228,7 +3228,7 @@ fn main() -> io::Result<()> {
                                     }
                                 }
 
-                                KeyCode::Enter | KeyCode::Char('i') => {
+                                KeyCode::Enter => {
                                     // dispatch-ct2.4: reset scroll when entering input mode
                                     let target_g = app.target_global();
                                     if let Some(Some(slot)) = app.slots.get_mut(target_g) {
