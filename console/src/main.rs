@@ -22,7 +22,6 @@
 // dispatch-1lc.3: task dependencies — -> arrow syntax in .dispatch/tasks.md, file-based task ops
 // dispatch-1lc.4: task list overlay — full-screen plan view with status groups and agent assignments
 // dispatch-1lc.3: task dependencies — -> arrow syntax in .dispatch/tasks.md, dependency-aware dispatch
-// dispatch-fnx: headless planner — spawns claude -p to decompose complex prompts into task plans
 // dispatch-ct2.4: terminal scrollback in panes — PgUp/PgDn in command mode, configurable buffer
 // dispatch-sa1: multi-repo support — detect non-repo parent, scan children for git repos
 // dispatch-ct2.8: prompt history — log voice/keyboard prompts to file, browsable history overlay
@@ -143,12 +142,6 @@ struct OrchestratorEvent {
 enum OrchestratorEventKind {
     /// Voice transcript received from radio.
     VoiceTranscript { text: String },
-    /// Orchestrator decided to plan a complex prompt.
-    PlanStart { prompt: String },
-    /// Planner finished, produced N tasks.
-    PlanComplete { task_count: usize, prompt: String },
-    /// Planner failed; falling back to direct dispatch.
-    PlanFailed,
     /// Task created in tasks.md.
     TaskCreated { id: String, title: String },
     /// Task assigned to an agent slot.
@@ -165,8 +158,6 @@ enum OrchestratorEventKind {
     Terminated { agent: String, slot: usize },
     /// All agents busy, task queued.
     Queued { id: String },
-    /// Ready tasks dispatched from the plan.
-    PlanDispatched { count: usize },
     /// Orchestrator reasoning text (dispatch-h62).
     OrchestratorText { text: String },
     /// Tool call issued by orchestrator (dispatch-h62).
@@ -256,12 +247,6 @@ struct TaskEntry {
     deps: Vec<String>,     // dependency IDs from -> arrows (dispatch-1lc.3)
 }
 
-/// State for a running headless planner (dispatch-fnx).
-struct PlannerState {
-    prompt: String,
-    receiver: mpsc::Receiver<Option<String>>,
-}
-
 /// A recorded prompt for the history log (dispatch-ct2.8).
 #[derive(Clone)]
 struct PromptEntry {
@@ -314,8 +299,6 @@ struct App {
     repo_select_idx: usize,
     // Task list overlay cache (dispatch-1lc.4): loaded when overlay opens
     task_list_data: Vec<TaskEntry>,
-    // Headless planner (dispatch-fnx)
-    planner: Option<PlannerState>,
     // Scrollback config (dispatch-ct2.4)
     scrollback_lines: u32,
     // Orchestrator log view (dispatch-6nm)
@@ -376,7 +359,6 @@ impl App {
             workspace,
             repo_select_idx: 0,
             task_list_data: Vec::new(),
-            planner: None,
             scrollback_lines,
             view_mode: ViewMode::Agents,
             orch_log: Vec::new(),
@@ -774,29 +756,6 @@ impl App {
                 tools::ToolResult::Repos { repos }
             }
 
-            tools::ToolCall::Plan { repo: _, prompt } => {
-                if self.planner.is_some() {
-                    return tools::ToolResult::Error {
-                        message: "planner already running".to_string(),
-                    };
-                }
-                let cmd = self.tool_cmd("claude-code").to_string();
-                let target_repo = self.default_repo_root().to_string();
-                let rx = spawn_planner(prompt, &cmd, &target_repo);
-                self.planner = Some(PlannerState {
-                    prompt: prompt.clone(),
-                    receiver: rx,
-                });
-                self.push_orch(OrchestratorEventKind::PlanStart { prompt: prompt.clone() });
-                let display = if prompt.len() > 60 {
-                    format!("{}...", &prompt[..57])
-                } else {
-                    prompt.clone()
-                };
-                self.push_ticker(format!("PLANNING: {}", display));
-                tools::ToolResult::PlanStarted { prompt: prompt.clone() }
-            }
-
             tools::ToolCall::MessageAgent { agent, text } => {
                 let (slot_occupied, callsigns): (Vec<bool>, Vec<Option<String>>) = self.slots
                     .iter()
@@ -1175,60 +1134,6 @@ fn fetch_task_list_from_file(
         .collect()
 }
 
-
-// ── headless planner (dispatch-fnx) ───────────────────────────────────────────
-
-
-/// Spawn a headless planner agent in a background thread. Returns a receiver
-/// that delivers the plan text (or None on failure) when the planner exits.
-fn spawn_planner(
-    prompt: &str,
-    tool_cmd: &str,
-    repo_root: &str,
-) -> mpsc::Receiver<Option<String>> {
-    let (tx, rx) = mpsc::channel();
-    let parts: Vec<String> = tool_cmd.split_whitespace().map(|s| s.to_string()).collect();
-    let planner_instructions = {
-        let path = format!("{}/docs/PLANNER.md", repo_root);
-        std::fs::read_to_string(&path)
-            .unwrap_or_else(|_| "Decompose the following task into subtasks.".to_string())
-    };
-    let full_prompt = format!("{}\n\nTask to plan:\n{}", planner_instructions, prompt);
-    let repo_root = repo_root.to_string();
-
-    thread::spawn(move || {
-        let result = if parts.is_empty() {
-            None
-        } else {
-            let mut cmd = Command::new(&parts[0]);
-            for arg in &parts[1..] {
-                cmd.arg(arg);
-            }
-            cmd.arg("-p").arg(&full_prompt);
-            cmd.current_dir(&repo_root);
-
-            cmd.output().ok().and_then(|o| {
-                if o.status.success() {
-                    let text = String::from_utf8_lossy(&o.stdout).to_string();
-                    let stripped = text.trim();
-                    // Strip code fences if the LLM wrapped the output
-                    let stripped = stripped
-                        .strip_prefix("```markdown")
-                        .or_else(|| stripped.strip_prefix("```md"))
-                        .or_else(|| stripped.strip_prefix("```"))
-                        .unwrap_or(stripped);
-                    let stripped = stripped.strip_suffix("```").unwrap_or(stripped);
-                    Some(stripped.trim().to_string())
-                } else {
-                    None
-                }
-            })
-        };
-        let _ = tx.send(result);
-    });
-
-    rx
-}
 
 /// Dispatch ready plan tasks to available agents. Returns the number dispatched.
 fn dispatch_plan_tasks(app: &mut App) -> usize {
@@ -1833,21 +1738,6 @@ fn render_orchestrator(f: &mut Frame, area: Rect, app: &App) {
                 Style::default().fg(Color::Green),
                 format!("\"{}\"", text),
             ),
-            OrchestratorEventKind::PlanStart { prompt } => (
-                "PLAN",
-                Style::default().fg(Color::Yellow),
-                format!("planning: {}", truncate(prompt, 80)),
-            ),
-            OrchestratorEventKind::PlanComplete { task_count, prompt } => (
-                "PLAN",
-                Style::default().fg(Color::Green),
-                format!("{} tasks from \"{}\"", task_count, truncate(prompt, 60)),
-            ),
-            OrchestratorEventKind::PlanFailed => (
-                "PLAN",
-                Style::default().fg(Color::Red),
-                "failed, falling back to direct dispatch".to_string(),
-            ),
             OrchestratorEventKind::TaskCreated { id, title } => (
                 "TASK",
                 Style::default().fg(Color::Cyan),
@@ -1887,11 +1777,6 @@ fn render_orchestrator(f: &mut Frame, area: Rect, app: &App) {
                 "QUEUE",
                 Style::default().fg(Color::Yellow),
                 format!("{} waiting for available agent", id),
-            ),
-            OrchestratorEventKind::PlanDispatched { count } => (
-                "PLAN",
-                Style::default().fg(Color::Cyan),
-                format!("{} ready tasks dispatched", count),
             ),
             // dispatch-h62: orchestrator LLM events
             OrchestratorEventKind::OrchestratorText { text } => (
@@ -2910,62 +2795,9 @@ fn main() -> io::Result<()> {
             let new_count = tasks.len();
             if new_count > prev_count {
                 let added = new_count - prev_count;
-                app.push_ticker(format!("PLANNER: {} new task{} queued — {} total ready", added, if added == 1 { "" } else { "s" }, new_count));
+                app.push_ticker(format!("TASKS: {} new task{} queued — {} total ready", added, if added == 1 { "" } else { "s" }, new_count));
             }
             app.queued_tasks = tasks;
-        }
-
-        // Check headless planner completion (dispatch-fnx).
-        if app.planner.is_some() {
-            let finished = app.planner.as_ref()
-                .and_then(|p| p.receiver.try_recv().ok());
-            if let Some(result) = finished {
-                let prompt = app.planner.take().unwrap().prompt;
-                if let Some(plan_text) = result {
-                    // Write the plan to .dispatch/tasks.md.
-                    let target_repo = app.default_repo_root().to_string();
-                    let dir = format!("{}/.dispatch", target_repo);
-                    let _ = std::fs::create_dir_all(&dir);
-                    let _ = std::fs::write(tasks_md_path(&target_repo), &plan_text);
-                    let (_, tasks) = parse_tasks_md(&target_repo);
-                    let total = tasks.len();
-                    app.push_orch(OrchestratorEventKind::PlanComplete { task_count: total, prompt: prompt.clone() });
-                    let dispatched = dispatch_plan_tasks(&mut app);
-                    if dispatched > 0 {
-                        app.push_orch(OrchestratorEventKind::PlanDispatched { count: dispatched });
-                    }
-                    app.push_ticker(format!(
-                        "PLAN READY: {} tasks from '{}' — {} dispatched now",
-                        total,
-                        if prompt.len() > 40 { format!("{}...", &prompt[..37]) } else { prompt.clone() },
-                        dispatched
-                    ));
-                    app.push_chat("Dispatcher", &format!("Plan ready: {} tasks, {} dispatched.", total, dispatched));
-                } else {
-                    // Planner failed: fall back to direct single-task dispatch.
-                    app.push_orch(OrchestratorEventKind::PlanFailed);
-                    app.push_ticker("PLANNER FAILED: falling back to direct dispatch".to_string());
-                    app.push_chat("Dispatcher", "Plan failed, falling back to direct dispatch.");
-                    let target_repo = app.default_repo_root().to_string();
-                    if let Some(id) = create_task_in_file(&target_repo, &prompt) {
-                        // Try to dispatch directly to the first available slot.
-                        if let Some(g) = app.slots.iter().position(|s| s.is_none()) {
-                            let cmd = app.tool_cmd("claude-code").to_string();
-                            let worktree = create_worktree(&id, &target_repo);
-                            if let Some(mut slot) = dispatch_slot(
-                                g, "claude-code", &cmd, app.pane_rows, app.pane_cols,
-                                worktree.as_deref(), app.scrollback_lines, repo_name_from_path(&target_repo), &target_repo,
-                                Some(&prompt),
-                            ) {
-                                update_task_in_file(&target_repo, &id, '~', Some(&slot.callsign));
-                                slot.task_id = Some(id);
-                                slot.worktree_path = worktree;
-                                app.slots[g] = Some(slot);
-                            }
-                        }
-                    }
-                }
-            }
         }
 
         // Advance ticker animation each frame (dispatch-ami).
@@ -3027,7 +2859,6 @@ fn main() -> io::Result<()> {
                             tools::ToolCall::Merge { .. } => "merge",
                             tools::ToolCall::ListAgents => "list_agents",
                             tools::ToolCall::ListRepos => "list_repos",
-                            tools::ToolCall::Plan { .. } => "plan",
                             tools::ToolCall::MessageAgent { .. } => "message_agent",
                         };
                         app.push_orch(OrchestratorEventKind::ToolCallIssued {
