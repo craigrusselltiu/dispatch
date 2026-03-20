@@ -21,7 +21,7 @@
             android:layout_height="wrap_content"
             android:layout_weight="1"
             android:text="DISPATCH RADIO"
-            android:textColor="@color/cyan"
+            android:textColor="@color/white"
             android:textSize="18sp"
             android:fontFamily="monospace" />
 
@@ -29,12 +29,13 @@
             android:id="@+id/btn_settings"
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
-            android:text="SETTINGS"
+            android:text="⚙"
             android:textColor="@color/dim_grey"
             android:background="@null"
-            android:fontFamily="monospace"
-            android:textSize="11sp"
-            android:padding="4dp" />
+            android:textSize="20sp"
+            android:padding="4dp"
+            android:minWidth="0dp"
+            android:minHeight="0dp" />
 
     </LinearLayout>
 
@@ -66,36 +67,6 @@
 
     </LinearLayout>
 
-    <!-- TARGET block -->
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="TARGET"
-        android:textColor="@color/dim_grey"
-        android:textSize="11sp"
-        android:fontFamily="monospace"
-        android:layout_marginBottom="4dp" />
-
-    <TextView
-        android:id="@+id/tv_target"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text="NONE"
-        android:textColor="@color/cyan"
-        android:textSize="36sp"
-        android:fontFamily="monospace"
-        android:layout_marginBottom="4dp" />
-
-    <TextView
-        android:id="@+id/tv_target_detail"
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:text=""
-        android:textColor="@color/dim_grey"
-        android:textSize="12sp"
-        android:fontFamily="monospace"
-        android:layout_marginBottom="20dp" />
-
     <!-- Listening area: shown during PTT -->
     <FrameLayout
         android:id="@+id/fl_listening"
@@ -122,7 +93,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="◉ "
-                    android:textColor="@color/red"
+                    android:textColor="@color/white"
                     android:textSize="14sp" />
 
                 <TextView
@@ -130,7 +101,7 @@
                     android:layout_width="wrap_content"
                     android:layout_height="wrap_content"
                     android:text="LISTENING"
-                    android:textColor="@color/red"
+                    android:textColor="@color/white"
                     android:textSize="12sp"
                     android:fontFamily="monospace" />
 
@@ -184,53 +155,5 @@
 
     </ScrollView>
 
-    <!-- AGENTS scrollable row -->
-    <TextView
-        android:layout_width="wrap_content"
-        android:layout_height="wrap_content"
-        android:text="AGENTS"
-        android:textColor="@color/dim_grey"
-        android:textSize="11sp"
-        android:fontFamily="monospace"
-        android:layout_marginBottom="4dp" />
-
-    <HorizontalScrollView
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:scrollbars="none"
-        android:layout_marginBottom="16dp">
-
-        <LinearLayout
-            android:id="@+id/ll_agents"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:orientation="horizontal" />
-
-    </HorizontalScrollView>
-
-    <!-- QUEUED count -->
-    <LinearLayout
-        android:layout_width="match_parent"
-        android:layout_height="wrap_content"
-        android:orientation="horizontal">
-
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="QUEUED: "
-            android:textColor="@color/dim_grey"
-            android:textSize="12sp"
-            android:fontFamily="monospace" />
-
-        <TextView
-            android:id="@+id/tv_queued"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="0"
-            android:textColor="@color/white"
-            android:textSize="12sp"
-            android:fontFamily="monospace" />
-
-    </LinearLayout>
 
 </LinearLayout>

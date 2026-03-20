@@ -15,7 +15,7 @@
             android:layout_width="wrap_content"
             android:layout_height="wrap_content"
             android:text="DISPATCH RADIO"
-            android:textColor="@color/cyan"
+            android:textColor="@color/white"
             android:textSize="20sp"
             android:fontFamily="monospace"
             android:layout_marginBottom="4dp" />
@@ -162,7 +162,7 @@
             android:text="HAPTIC FEEDBACK"
             android:textColor="@color/white"
             android:fontFamily="monospace"
-            android:buttonTint="@color/cyan"
+            android:buttonTint="@color/white"
             android:layout_marginBottom="12dp" />
 
         <CheckBox
@@ -172,7 +172,7 @@
             android:text="CONFIRM BEFORE SEND"
             android:textColor="@color/white"
             android:fontFamily="monospace"
-            android:buttonTint="@color/cyan"
+            android:buttonTint="@color/white"
             android:layout_marginBottom="12dp" />
 
         <CheckBox
@@ -182,7 +182,7 @@
             android:text="KEEP SCREEN ON"
             android:textColor="@color/white"
             android:fontFamily="monospace"
-            android:buttonTint="@color/cyan"
+            android:buttonTint="@color/white"
             android:layout_marginBottom="12dp" />
 
         <CheckBox
@@ -192,7 +192,7 @@
             android:text="CONTINUOUS LISTENING (VAD)"
             android:textColor="@color/white"
             android:fontFamily="monospace"
-            android:buttonTint="@color/cyan"
+            android:buttonTint="@color/white"
             android:layout_marginBottom="24dp" />
 
         <!-- Accessibility Service -->
@@ -232,7 +232,7 @@
             android:layout_height="wrap_content"
             android:text="SAVE"
             android:textColor="@color/background"
-            android:backgroundTint="@color/cyan"
+            android:backgroundTint="@color/white"
             android:fontFamily="monospace"
             android:textSize="14sp" />
 

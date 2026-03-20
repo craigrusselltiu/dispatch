@@ -47,16 +47,12 @@ class MainActivity : AppCompatActivity() {
     // UI views
     private lateinit var tvConnDot: TextView
     private lateinit var tvConnStatus: TextView
-    private lateinit var tvTarget: TextView
-    private lateinit var tvTargetDetail: TextView
     private lateinit var flListening: View
     private lateinit var tvListeningLabel: TextView
     private lateinit var tvPartial: TextView
     private lateinit var audioLevelView: AudioLevelView
     private lateinit var svChat: ScrollView
     private lateinit var llChat: LinearLayout
-    private lateinit var llAgents: LinearLayout
-    private lateinit var tvQueued: TextView
 
     private val gson = Gson()
 
@@ -86,7 +82,6 @@ class MainActivity : AppCompatActivity() {
             haptics = haptics,
             onCycleTarget = { agent ->
                 currentSlot = agent.slot
-                refreshTarget()
                 wsClient?.send("""{"type":"set_target","slot":${agent.slot}}""")
             },
             onQuickDispatch = { tool ->
@@ -181,16 +176,12 @@ class MainActivity : AppCompatActivity() {
     private fun bindViews() {
         tvConnDot = findViewById(R.id.tv_conn_dot)
         tvConnStatus = findViewById(R.id.tv_conn_status)
-        tvTarget = findViewById(R.id.tv_target)
-        tvTargetDetail = findViewById(R.id.tv_target_detail)
         flListening = findViewById(R.id.fl_listening)
         tvListeningLabel = findViewById(R.id.tv_listening_label)
         tvPartial = findViewById(R.id.tv_partial)
         audioLevelView = findViewById(R.id.audio_level_view)
         svChat = findViewById(R.id.sv_chat)
         llChat = findViewById(R.id.ll_chat)
-        llAgents = findViewById(R.id.ll_agents)
-        tvQueued = findViewById(R.id.tv_queued)
     }
 
     private fun applyScreenOnFlag() {
@@ -309,13 +300,10 @@ class MainActivity : AppCompatActivity() {
                 }
                 currentSlot = json.get("target")?.takeUnless { it.isJsonNull }?.asInt ?: currentSlot
                 queuedTasks = json.get("queued_tasks")?.takeUnless { it.isJsonNull }?.asInt ?: 0
-                refreshAgentList()
-                refreshTarget()
-                tvQueued.text = queuedTasks.toString()
+                // UI state updated — agents/target/queued tracked internally for volume key handling
             }
             "target_changed" -> {
                 currentSlot = json.get("slot")?.asInt ?: currentSlot
-                refreshTarget()
             }
             "ack" -> {
                 // Acknowledged by orchestrator
@@ -365,54 +353,6 @@ class MainActivity : AppCompatActivity() {
         tvConnDot.setTextColor(getColor(color))
         tvConnStatus.setTextColor(getColor(color))
         tvConnStatus.text = statusText
-    }
-
-    private fun refreshTarget() {
-        val agent = agents.firstOrNull { it.slot == currentSlot }
-        if (agent != null) {
-            tvTarget.text = "[${agent.slot}] ${agent.callsign.uppercase()}"
-            tvTargetDetail.text = buildString {
-                if (agent.tool.isNotEmpty()) append(agent.tool.uppercase())
-                if (agent.task != null) append(" | ${agent.task}")
-            }
-        } else {
-            tvTarget.text = "NONE"
-            tvTargetDetail.text = ""
-        }
-    }
-
-    private fun refreshAgentList() {
-        llAgents.removeAllViews()
-        val active = agents.filter { it.status != "empty" }
-        for (agent in active) {
-            val tv = TextView(this).apply {
-                val initial = greekInitial(agent.callsign)
-                text = initial
-                textSize = 18f
-                typeface = android.graphics.Typeface.MONOSPACE
-                setPadding(8, 8, 8, 8)
-                setTextColor(
-                    if (agent.slot == currentSlot) getColor(R.color.cyan)
-                    else getColor(R.color.dim_grey)
-                )
-                if (agent.slot == currentSlot) {
-                    text = "▸$initial"
-                }
-            }
-            llAgents.addView(tv)
-        }
-    }
-
-    /** Maps NATO callsign to Greek letter initial for the agent row display. */
-    private fun greekInitial(callsign: String): String = when (callsign.lowercase()) {
-        "alpha" -> "α"; "bravo" -> "β"; "charlie" -> "χ"; "delta" -> "δ"
-        "echo" -> "ε"; "foxtrot" -> "φ"; "golf" -> "γ"; "hotel" -> "η"
-        "india" -> "ι"; "juliet" -> "J"; "kilo" -> "κ"; "lima" -> "λ"
-        "mike" -> "μ"; "november" -> "ν"; "oscar" -> "ο"; "papa" -> "π"
-        "quebec" -> "Q"; "romeo" -> "ρ"; "sierra" -> "σ"; "tango" -> "τ"
-        "uniform" -> "υ"; "victor" -> "ν"; "whiskey" -> "ω"; "x-ray" -> "ξ"
-        "yankee" -> "ψ"; "zulu" -> "ζ"
-        else -> callsign.take(1).uppercase()
     }
 
     @Suppress("DEPRECATION")

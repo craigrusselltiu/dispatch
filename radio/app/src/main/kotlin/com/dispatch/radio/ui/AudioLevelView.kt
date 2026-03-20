@@ -19,7 +19,7 @@ class AudioLevelView @JvmOverloads constructor(
 ) : View(context, attrs, defStyleAttr) {
 
     private val fillPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
-        color = ContextCompat.getColor(context, R.color.green)
+        color = ContextCompat.getColor(context, R.color.white)
     }
     private val emptyPaint = Paint(Paint.ANTI_ALIAS_FLAG).apply {
         color = 0xFF2A2A2A.toInt()
