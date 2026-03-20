@@ -159,4 +159,4 @@ dispatch/
 
 ## Inspiration
 
-Inspired by Brian Harms.
+Inspired by Brian Harms's project, also named Dispatch.
