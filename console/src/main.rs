@@ -578,16 +578,45 @@ impl App {
     /// Execute a tool call from the orchestrator agent. Returns the result.
     pub fn execute_tool(&mut self, call: &tools::ToolCall) -> tools::ToolResult {
         match call {
-            tools::ToolCall::Dispatch { repo: _, prompt } => {
-                // Find an idle slot (has PTY but no task) or an empty slot.
-                let slot_idx = self.slots.iter().enumerate().find_map(|(i, s)| {
-                    match s {
-                        Some(slot) if slot.task_id.is_none() => Some(i),
-                        _ => None,
-                    }
-                }).or_else(|| {
-                    self.slots.iter().position(|s| s.is_none())
-                });
+            tools::ToolCall::Dispatch { repo: _, prompt, callsign: requested_callsign } => {
+                // When a callsign is requested, prefer the matching slot.
+                let slot_idx = if let Some(ref cs) = requested_callsign {
+                    // 1. Existing idle agent with this callsign.
+                    let by_name = self.slots.iter().enumerate().find_map(|(i, s)| {
+                        match s {
+                            Some(slot) if slot.task_id.is_none()
+                                && slot.display_name().eq_ignore_ascii_case(cs) => Some(i),
+                            _ => None,
+                        }
+                    });
+                    // 2. Preferred NATO slot if available.
+                    let by_nato = || dispatch_core::protocol::nato_slot(cs).and_then(|idx| {
+                        match &self.slots[idx] {
+                            Some(slot) if slot.task_id.is_none() => Some(idx),
+                            None => Some(idx),
+                            _ => None,
+                        }
+                    });
+                    // 3. First available slot.
+                    let first_avail = || self.slots.iter().enumerate().find_map(|(i, s)| {
+                        match s {
+                            Some(slot) if slot.task_id.is_none() => Some(i),
+                            _ => None,
+                        }
+                    }).or_else(|| self.slots.iter().position(|s| s.is_none()));
+
+                    by_name.or_else(by_nato).or_else(first_avail)
+                } else {
+                    // No callsign requested — original behavior.
+                    self.slots.iter().enumerate().find_map(|(i, s)| {
+                        match s {
+                            Some(slot) if slot.task_id.is_none() => Some(i),
+                            _ => None,
+                        }
+                    }).or_else(|| {
+                        self.slots.iter().position(|s| s.is_none())
+                    })
+                };
 
                 let slot_idx = match slot_idx {
                     Some(i) => i,
@@ -607,7 +636,10 @@ impl App {
                 };
 
                 // Determine callsign before spawn so it can be included in the prompt.
-                let callsign_for_prompt = dispatch_core::protocol::default_callsign((slot_idx + 1) as u32).to_string();
+                // Honor the requested callsign if provided (dispatch-ov4).
+                let callsign_for_prompt = requested_callsign.clone().unwrap_or_else(||
+                    dispatch_core::protocol::default_callsign((slot_idx + 1) as u32).to_string()
+                );
                 let full_prompt = format!("Your callsign is {}. Your task ID is {}. {}", callsign_for_prompt, task_id, prompt);
 
                 // Spawn PTY if slot is empty. Agent creates its own worktree (dispatch-bka).
@@ -630,6 +662,13 @@ impl App {
                         let prompt_text = format!("{}\r", full_prompt);
                         let _ = slot.writer.write_all(prompt_text.as_bytes());
                         let _ = slot.writer.flush();
+                    }
+                }
+
+                // Apply requested callsign (dispatch-ov4).
+                if let Some(ref cs) = requested_callsign {
+                    if let Some(slot) = self.slots[slot_idx].as_mut() {
+                        slot.callsign = cs.clone();
                     }
                 }
 

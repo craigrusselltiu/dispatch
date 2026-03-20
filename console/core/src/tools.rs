@@ -27,6 +27,9 @@ pub enum ToolCall {
         repo: String,
         /// Task description / prompt for the agent.
         prompt: String,
+        /// Optional NATO callsign (e.g. "Delta") to dispatch a specific agent.
+        #[serde(default)]
+        callsign: Option<String>,
     },
     /// Terminate a running agent by callsign or slot number.
     Terminate {
@@ -131,6 +134,10 @@ pub fn tool_definitions() -> serde_json::Value {
                     "prompt": {
                         "type": "string",
                         "description": "Task description / prompt for the agent."
+                    },
+                    "callsign": {
+                        "type": "string",
+                        "description": "Optional NATO callsign to assign (e.g. \"Delta\"). When provided, the agent is dispatched to the matching slot with this callsign."
                     }
                 },
                 "required": ["repo", "prompt"]
@@ -273,9 +280,24 @@ mod tests {
         let text = r#"<tool_call>{"name": "dispatch", "input": {"repo": "myrepo", "prompt": "fix the bug"}}</tool_call>"#;
         let call = parse_tool_call(text).unwrap();
         match call {
-            ToolCall::Dispatch { repo, prompt } => {
+            ToolCall::Dispatch { repo, prompt, callsign } => {
                 assert_eq!(repo, "myrepo");
                 assert_eq!(prompt, "fix the bug");
+                assert!(callsign.is_none());
+            }
+            _ => panic!("expected Dispatch"),
+        }
+    }
+
+    #[test]
+    fn parse_dispatch_call_with_callsign() {
+        let text = r#"<tool_call>{"name": "dispatch", "input": {"repo": "myrepo", "prompt": "fix the bug", "callsign": "Delta"}}</tool_call>"#;
+        let call = parse_tool_call(text).unwrap();
+        match call {
+            ToolCall::Dispatch { repo, prompt, callsign } => {
+                assert_eq!(repo, "myrepo");
+                assert_eq!(prompt, "fix the bug");
+                assert_eq!(callsign.as_deref(), Some("Delta"));
             }
             _ => panic!("expected Dispatch"),
         }
