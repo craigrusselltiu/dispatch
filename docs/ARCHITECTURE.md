@@ -11,8 +11,8 @@ High-level architecture of the Dispatch system.
 │  (Android)   │                               │  ┌─────────────────┐    │
 │              │                               │  │  Orchestrator    │    │
 │  Voice input │                               │  │  (persistent LLM)│    │
-│  Command     │                               │  │  - Tool calls    │    │
-│  parser      │                               │  │  - Voice interp  │    │
+│  Speech-to-  │                               │  │  - Tool calls    │    │
+│  text        │                               │  │  - Voice interp  │    │
 │              │                               │  │  - Dispatch/merge│    │
 │              │                               │  └────────┬────────┘    │
 │              │                               │           │             │
@@ -178,7 +178,10 @@ Volume Down (release)
 Post-processing correction table
   │
   ▼
-WebSocket send to console (auto:true)
+Raw transcript sent as { "type": "send", "text": "...", "auto": true }
+  │
+  ▼
+WebSocket send to console orchestrator
   │
   ▼
 Console pushes chat messages back

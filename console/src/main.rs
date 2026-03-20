@@ -619,6 +619,10 @@ impl App {
                 // Create worktree.
                 let worktree = create_worktree(&task_id, &target_repo);
 
+                // Determine callsign before spawn so it can be included in the prompt.
+                let callsign_for_prompt = dispatch_core::protocol::default_callsign((slot_idx + 1) as u32).to_string();
+                let full_prompt = format!("Your callsign is {}. {}", callsign_for_prompt, prompt);
+
                 // Spawn PTY if slot is empty.
                 if self.slots[slot_idx].is_none() {
                     let cmd = self.tool_cmd("claude-code").to_string();
@@ -626,7 +630,7 @@ impl App {
                         slot_idx, "claude-code", &cmd, self.pane_rows, self.pane_cols,
                         worktree.as_deref(), self.scrollback_lines,
                         repo_name_from_path(&target_repo), &target_repo,
-                        Some(prompt),
+                        Some(&full_prompt),
                     ) {
                         Some(slot) => { self.slots[slot_idx] = Some(slot); }
                         None => return tools::ToolResult::Error {
@@ -3048,17 +3052,10 @@ fn main() -> io::Result<()> {
                             success,
                         });
 
-                        // Only send query results back to the orchestrator.
-                        // Action tools (dispatch, plan, terminate, merge) are fire-and-forget
-                        // to prevent feedback loops that spawn unlimited processes.
-                        let is_query = matches!(call,
-                            tools::ToolCall::ListAgents | tools::ToolCall::ListRepos
-                        );
-                        if is_query {
-                            let result_text = tools::format_tool_result(None, &result);
-                            if let Some(orch) = &mut app.orchestrator {
-                                orch.send_message(&result_text);
-                            }
+                        // Send all results back so the orchestrator knows what happened.
+                        let result_text = tools::format_tool_result(None, &result);
+                        if let Some(orch) = &mut app.orchestrator {
+                            orch.send_message(&result_text);
                         }
                     }
                 }

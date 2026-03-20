@@ -9,7 +9,7 @@ Turn your Android phone into a push-to-talk radio that dispatches tasks to AI co
 The system has two components:
 
 1. **Dispatch Radio** (Android) -- a minimal push-to-talk app controlled via hardware volume buttons. Transcribes speech and sends raw transcripts over a local WebSocket connection to the console's orchestrator.
-2. **Dispatch Console** (PC) -- a TUI command center with four embedded terminal panes, each running a live AI agent session. A persistent LLM orchestrator receives voice transcripts and decides what to do -- dispatch agents, plan tasks, merge completed work, etc. Supports direct keyboard input into any agent pane via a vim-style modal interface.
+2. **Dispatch Console** (PC) -- a TUI command center with up to 26 embedded terminal panes (displayed 4 at a time in a 2x2 grid across pages), each running a live AI agent session. A persistent LLM orchestrator receives voice transcripts and decides what to do -- dispatch agents, plan tasks, merge completed work, etc. Supports direct keyboard input into any agent pane via a vim-style modal interface.
 
 Both components live in a single monorepo.
 
@@ -234,9 +234,9 @@ When a prompt arrives without a specified agent:
 
 ### Orchestrator Tool Interface
 
-The console exposes a set of actions that an orchestrator agent (LLM) can call to manage the dispatch system. The console executes these actions and returns structured JSON results. Actions use ` ```action ` fenced blocks containing JSON; the `<tool_call>` XML format is also supported as a fallback.
+The console exposes a set of actions that the orchestrator LLM can invoke to manage the dispatch system. The orchestrator emits action blocks (JSON wrapped in ` ```action ` fenced code blocks), which the console parses and executes.
 
-**Action format:**
+**Action block format:**
 
 ````
 ```action
@@ -244,18 +244,12 @@ The console exposes a set of actions that an orchestrator agent (LLM) can call t
 ```
 ````
 
-**Tool result format:**
+The console parses the `"action"` field to determine which tool to execute. Parameters vary by action type (see table below).
 
-```json
-<tool_result>
-{"type": "dispatched", "slot": 1, "callsign": "Alpha", "task_id": "t1"}
-</tool_result>
-```
+**Available actions:**
 
-**Available tools:**
-
-| Tool | Parameters | Description |
-|------|-----------|-------------|
+| Action | Parameters | Description |
+|--------|-----------|-------------|
 | `dispatch` | `repo`, `prompt` | Create a task, set up a git worktree, and dispatch an agent. Returns slot, callsign, and task ID. |
 | `terminate` | `agent` | Kill an agent by callsign or slot number. Frees the slot and reopens the task for reassignment. |
 | `merge` | `task_id` | Merge a task's worktree branch into main. Returns success/failure with conflict details. |
@@ -266,11 +260,9 @@ The console exposes a set of actions that an orchestrator agent (LLM) can call t
 
 The `agent` parameter accepts either a callsign (e.g. "Alpha") or a slot number (e.g. "1"), case-insensitive.
 
-Tool definitions are also available as a JSON schema array (compatible with Claude/OpenAI function-calling format) for programmatic use by orchestrator agents.
-
 ### Task Completion Detection
 
-Determining when an agent has finished a task is non-trivial. The console uses a three-layer strategy, evaluated in priority order:
+Determining when an agent has finished a task is non-trivial. The console uses a two-layer strategy, evaluated in priority order:
 
 **Layer 1 -- Idle prompt detection (primary)**
 
@@ -995,102 +987,3 @@ Both mechanisms are additive: biasing reduces misrecognitions at the source; the
 - Auto-reconnect with exponential backoff (1s, 2s, 4s, 8s, max 30s).
 - Ping/pong keepalive every 15s.
 - On connect/reconnect: request `list_agents` to sync state.
-
----
-
-## Phases
-
-### Phase 0 -- Proof of Concept
-
-**Goal:** Validate embedded PTY + VTE rendering and git worktree workflow.
-
-- Minimal Rust program that spawns a single PTY running `claude`, pipes output through `vt100`, and renders it in a `ratatui` widget.
-- Accept keyboard input and forward to the PTY.
-- Create a git worktree, launch the agent inside it, and merge the branch back on completion.
-- No WebSocket, no Android, no multi-pane. Just one terminal and one worktree.
-
-**Done when:** you can interact with Claude Code through a ratatui pane, and changes made by the agent in a worktree are merged back to main on completion.
-
-### Phase 1 -- Core
-
-**Goal:** Fully functional voice-to-agent pipeline with embedded terminals, worktree isolation, task planning, and the Android radio.
-
-Console:
-- TUI with quad-pane layout via `ratatui`.
-- Embedded terminals via `portable-pty` + `vt100`.
-- Command mode and input mode with direct PTY writes.
-- WebSocket server with PSK authentication.
-- Full protocol support.
-- Agent lifecycle: dispatch, terminate, rename.
-- Task tracking: `.dispatch/tasks.md` with planning, dependencies, and worktree-per-task.
-- Ticker line: LED-style scrolling marquee for task events and planner status.
-- Headless planner agent for task decomposition.
-- Git worktree creation, agent dispatch into worktree, merge on completion.
-- Auto-dispatch for unaddressed prompts.
-- Pane info strip: callsign, tool, task ID, dispatch time, runtime.
-- Config file with auto-generation and CLI subcommands.
-- Terminal scrollback in panes (PgUp/PgDn in command mode, configurable buffer size).
-
-Radio:
-- Single Activity with volume button overrides.
-- Push-to-talk via `SpeechRecognizer` on volume down.
-- Raw transcript forwarding to console orchestrator (no local command parsing).
-- Target cycling on volume up, quick dispatch on long press.
-- WebSocket connection with PSK and auto-reconnect.
-- Agent list sync, task ID display.
-- Settings screen.
-- Haptic feedback with distinct patterns per command type.
-
-**Done when:** you can say "refactor the auth system", watch the ticker show planning progress, then see agents dispatched into worktrees for each subtask -- with completed work auto-merged back to main.
-
-### Phase 2 -- Polish
-
-- mDNS/Zeroconf console discovery.
-- QR code pairing in console TUI.
-- ~~Continuous listening mode with voice-activity detection.~~ (done)
-- ~~Terminal scrollback in panes.~~ (done)
-- Agent busy/idle detection: refine idle prompt patterns and completion timeout per tool as edge cases surface in testing.
-- ~~TLS on the WebSocket.~~ (done)
-- ~~AccessibilityService for screen-off volume button capture.~~ (done)
-- ~~Console prompt history and logging.~~ (done)
-- `.dispatch/tasks.md` pruning for long-running projects (archive completed tasks).
-
----
-
-## Open Questions
-
-1. ~~**`vt100` crate limitations**~~ **Resolved**: start with `vt100` for its simpler API and smaller footprint. If gaps appear in practice (advanced alternate screen, mouse events, 256/truecolor), migrate to `alacritty_terminal`, which is more complete but significantly heavier.
-
-2. ~~**Speech recognition and code vocabulary**~~ **Resolved**: use both `EXTRA_BIASING_STRINGS` (engine-level hint, supported by Google's recognizer) and a post-processing correction table (engine-independent fallback). See [Code Vocabulary Accuracy](#code-vocabulary-accuracy).
-
-3. **Copilot CLI interactive TUI**: `gh copilot suggest` has a multi-step interactive interface. PTY embedding helps here (it's a real terminal), but the auto-prompt-injection flow may conflict with Copilot's input expectations.
-
-4. ~~**Task completion detection**~~ **Resolved**: use a two-layer strategy: (1) idle prompt pattern match on the `vt100` virtual screen with 500ms debounce (primary), (2) configurable inactivity timeout (safety net). On completion, the console merges the worktree branch and marks the task `[x]`. See [Task Completion Detection](#task-completion-detection).
-
-5. **Voice command ambiguity**: "alpha" at the start of an utterance is treated as agent addressing. If the user wants to say a prompt that happens to start with "alpha" (e.g. "alpha testing needs to be improved"), it would be misrouted. Mitigation: the comma after the callsign is a strong signal ("Alpha, ..." vs "alpha testing..."), and the confirm-before-send setting provides a safety net.
-
-6. **Custom callsign conflicts**: validate custom names against reserved command vocabulary ("dispatch", "kill", "terminate", etc.) and against active tool names.
-
-7. ~~**`bd` CLI availability**~~ **Resolved**: the console uses `.dispatch/tasks.md` and git worktrees directly. No external task tracking tool required.
-
-8. ~~**PTY size synchronization**~~ **Resolved (dispatch-dvo)**: debounce resize events with a 100ms delay. See [Terminal resize](#pty-management) for the implementation pattern.
-
-9. **Concurrent `.dispatch/tasks.md` writes**: if multiple agents finish tasks simultaneously, the console may issue concurrent file writes. Use a single-writer task on the console side to serialize all `.dispatch/tasks.md` mutations.
-
-10. **Worktree merge conflicts**: when multiple tasks touch overlapping files, merges may conflict. The console flags conflicts on the ticker and preserves the worktree for manual resolution. Consider sequential merge ordering based on the dependency graph to minimize conflicts.
-
-11. **Planner quality**: the headless planner agent must produce well-structured `.dispatch/tasks.md` output with valid IDs and dependency arrows. Provide a system prompt template with the expected format. If the planner output is malformed, the console falls back to treating the original prompt as a single task.
-
-10. **Windows ConPTY quirks**: ~~Open -- see decision below.~~
-
-**Decision (dispatch-env):** ConPTY behavior was researched against Claude Code's TUI on Windows. Decisions per area:
-
-- **Cursor visibility** (`\x1b[?25l` / `\x1b[?25h`): ConPTY handles these correctly via `ENABLE_VIRTUAL_TERMINAL_PROCESSING`. No explicit handling needed -- `portable-pty` is sufficient.
-
-- **Alternate screen buffer** (`\x1b[?1049h` / `\x1b[?1049l`): ConPTY re-encodes output from the win32 screen buffer and can synthesize full-screen repaints. This is the highest-risk area. Decision: test with Claude Code's TUI during Phase 0. If alternate screen transitions produce corrupt output, the fallback is to pipe through `vt100` with tolerance for extra synthetic sequences (it ignores unknown escapes). No pre-emptive workaround -- identify the failure mode first.
-
-- **Backspace**: ConPTY sends `\x7f` (DEL) for backspace. `portable-pty` does not normalize this. The input forwarding table in the PTY Management section already maps `Backspace -> \x7f`, which is correct for ConPTY. No change needed.
-
-- **Ctrl+C**: Windows uses console control events, not Unix signals. `portable-pty` abstracts the delivery mechanism but semantics differ (a new thread is created on the Windows side). The ANSI sequence `\x03` written to the PTY still triggers an interrupt for console applications. Decision: write `\x03` as specified. Verify during Phase 0 that Claude Code actually cancels its current operation on Windows when Ctrl+C is forwarded this way.
-
-Summary: the backspace mapping is already correct. Alternate screen and Ctrl+C both require Phase 0 validation on Windows before any mitigations are coded.

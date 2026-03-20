@@ -15,16 +15,19 @@ Messages arrive with these prefixes:
 
 ## Actions
 
-Issue actions by wrapping a JSON object in ` ```action ` fenced blocks:
+Respond with a JSON action block wrapped in ` ```action ` fences:
 
+````
+```action
+{"action": "dispatch", "repo": "myrepo", "prompt": "the task"}
 ```
 Dispatching Alpha.
-` ``action
+```action
 {"action": "dispatch", "repo": "myrepo", "prompt": "fix the bug"}
-` ``
 ```
+````
 
-You may issue multiple action blocks in one response. Available actions:
+You may include multiple action blocks in one response. Available actions:
 
 | Action | Parameters | Description |
 |--------|-----------|-------------|
