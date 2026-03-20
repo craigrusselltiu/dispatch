@@ -104,19 +104,19 @@ class MainActivity : AppCompatActivity() {
                 tvPartial.text = partial
             },
             onFinalResult = { transcript ->
-                flListening.visibility = View.GONE
+                flListening.visibility = View.INVISIBLE
                 audioLevelView.level = 0f
                 haptics.sendConfirm()
                 wsClient?.send("""{"type":"radio_status","state":"idle"}""")
                 handleTranscript(transcript)
             },
             onEmptyTranscript = {
-                flListening.visibility = View.GONE
+                flListening.visibility = View.INVISIBLE
                 haptics.emptyTranscript()
                 wsClient?.send("""{"type":"radio_status","state":"idle"}""")
             },
             onError = {
-                flListening.visibility = View.GONE
+                flListening.visibility = View.INVISIBLE
                 wsClient?.send("""{"type":"radio_status","state":"idle"}""")
             }
         )
@@ -266,7 +266,7 @@ class MainActivity : AppCompatActivity() {
         if (manager.isActive) {
             manager.stop()
             haptics.sendConfirm()
-            flListening.visibility = View.GONE
+            flListening.visibility = View.INVISIBLE
             audioLevelView.level = 0f
             wsClient?.send("""{"type":"radio_status","state":"idle"}""")
         } else {
@@ -378,18 +378,18 @@ class MainActivity : AppCompatActivity() {
                     },
                     onPartialResult = { partial -> tvPartial.text = partial },
                     onFinalResult = { transcript ->
-                        flListening.visibility = View.GONE
+                        flListening.visibility = View.INVISIBLE
                         haptics.sendConfirm()
                         wsClient?.send("""{"type":"radio_status","state":"idle"}""")
                         handleTranscript(transcript)
                     },
                     onEmptyTranscript = {
-                        flListening.visibility = View.GONE
+                        flListening.visibility = View.INVISIBLE
                         haptics.emptyTranscript()
                         wsClient?.send("""{"type":"radio_status","state":"idle"}""")
                     },
                     onError = {
-                        flListening.visibility = View.GONE
+                        flListening.visibility = View.INVISIBLE
                         wsClient?.send("""{"type":"radio_status","state":"idle"}""")
                     }
                 )
