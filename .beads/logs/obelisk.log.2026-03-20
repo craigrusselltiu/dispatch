@@ -1,0 +1,6 @@
+{"timestamp":"2026-03-20T07:29:21.329669Z","level":"INFO","fields":{"message":"obelisk starting"},"target":"obelisk"}
+{"timestamp":"2026-03-20T07:29:21.499449Z","level":"INFO","fields":{"message":"session started","runtime":"CLAUDE","max_concurrent":5,"auto_spawn":true,"poll_interval_secs":30},"target":"obelisk","span":{"session_id":"sess-20260320-182921","name":"session"}}
+{"timestamp":"2026-03-20T07:29:21.539476Z","level":"WARN","fields":{"message":"orphaned agent worktrees found from previous session","count":1,"event":"worktree_orphans"},"target":"obelisk","span":{"session_id":"sess-20260320-182921","name":"session"}}
+{"timestamp":"2026-03-20T07:29:45.078615Z","level":"INFO","fields":{"message":"session ending — shutting down","total_completed":0,"total_failed":0,"agents_active":0,"agents_total":0,"uptime_secs":23},"target":"obelisk","span":{"session_id":"sess-20260320-182921","name":"session"}}
+{"timestamp":"2026-03-20T07:29:45.356554Z","level":"INFO","fields":{"message":"session record persisted","session_id":"sess-20260320-182921","total_completed":0,"total_failed":0,"agents_count":0,"event":"session_saved"},"target":"obelisk::app","span":{"session_id":"sess-20260320-182921","name":"session"}}
+{"timestamp":"2026-03-20T07:29:45.458002Z","level":"INFO","fields":{"message":"obelisk shutdown complete"},"target":"obelisk"}
