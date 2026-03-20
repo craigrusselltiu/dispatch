@@ -130,6 +130,11 @@ pub fn dispatch_slot(
                     // clears the buffer WITHOUT checking for markers, so
                     // progressive redraws don't emit duplicate partial
                     // messages.
+                    //
+                    // Special case: \r\r\n (common on Windows where the
+                    // shell outputs \r\n and the PTY adds another \r) must
+                    // still be detected. When \r follows a pending \r, we
+                    // process the buffer before resetting.
                     for &byte in &buf[..n] {
                         if cr_pending {
                             cr_pending = false;
@@ -139,7 +144,15 @@ pub fn dispatch_slot(
                                 line_buf.clear();
                                 continue;
                             }
-                            // Bare \r followed by more content — terminal redraw.
+                            if byte == b'\r' {
+                                // \r\r — the first \r was a real line ending;
+                                // process the buffer, then track this new \r.
+                                check_dispatch_marker(&line_buf, DISPATCH_MSG_MARKER, &mut last_msg, &agent_msg_tx, global_idx);
+                                line_buf.clear();
+                                cr_pending = true;
+                                continue;
+                            }
+                            // Bare \r followed by content — terminal redraw.
                             // Discard the partial line so it doesn't emit a message.
                             line_buf.clear();
                             // Fall through to handle the current byte.
