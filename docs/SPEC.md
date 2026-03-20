@@ -368,7 +368,7 @@ Manual IP/port entry remains available as a fallback.
 
 The WebSocket server uses TLS (`wss://`) for encrypted transport. On first run, the console generates a self-signed certificate and private key, stored as DER files in the config directory (`~/.config/dispatch/cert.der` and `key.der`). The certificate covers the SANs `dispatch.local` and `localhost`.
 
-The radio pins the certificate by its SHA-256 fingerprint (provided via QR code pairing) rather than relying on a CA chain. When no fingerprint is available (manual connection), the radio trusts any certificate -- the PSK still authenticates the connection, and TLS provides encryption.
+The radio pins the certificate by its SHA-256 fingerprint rather than relying on a CA chain. When no fingerprint is available (manual connection), the radio trusts any certificate -- the PSK still authenticates the connection, and TLS provides encryption.
 
 ### Authentication
 
@@ -380,7 +380,7 @@ wss://192.168.1.x:9800/?psk=<key>
 
 The console generates a random PSK on first run and stores it in `~/.config/dispatch/config.toml`. The key is displayed on the console's header bar (truncated, expandable with `p`). Any connection attempt with an invalid or missing PSK is rejected with a 401 before the WebSocket upgrade completes.
 
-**QR code pairing:** Press `Q` in command mode to display a QR code overlay encoding the full WebSocket URL (`wss://host:port/?psk=key&fp=<sha256>`). The host is auto-detected from the machine's local network interface. The `fp` parameter is the SHA-256 fingerprint of the console's TLS certificate. The radio scans this QR code via its camera (Settings > Scan QR) to configure the connection without manual entry. The scanned URL populates host, port, PSK, and cert fingerprint fields automatically.
+**Connection info overlay:** Press `x` in command mode to display a connection info overlay showing the console's local IP address, port, and full PSK. The host is auto-detected from the machine's local network interface. Use this information to manually configure the radio app's connection settings.
 
 ### Message Types
 
@@ -689,7 +689,7 @@ While in input mode, `Escape` is the only key intercepted by the console -- it i
 | `h`               | Show prompt history overlay (browse and re-send past prompts) |
 | `o`               | Toggle orchestrator view (replaces agent grid with event log) |
 | `p`               | Show/hide full PSK                                           |
-| `Q`               | Show QR code overlay for radio pairing                       |
+| `x`               | Show connection info overlay (address, port, PSK)            |
 | `q`               | Quit (confirms if agents are running)                        |
 | `PgUp` / `PgDn`   | Scroll pane output up/down (half-page increments)            |
 | `?`               | Toggle help overlay                                          |
@@ -903,7 +903,7 @@ Minimal, high-contrast, dark theme. Uppercase labels, monospaced accents.
 
 - **Console discovery**: mDNS scan to auto-fill address and port.
 - **Console address**: IP and port (auto-filled by discovery or manual entry).
-- **Pre-shared key**: manual entry or QR scan.
+- **Pre-shared key**: manual entry.
 - **Haptic feedback**: toggle (default on).
 - **Confirm before send**: toggle (default off).
 - **Keep screen on**: toggle (default on).

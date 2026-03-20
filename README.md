@@ -83,7 +83,7 @@ The PSK is displayed in the console header bar. You'll need it to connect the ra
    - **USB**: plug your phone into your PC via USB cable. On your phone, go to Settings > Developer options and enable USB debugging. Tap "Allow" on the prompt that appears on your phone.
 5. In the toolbar, you'll see two dropdowns side by side: one says **app** (the run configuration) and one shows available devices. Select your phone from the device dropdown, then click the green play button to the right of it. Android Studio will build and install the app on your phone.
 6. Once the app is running on your phone, pair it to the Dispatch console:
-   - **QR code (recommended)**: press `Q` in the Dispatch console to show a QR code. In the radio app on your phone, tap the gear icon in the top-right corner to open settings, then scan the QR code.
+   - **Connection info**: press `x` in the Dispatch console to show the connection info overlay (address, port, PSK). In the radio app on your phone, tap the gear icon in the top-right corner to open settings, then enter the displayed values.
    - **mDNS auto-discovery**: in the radio app settings, tap **DISCOVER CONSOLE** to auto-detect the console on your network.
    - **Manual**: in the radio app settings, enter the console's IP address, port, and PSK. The PSK is shown in the console header bar.
 
@@ -112,7 +112,7 @@ The console displays four agent panes at a time in a 2x2 grid with a scrolling t
 | `h`               | Show prompt history (browse and re-send)            |
 | `o`               | Toggle orchestrator view (event log)                |
 | `p`               | Show/hide full PSK                                  |
-| `Q`               | Show QR code for radio pairing                      |
+| `x`               | Show connection info                                |
 | `q`               | Quit                                                |
 | `?`               | Toggle help overlay                                 |
 
@@ -169,7 +169,7 @@ Simple one-off prompts skip the decomposition step and dispatch directly.
 - **Paged layout** -- up to 26 agents across 7 pages. Off-screen agents keep running and are still addressable.
 - **Clean target repo** -- all dispatch artifacts live in `.dispatch/` (gitignored). Your repo stays untouched.
 - **mDNS discovery** -- the console advertises itself on the LAN via Zeroconf. The radio can find it automatically without manual IP entry.
-- **TLS encryption** -- WebSocket connections are wrapped in TLS (wss://) with a self-signed certificate. The radio pins the cert fingerprint via QR code pairing.
+- **TLS encryption** -- WebSocket connections are wrapped in TLS (wss://) with a self-signed certificate.
 - **PSK authentication** -- all WebSocket connections require a pre-shared key. Auto-generated on first run.
 - **Radio chat log** -- the radio displays a scrollable chat history showing orchestrator decisions, agent events, and voice transcripts in real-time. No need to look at the console to know what's happening.
 - **Cross-platform** -- console runs on Windows (ConPTY), macOS, and Linux.

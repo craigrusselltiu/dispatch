@@ -181,7 +181,7 @@ enum Overlay {
     None,
     Help,
     TaskList,
-    QrCode,
+    ConnectionInfo,
     ConfirmQuit,
     ConfirmTerminate,
     DispatchSlot,
@@ -1980,7 +1980,7 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         Line::from(Span::raw("  h            Prompt history")),
         Line::from(Span::raw("  o            Toggle orchestrator view")),
         Line::from(Span::raw("  p            Toggle PSK visibility")),
-        Line::from(Span::raw("  Q            Show QR code for radio pairing")),
+        Line::from(Span::raw("  x            Show connection info")),
         Line::from(Span::raw("  q            Quit (confirms if agents running)")),
         Line::from(Span::raw("  ?            This help screen")),
         Line::default(),
@@ -2015,88 +2015,42 @@ fn local_ip() -> Option<String> {
     socket.local_addr().ok().map(|a| a.ip().to_string())
 }
 
-/// Render a QR code overlay encoding the console connection URL + PSK (dispatch-ct2.2, dispatch-ct2.6).
-fn render_qr_overlay(f: &mut Frame, area: Rect, app: &App) {
+/// Render a connection info overlay showing address, port, and PSK (dispatch-b54).
+fn render_connection_info_overlay(f: &mut Frame, area: Rect, app: &App) {
     let host = local_ip().unwrap_or_else(|| "127.0.0.1".to_string());
-    let url = format!(
-        "wss://{}:{}/?psk={}&fp={}",
-        host, app.port, app.psk, app.tls_fingerprint
-    );
 
-    let qr = match qrcode::QrCode::new(url.as_bytes()) {
-        Ok(q) => q,
-        Err(_) => return,
-    };
-    let matrix = qr.to_colors();
-    let qr_width = qr.width();
+    let lines = vec![
+        Line::from(Span::styled(
+            " CONNECTION INFO ",
+            Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
+        )),
+        Line::default(),
+        Line::from(vec![
+            Span::styled("  Address:  ", Style::default().fg(Color::DarkGray)),
+            Span::raw(&host),
+        ]),
+        Line::from(vec![
+            Span::styled("  Port:     ", Style::default().fg(Color::DarkGray)),
+            Span::raw(format!("{}", app.port)),
+        ]),
+        Line::from(vec![
+            Span::styled("  PSK:      ", Style::default().fg(Color::DarkGray)),
+            Span::raw(&app.psk),
+        ]),
+        Line::default(),
+        Line::from(Span::styled(
+            "  Press any key to close",
+            Style::default().fg(Color::DarkGray),
+        )),
+    ];
 
-    // Build lines using Unicode half-block characters.
-    // Each terminal row encodes 2 QR rows. Each module is 2 chars wide for squareness.
-    // QR: dark modules on white background. Background set by bg colors.
-    let dark = Color::Black;
-    let light = Color::White;
-
-    let mut lines: Vec<Line> = Vec::new();
-
-    // Title
-    lines.push(Line::from(Span::styled(
-        " QR CODE — SCAN TO PAIR ",
-        Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
-    )));
-    lines.push(Line::default());
-
-    // Render QR matrix with 1-module quiet zone on each side
-    let total_w = qr_width + 2; // 1 quiet zone each side
-    let row_count = qr_width + 2; // 1 quiet zone top and bottom
-
-    let is_dark = |r: usize, c: usize| -> bool {
-        if r == 0 || r == row_count - 1 || c == 0 || c == total_w - 1 {
-            return false; // quiet zone = light
-        }
-        let qr_r = r - 1;
-        let qr_c = c - 1;
-        matrix[qr_r * qr_width + qr_c] == qrcode::Color::Dark
-    };
-
-    let mut row = 0;
-    while row < row_count {
-        let has_bot = row + 1 < row_count;
-        let mut spans: Vec<Span> = Vec::new();
-        for col in 0..total_w {
-            let top = is_dark(row, col);
-            let bot = if has_bot { is_dark(row + 1, col) } else { false };
-            let (ch, fg, bg) = match (top, bot) {
-                (true, true) => ('\u{2588}', dark, dark),   // █
-                (true, false) => ('\u{2580}', dark, light),  // ▀
-                (false, true) => ('\u{2584}', light, dark),  // ▄
-                (false, false) => (' ', light, light),
-            };
-            let s = format!("{ch}"); // 1 char wide; half-blocks make it roughly square
-            spans.push(Span::styled(s, Style::default().fg(fg).bg(bg)));
-        }
-        lines.push(Line::from(spans));
-        row += 2;
-    }
-
-    lines.push(Line::default());
-    lines.push(Line::from(Span::styled(
-        format!("  {url}"),
-        Style::default().fg(Color::DarkGray),
-    )));
-    lines.push(Line::default());
-    lines.push(Line::from(Span::styled(
-        "  Press any key to close",
-        Style::default().fg(Color::DarkGray),
-    )));
-
-    let content_width = total_w as u16 + 4; // 1 char per module + border padding
-    let content_height = lines.len() as u16 + 2; // +2 for border
-    let r = centered_rect(content_width, content_height, area);
+    let content_height = lines.len() as u16 + 2;
+    let r = centered_rect(46, content_height, area);
     f.render_widget(Clear, r);
     f.render_widget(
         Paragraph::new(Text::from(lines)).block(
             Block::default()
-                .title(" PAIR ")
+                .title(" CONNECTION ")
                 .borders(Borders::ALL)
                 .border_style(Style::default().fg(Color::Green)),
         ),
@@ -2922,7 +2876,7 @@ fn main() -> io::Result<()> {
                 Overlay::None => {}
                 Overlay::Help => render_help_overlay(f, full),
                 Overlay::TaskList => render_task_list_overlay(f, full, &app),
-                Overlay::QrCode => render_qr_overlay(f, full, &app),
+                Overlay::ConnectionInfo => render_connection_info_overlay(f, full, &app),
                 Overlay::ConfirmQuit => render_confirm_overlay(
                     f, full, "QUIT", "Agents are running. Really quit?",
                 ),
@@ -3000,7 +2954,7 @@ fn main() -> io::Result<()> {
                     Mode::Command => {
                         if app.overlay != Overlay::None {
                             match app.overlay {
-                                Overlay::Help | Overlay::TaskList | Overlay::QrCode => {
+                                Overlay::Help | Overlay::TaskList | Overlay::ConnectionInfo => {
                                     app.overlay = Overlay::None;
                                 }
 
@@ -3332,7 +3286,7 @@ fn main() -> io::Result<()> {
                                 }
 
                                 KeyCode::Char('p') => app.psk_expanded = !app.psk_expanded,
-                                KeyCode::Char('Q') => app.overlay = Overlay::QrCode,
+                                KeyCode::Char('x') => app.overlay = Overlay::ConnectionInfo,
                                 KeyCode::Char('?') => app.overlay = Overlay::Help,
 
                                 // Toggle orchestrator view (dispatch-6nm)
