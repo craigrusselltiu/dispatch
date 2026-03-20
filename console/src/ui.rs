@@ -185,11 +185,16 @@ fn pane_info_strip(global_idx: usize, local_idx: usize, app: &App) -> Text<'stat
             Text::from(vec![line1, Line::default(), Line::default(), sep])
         }
         Some(agent) => {
+            let name_style = if is_target {
+                Style::default().fg(Color::Red).add_modifier(Modifier::BOLD)
+            } else {
+                Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
+            };
             let line1 = Line::from(vec![
                 Span::styled(marker_str.to_string(), marker_style),
                 Span::styled(
                     format!("[{}] {}", slot_num, agent.display_name()),
-                    Style::default().add_modifier(Modifier::BOLD),
+                    name_style,
                 ),
             ]);
             let task_span = match &agent.task_id {
