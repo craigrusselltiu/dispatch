@@ -105,7 +105,7 @@ The console displays four agent panes at a time in a 2x2 grid with a scrolling t
 | `]` / `[`         | Next / previous page                                |
 | `PgUp` / `PgDn`   | Scroll pane output up/down                          |
 | `n`               | Dispatch new agent (repo select in multi-repo mode) |
-| `x`               | Terminate agent in targeted slot                    |
+| `k`               | Kill agent in targeted slot                         |
 | `R`               | Rename agent in targeted slot                       |
 | `S`               | Rescan repos (multi-repo mode)                      |
 | `t`               | Show task list overlay                              |

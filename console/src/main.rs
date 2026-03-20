@@ -1967,7 +1967,7 @@ fn render_help_overlay(f: &mut Frame, area: Rect) {
         Line::from(Span::raw("  PgUp / PgDn  Scroll pane output")),
         Line::from(Span::raw("  n            Dispatch (repo select in multi-repo)")),
         Line::from(Span::raw("  N            Dispatch into specific slot")),
-        Line::from(Span::raw("  x            Terminate target agent")),
+        Line::from(Span::raw("  k            Kill target agent")),
         Line::from(Span::raw("  R            Rename target agent")),
         Line::from(Span::raw("  S            Rescan repos (multi-repo mode)")),
         Line::from(Span::raw("  t            Task list overlay")),
@@ -3319,7 +3319,7 @@ fn main() -> io::Result<()> {
                                 }
 
                                 // Terminate target agent (dispatch-bgz.6)
-                                KeyCode::Char('x') => {
+                                KeyCode::Char('k') => {
                                     let target_g = app.target_global();
                                     if app.slots[target_g].is_some() {
                                         app.overlay = Overlay::ConfirmTerminate;

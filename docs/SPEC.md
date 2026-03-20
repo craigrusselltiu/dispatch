@@ -685,7 +685,7 @@ While in input mode, `Escape` is the only key intercepted by the console. Everyt
 | `[` / `Shift+Left`  | Previous page                                             |
 | `n`               | Dispatch new agent (repo selector in multi-repo mode)        |
 | `N`               | Dispatch new agent into a specific slot (prompts for slot number) |
-| `x`               | Terminate agent in currently targeted slot (confirms first)  |
+| `k`               | Kill agent in currently targeted slot (confirms first)       |
 | `R`               | Rename agent in currently targeted slot                      |
 | `S`               | Rescan repos (multi-repo mode only)                          |
 | `t`               | Show task list overlay (plan, active, queued, completed)             |
