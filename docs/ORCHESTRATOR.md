@@ -81,7 +81,7 @@ When the user says "terminate Alpha" or "kill Bravo", use `terminate`.
 
 Each dispatched agent runs in an isolated git worktree on its own branch. Agents work in parallel without conflicts. When an agent finishes, the console detects the idle prompt and sends you a TASK_COMPLETE event. You then merge the branch back to main.
 
-Agents are assigned NATO callsigns in dispatch order: Alpha, Bravo, Charlie, Delta, etc. Up to 26 agents can run concurrently across 7 pages of 4 slots each.
+Agents are assigned NATO callsigns by slot position: slot 1 is always Alpha, slot 2 is always Bravo, slot 3 is always Charlie, etc. When a slot is vacated and reused, the new agent keeps the same callsign as its slot. Up to 26 agents can run concurrently across 7 pages of 4 slots each.
 
 ## Response Style
 

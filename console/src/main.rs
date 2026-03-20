@@ -625,6 +625,13 @@ impl App {
                             message: "failed to spawn agent PTY".to_string(),
                         },
                     }
+                } else {
+                    // Idle slot reuse: send the task prompt to the existing PTY.
+                    if let Some(slot) = self.slots[slot_idx].as_mut() {
+                        let prompt_text = format!("{}\r", full_prompt);
+                        let _ = slot.writer.write_all(prompt_text.as_bytes());
+                        let _ = slot.writer.flush();
+                    }
                 }
 
                 // Assign task to slot.
@@ -634,6 +641,7 @@ impl App {
                     slot.task_id = Some(task_id.clone());
                     slot.worktree_path = worktree;
                     slot.last_output_at = Instant::now();
+                    slot.idle_since = None;
                     slot.display_name().to_string()
                 };
 
@@ -1191,6 +1199,7 @@ fn dispatch_ready_tasks(app: &mut App) -> usize {
             slot.task_id = Some(task.id.clone());
             slot.worktree_path = worktree;
             slot.last_output_at = Instant::now();
+            slot.idle_since = None;
             slot.display_name().to_string()
         };
         app.push_orch(OrchestratorEventKind::TaskAssigned { id: task.id.clone(), agent: display_name.clone(), slot: slot_idx + 1 });
@@ -2736,6 +2745,7 @@ fn main() -> io::Result<()> {
                         let _ = slot.writer.flush();
                         slot.task_id = Some(qt.id.clone());
                         slot.last_output_at = Instant::now();
+                        slot.idle_since = None;
                         assigned = true;
                         assigned_callsign = callsign;
                     }
