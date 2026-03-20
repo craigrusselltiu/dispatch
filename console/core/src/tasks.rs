@@ -1,4 +1,4 @@
-// Task plan parsing for .dispatch/tasks.md files.
+// Task parsing for .dispatch/tasks.md files.
 //
 // Contains the ParsedTask struct and parse_task_line function used by the
 // console to track task dependencies and dispatch order.
