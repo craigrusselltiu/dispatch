@@ -1,0 +1,540 @@
+// App state and core logic for the dispatch console.
+
+use std::{
+    io::Write,
+    time::{Duration, Instant},
+};
+
+use chrono::Local;
+use dispatch_core::{orchestrator, protocol, tools};
+
+use crate::types::*;
+use crate::task_file::{create_task_in_file, fetch_ready_tasks, update_task_in_file};
+use crate::pty::dispatch_slot;
+use crate::util::repo_name_from_path;
+use crate::ws_server;
+
+impl App {
+    pub fn new(
+        psk: String,
+        port: u16,
+        ws_state: ws_server::SharedState,
+        pane_rows: u16,
+        pane_cols: u16,
+        tools: std::collections::HashMap<String, String>,
+        completion_timeout: Duration,
+        repo_root: String,
+        workspace: Workspace,
+        scrollback_lines: u32,
+        tls_fingerprint: String,
+        chat_tx: tokio::sync::broadcast::Sender<String>,
+    ) -> Self {
+        App {
+            slots: std::array::from_fn(|_| None),
+            current_page: 0,
+            target: 0,
+            mode: Mode::Command,
+            esc_exit_time: None,
+            radio_state: RadioState::Disconnected,
+            psk,
+            port,
+            psk_expanded: false,
+            overlay: Overlay::None,
+            input_buf: String::new(),
+            queued_tasks: Vec::new(),
+            ws_state,
+            pane_rows,
+            pane_cols,
+            tools,
+            completion_timeout,
+            ticker_queue: std::collections::VecDeque::new(),
+            ticker_current: String::new(),
+            ticker_offset: 0,
+            ticker_frame_counter: 0,
+            conflict_tasks: Vec::new(),
+            repo_root,
+            workspace,
+            repo_select_idx: 0,
+            task_list_data: Vec::new(),
+            scrollback_lines,
+            view_mode: ViewMode::Agents,
+            orch_log: Vec::new(),
+            orch_scroll: 0,
+            tls_fingerprint,
+            prompt_history: Vec::new(),
+            input_line_buf: String::new(),
+            history_scroll: 0,
+            orchestrator: None,
+            pending_voice: Vec::new(),
+            chat_tx,
+        }
+    }
+
+    /// Push an event to the orchestrator log (dispatch-6nm).
+    pub fn push_orch(&mut self, kind: OrchestratorEventKind) {
+        let time = Local::now().format("%H:%M:%S").to_string();
+        self.orch_log.push(OrchestratorEvent { time, kind });
+        // Cap at 500 entries to bound memory.
+        if self.orch_log.len() > 500 {
+            self.orch_log.remove(0);
+            self.orch_scroll = self.orch_scroll.saturating_sub(1);
+        }
+    }
+
+    /// Push a chat message to all connected radio clients (dispatch-chat).
+    pub fn push_chat(&self, sender: &str, text: &str) {
+        let msg = protocol::OutboundMsg::Chat {
+            sender: sender.to_string(),
+            text: text.to_string(),
+        };
+        if let Ok(json) = serde_json::to_string(&msg) {
+            let _ = self.chat_tx.send(json);
+        }
+    }
+
+    /// Record a prompt to in-memory history and append to the log file (dispatch-ct2.8).
+    pub fn log_prompt(&mut self, source: PromptSource, target: &str, text: &str) {
+        let time = Local::now().format("%H:%M:%S").to_string();
+        let entry = PromptEntry {
+            time: time.clone(),
+            source,
+            target: target.to_string(),
+            text: text.to_string(),
+        };
+        self.prompt_history.push(entry);
+
+        // Append to .dispatch/prompt_history.log
+        let repo = self.default_repo_root().to_string();
+        let dispatch_dir = format!("{}/.dispatch", repo);
+        let _ = std::fs::create_dir_all(&dispatch_dir);
+        let log_path = format!("{}/prompt_history.log", dispatch_dir);
+        let label = match source {
+            PromptSource::Voice => "VOICE",
+            PromptSource::Keyboard => "KEYBOARD",
+        };
+        let line = format!("[{}] {} -> {}: \"{}\"\n", time, label, target, text);
+        let _ = std::fs::OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&log_path)
+            .and_then(|mut f| std::io::Write::write_all(&mut f, line.as_bytes()));
+    }
+
+    pub fn global_idx(&self, local_idx: usize) -> usize {
+        self.current_page * SLOTS_PER_PAGE + local_idx
+    }
+
+    pub fn target_global(&self) -> usize {
+        self.global_idx(self.target)
+    }
+
+    pub fn active_count(&self) -> usize {
+        self.slots.iter().filter(|s| s.is_some()).count()
+    }
+
+    /// Total pages needed: enough to show all active slots plus at least one standby.
+    pub fn total_pages(&self) -> usize {
+        let last_active = self
+            .slots
+            .iter()
+            .rposition(|s| s.is_some())
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let needed = (last_active + SLOTS_PER_PAGE).max(SLOTS_PER_PAGE);
+        ((needed + SLOTS_PER_PAGE - 1) / SLOTS_PER_PAGE).min(MAX_SLOTS / SLOTS_PER_PAGE + 1)
+    }
+
+    pub fn psk_display(&self) -> String {
+        if self.psk_expanded {
+            self.psk.clone()
+        } else if self.psk.len() >= 4 {
+            format!("{}...", &self.psk[..4])
+        } else {
+            "****".to_string()
+        }
+    }
+
+    /// True if `global_idx` is the last empty slot on the last page (dispatch-bgz.11).
+    pub fn is_last_standby(&self, global_idx: usize) -> bool {
+        if self.slots[global_idx].is_some() {
+            return false;
+        }
+        let total = self.total_pages();
+        let page = global_idx / SLOTS_PER_PAGE;
+        if page != total - 1 {
+            return false;
+        }
+        let local = global_idx % SLOTS_PER_PAGE;
+        for i in (local + 1)..SLOTS_PER_PAGE {
+            let g = page * SLOTS_PER_PAGE + i;
+            if g < MAX_SLOTS && self.slots[g].is_none() {
+                return false;
+            }
+        }
+        true
+    }
+
+    pub fn tool_cmd(&self, tool_key: &str) -> &str {
+        self.tools
+            .get(tool_key)
+            .map(|s| s.as_str())
+            .unwrap_or("claude")
+    }
+
+    /// Whether we're in multi-repo mode (dispatch-sa1).
+    pub fn is_multi_repo(&self) -> bool {
+        matches!(self.workspace, Workspace::MultiRepo { .. })
+    }
+
+    /// Get the list of repos (dispatch-sa1). Single-repo returns a one-element vec.
+    pub fn repo_list(&self) -> Vec<&str> {
+        match &self.workspace {
+            Workspace::SingleRepo { root } => vec![root.as_str()],
+            Workspace::MultiRepo { repos, .. } => repos.iter().map(|s| s.as_str()).collect(),
+        }
+    }
+
+    /// Default repo root: first repo in list (dispatch-sa1).
+    pub fn default_repo_root(&self) -> &str {
+        match &self.workspace {
+            Workspace::SingleRepo { root } => root.as_str(),
+            Workspace::MultiRepo { repos, .. } => repos.first().map(|s| s.as_str()).unwrap_or("."),
+        }
+    }
+
+    /// Re-scan child directories for git repos in multi-repo mode (dispatch-sa1).
+    pub fn rescan_repos(&mut self) {
+        if let Workspace::MultiRepo { parent, repos } = &mut self.workspace {
+            *repos = crate::util::scan_child_repos(parent);
+        }
+    }
+
+    /// Queue a message on the ticker (dispatch-ami).
+    pub fn push_ticker(&mut self, msg: impl Into<String>) {
+        self.ticker_queue.push_back(msg.into());
+    }
+
+    /// Advance the ticker state by one frame (dispatch-ami).
+    /// Call once per render loop iteration (~16ms). Scrolls one character every 3 frames (~50ms).
+    pub fn tick_ticker(&mut self) {
+        self.ticker_frame_counter = self.ticker_frame_counter.wrapping_add(1);
+        let advance = self.ticker_frame_counter % 3 == 0;
+
+        if self.ticker_current.is_empty() {
+            // Load next message from queue if available.
+            if let Some(msg) = self.ticker_queue.pop_front() {
+                self.ticker_current = msg;
+                self.ticker_offset = 0;
+                self.ticker_frame_counter = 0;
+            }
+            return;
+        }
+
+        if advance {
+            // Count display characters (not bytes) for offset tracking.
+            let char_len = self.ticker_current.chars().count();
+            self.ticker_offset += 1;
+            // Message is fully scrolled off when offset > char_len + display_width.
+            // Use 200 as a conservative maximum terminal width estimate.
+            if self.ticker_offset > char_len + 200 {
+                self.ticker_current = String::new();
+                self.ticker_offset = 0;
+                // Load next message immediately if queued.
+                if let Some(msg) = self.ticker_queue.pop_front() {
+                    self.ticker_current = msg;
+                    self.ticker_frame_counter = 0;
+                }
+            }
+        }
+    }
+
+    /// Build the visible ticker string for a display width (dispatch-ami).
+    /// The message scrolls right-to-left: starts fully off the right edge, moves left.
+    pub fn ticker_display(&self, width: usize) -> String {
+        if self.ticker_current.is_empty() {
+            return " ".repeat(width);
+        }
+        let chars: Vec<char> = self.ticker_current.chars().collect();
+        // Total virtual width: display area + message length (message starts off right edge).
+        // offset 0 = message starts just off-screen to the right.
+        // offset N = message has moved N chars to the left.
+        let virtual_start = width as isize - self.ticker_offset as isize;
+        let mut line = vec![' '; width];
+        for (i, &ch) in chars.iter().enumerate() {
+            let pos = virtual_start + i as isize;
+            if pos >= 0 && (pos as usize) < width {
+                line[pos as usize] = ch;
+            }
+        }
+        line.into_iter().collect()
+    }
+
+    // ── orchestrator tool execution (dispatch-x94) ──────────────────────────
+
+    /// Execute a tool call from the orchestrator agent. Returns the result.
+    pub fn execute_tool(&mut self, call: &tools::ToolCall) -> tools::ToolResult {
+        match call {
+            tools::ToolCall::Dispatch { repo: _, prompt } => {
+                // Find an idle slot (has PTY but no task) or an empty slot.
+                let slot_idx = self.slots.iter().enumerate().find_map(|(i, s)| {
+                    match s {
+                        Some(slot) if slot.task_id.is_none() => Some(i),
+                        _ => None,
+                    }
+                }).or_else(|| {
+                    self.slots.iter().position(|s| s.is_none())
+                });
+
+                let slot_idx = match slot_idx {
+                    Some(i) => i,
+                    None => return tools::ToolResult::Error {
+                        message: "no available slots".to_string(),
+                    },
+                };
+
+                let target_repo = self.default_repo_root().to_string();
+
+                // Create task in tasks.md.
+                let task_id = match create_task_in_file(&target_repo, prompt) {
+                    Some(id) => id,
+                    None => return tools::ToolResult::Error {
+                        message: "failed to create task".to_string(),
+                    },
+                };
+
+                // Determine callsign before spawn so it can be included in the prompt.
+                let callsign_for_prompt = protocol::default_callsign((slot_idx + 1) as u32).to_string();
+                let full_prompt = format!("Your callsign is {}. Your task ID is {}. {}", callsign_for_prompt, task_id, prompt);
+
+                // Spawn PTY if slot is empty. Agent creates its own worktree (dispatch-bka).
+                if self.slots[slot_idx].is_none() {
+                    let cmd = self.tool_cmd("claude-code").to_string();
+                    match dispatch_slot(
+                        slot_idx, "claude-code", &cmd, self.pane_rows, self.pane_cols,
+                        None, self.scrollback_lines,
+                        repo_name_from_path(&target_repo), &target_repo,
+                        Some(&full_prompt),
+                    ) {
+                        Some(slot) => { self.slots[slot_idx] = Some(slot); }
+                        None => return tools::ToolResult::Error {
+                            message: "failed to spawn agent PTY".to_string(),
+                        },
+                    }
+                }
+
+                // Assign task to slot.
+                let callsign = {
+                    let slot = self.slots[slot_idx].as_mut().unwrap();
+                    update_task_in_file(&target_repo, &task_id, '~', Some(&slot.callsign));
+                    slot.task_id = Some(task_id.clone());
+                    slot.last_output_at = Instant::now();
+                    slot.display_name().to_string()
+                };
+
+                self.push_orch(OrchestratorEventKind::TaskAssigned {
+                    id: task_id.clone(), agent: callsign.clone(), slot: slot_idx + 1,
+                });
+                self.push_ticker(format!(
+                    "DISPATCH: {} -> {} (slot {})", task_id, callsign, slot_idx + 1
+                ));
+                self.push_chat("Dispatcher", &format!("Dispatched agent {}.", callsign));
+
+                // Sync ws_state.
+                {
+                    let mut st = self.ws_state.lock().unwrap();
+                    st.slots[slot_idx] = Some(ws_server::AgentSlot {
+                        callsign: callsign.clone(),
+                        tool: "claude-code".to_string(),
+                        status: ws_server::AgentStatus::Busy,
+                        task: Some(task_id.clone()),
+                        repo: Some(repo_name_from_path(&target_repo).to_string()),
+                    });
+                }
+
+                tools::ToolResult::Dispatched {
+                    slot: (slot_idx + 1) as u32,
+                    callsign,
+                    task_id,
+                }
+            }
+
+            tools::ToolCall::Terminate { agent } => {
+                let (slot_occupied, callsigns): (Vec<bool>, Vec<Option<String>>) = self.slots
+                    .iter()
+                    .map(|s| match s {
+                        Some(slot) => (true, Some(slot.display_name().to_string())),
+                        None => (false, None),
+                    })
+                    .unzip();
+
+                let idx = match tools::resolve_agent(agent, &slot_occupied, &callsigns) {
+                    Some(i) => i,
+                    None => return tools::ToolResult::Error {
+                        message: format!("agent '{}' not found", agent),
+                    },
+                };
+
+                let callsign = self.slots[idx].as_ref().unwrap().display_name().to_string();
+                let slot_repo = self.slots[idx].as_ref().unwrap().repo_root.clone();
+                let task_id = crate::pty::terminate_slot(&mut self.slots[idx]);
+
+                // Reopen task if assigned.
+                if let Some(ref id) = task_id {
+                    update_task_in_file(&slot_repo, id, ' ', None);
+                }
+
+                self.push_orch(OrchestratorEventKind::Terminated {
+                    agent: callsign.clone(), slot: idx + 1,
+                });
+                self.push_ticker(format!("TERMINATED: {} (slot {})", callsign, idx + 1));
+                self.push_chat("Dispatcher", &format!("Terminated agent {}.", callsign));
+
+                // Sync ws_state.
+                {
+                    let mut st = self.ws_state.lock().unwrap();
+                    st.slots[idx] = None;
+                    if st.target == Some((idx + 1) as u32) {
+                        st.target = None;
+                    }
+                }
+
+                tools::ToolResult::Terminated {
+                    slot: (idx + 1) as u32,
+                    callsign,
+                }
+            }
+
+            // dispatch-bka: agents now merge their own branches, so this just
+            // acknowledges the completion and updates the task file.
+            tools::ToolCall::Merge { task_id } => {
+                let target_repo = self.default_repo_root().to_string();
+                update_task_in_file(&target_repo, task_id, 'x', None);
+                self.push_orch(OrchestratorEventKind::Merged { id: task_id.clone() });
+                self.push_ticker(format!("MERGED: task/{}", task_id));
+                self.push_chat("Dispatcher", &format!("task/{} merged.", task_id));
+                tools::ToolResult::Merged {
+                    task_id: task_id.clone(),
+                    success: true,
+                    message: format!("task/{} merged by agent", task_id),
+                }
+            }
+
+            tools::ToolCall::ListAgents => {
+                let agents: Vec<tools::AgentInfo> = self.slots.iter().enumerate()
+                    .filter_map(|(i, s)| {
+                        s.as_ref().map(|slot| tools::AgentInfo {
+                            slot: (i + 1) as u32,
+                            callsign: slot.display_name().to_string(),
+                            tool: slot.tool.clone(),
+                            status: if slot.task_id.is_some() { "busy".to_string() } else { "idle".to_string() },
+                            task: slot.task_id.clone(),
+                            repo: Some(slot.repo_name.clone()),
+                        })
+                    })
+                    .collect();
+                tools::ToolResult::Agents { agents }
+            }
+
+            tools::ToolCall::ListRepos => {
+                let repos = self.repo_list().iter().map(|path| {
+                    tools::RepoInfo {
+                        name: repo_name_from_path(path).to_string(),
+                        path: path.to_string(),
+                    }
+                }).collect();
+                tools::ToolResult::Repos { repos }
+            }
+
+            tools::ToolCall::MessageAgent { agent, text } => {
+                let (slot_occupied, callsigns): (Vec<bool>, Vec<Option<String>>) = self.slots
+                    .iter()
+                    .map(|s| match s {
+                        Some(slot) => (true, Some(slot.display_name().to_string())),
+                        None => (false, None),
+                    })
+                    .unzip();
+
+                let idx = match tools::resolve_agent(agent, &slot_occupied, &callsigns) {
+                    Some(i) => i,
+                    None => return tools::ToolResult::Error {
+                        message: format!("agent '{}' not found", agent),
+                    },
+                };
+
+                let slot = self.slots[idx].as_mut().unwrap();
+                let agent_name = slot.display_name().to_string();
+                let msg = format!("{}\r", text);
+                let _ = slot.writer.write_all(msg.as_bytes());
+                let _ = slot.writer.flush();
+                slot.last_output_at = Instant::now();
+
+                self.push_chat("Dispatcher", &format!("Message to {}: {}", agent_name, text));
+
+                tools::ToolResult::MessageSent {
+                    agent: agent_name,
+                    slot: (idx + 1) as u32,
+                }
+            }
+        }
+    }
+
+    /// Dispatch ready tasks from .dispatch/tasks.md to available agents. Returns the
+    /// number dispatched. Called after task completion to fill newly unblocked tasks.
+    pub fn dispatch_ready_tasks(&mut self) -> usize {
+        let ready = fetch_ready_tasks(&self.repo_root);
+        let pane_rows = self.pane_rows;
+        let pane_cols = self.pane_cols;
+        let repo_root = self.repo_root.clone();
+        let tool_cmd = self.tool_cmd("claude-code").to_string();
+        let scrollback = self.scrollback_lines;
+        let short_repo = repo_name_from_path(&repo_root).to_string();
+        let mut dispatched = 0;
+
+        for task in ready {
+            // Find an idle slot (has PTY but no task) or an empty slot.
+            let slot_idx = self.slots.iter().enumerate().find_map(|(i, s)| {
+                match s {
+                    Some(slot) if slot.task_id.is_none() => Some(i),
+                    _ => None,
+                }
+            }).or_else(|| {
+                self.slots.iter().position(|s| s.is_none())
+            });
+
+            let slot_idx = match slot_idx {
+                Some(i) => i,
+                None => break, // No available slots; remaining tasks stay queued.
+            };
+
+            // Spawn PTY if slot is empty. Agent creates its own worktree (dispatch-bka).
+            if self.slots[slot_idx].is_none() {
+                let prompt = format!("Your task ID is {}. {}", task.id, task.title);
+                if let Some(slot) = dispatch_slot(
+                    slot_idx, "claude-code", &tool_cmd, pane_rows, pane_cols,
+                    None, scrollback, &short_repo, &repo_root,
+                    Some(&prompt),
+                ) {
+                    self.slots[slot_idx] = Some(slot);
+                } else {
+                    continue;
+                }
+            }
+
+            // Assign the task to the slot.
+            let display_name = {
+                let slot = self.slots[slot_idx].as_mut().unwrap();
+                update_task_in_file(&repo_root, &task.id, '~', Some(&slot.callsign));
+                slot.task_id = Some(task.id.clone());
+                slot.last_output_at = Instant::now();
+                slot.display_name().to_string()
+            };
+            self.push_orch(OrchestratorEventKind::TaskAssigned { id: task.id.clone(), agent: display_name.clone(), slot: slot_idx + 1 });
+            self.push_ticker(format!(
+                "DISPATCH: {} -> {} (slot {})",
+                task.id, display_name, slot_idx + 1
+            ));
+            dispatched += 1;
+        }
+        dispatched
+    }
+}
