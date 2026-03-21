@@ -382,6 +382,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val displayName = sender
+        val timestamp = java.time.LocalTime.now().format(java.time.format.DateTimeFormatter.ofPattern("HH:mm"))
 
         val colorInt = when (sender) {
             userCallsign -> getColor(R.color.red)
@@ -391,7 +392,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         val tv = TextView(this).apply {
-            this.text = "$displayName: $text"
+            this.text = "$timestamp $displayName: $text"
             textSize = 11f
             typeface = android.graphics.Typeface.MONOSPACE
             setTextColor(colorInt)
