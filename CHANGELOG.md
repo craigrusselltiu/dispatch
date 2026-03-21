@@ -10,6 +10,10 @@ The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
 - Footer hotkey hints for occupied slots now show page navigation (arrow keys), connection info (x), and PSK toggle (p) in addition to existing hints.
 
+### Added
+
+- Volume Up hold-to-view agent status overlay on radio app. Pressing Volume Up immediately shows a dialog listing all active agents sorted by dispatch time, with callsign on the left and status on the right (Busy in red, Idle in yellow). Releasing the button dismisses the overlay. Long press (>1s) still transitions to the quick dispatch picker.
+
 ## v0.3.4
 
 ### Added

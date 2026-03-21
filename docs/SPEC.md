@@ -741,17 +741,18 @@ Primary controls are hardware volume buttons with haptic feedback.
 
 If the transcript is empty, double-pulse vibration, no message sent.
 
-**Volume Up -- Cycle Target**
+**Volume Up -- Agent Status Overlay**
 
 | Event     | Action                                                    |
 |-----------|-----------------------------------------------------------|
-| Key down  | Advance to next occupied slot across all agents (skip empty), send `set_target`, display new callsign, short vibration |
+| Key down  | Show hold-to-view status overlay listing all active agents sorted by dispatch time. Each line: callsign (left, white), status (right, RED for Busy / YELLOW for Idle). |
+| Key up    | Dismiss the status overlay, short vibration.              |
 
 **Volume Up Long Press -- Quick Dispatch**
 
 | Event     | Action                                                    |
 |-----------|-----------------------------------------------------------|
-| Hold >1s  | Show agent type picker on screen. Tap to dispatch.        |
+| Hold >1s  | Dismiss status overlay, show agent type picker. Tap to dispatch. |
 
 ### UI Layout
 
@@ -830,7 +831,7 @@ When the activity is in the foreground, volume key events are handled by `MainAc
 - `MainActivity` sets `isActivityInForeground = true` in `onResume`, `false` in `onPause`.
 - When the service receives a volume key event and the activity is NOT in the foreground, it invokes the bridge callback, which calls the activity's existing `onKeyDown` / `onKeyUp`.
 - When the activity IS in the foreground, the service returns `false` to let normal dispatch handle it.
-- Volume Up long press (Quick Dispatch overlay) is suppressed when backgrounded since a dialog cannot be shown without a foreground activity. Short press (target cycling) works in both states.
+- Volume Up overlays (status overlay and Quick Dispatch) are suppressed when backgrounded since a dialog cannot be shown without a foreground activity.
 
 **Setup:** The user must enable the service in Android Settings > Accessibility. The settings screen provides a shortcut button and shows the current status (ENABLED / DISABLED).
 
