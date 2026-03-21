@@ -66,17 +66,7 @@ Agent callsigns are configured in the `[agents]` section. The user and console d
 
 ### Radio (Android)
 
-1. Open the `radio/` directory in Android Studio (File > Open).
-2. Wait for Gradle sync to finish (progress bar at the bottom). If it does not start automatically, click the elephant icon in the toolbar or go to File > Sync Project with Gradle Files.
-3. Enable Developer Options on your phone: Settings > About phone, tap "Build number" 7 times.
-4. Connect your phone to Android Studio:
-   - **Wi-Fi (Android 11+)**: Settings > Developer options > Wireless debugging. In Android Studio: View > Tool Windows > Running Devices, click **+**, select **Pair Devices Using Wi-Fi**.
-   - **USB**: Plug in via USB, enable USB debugging in Developer options, tap "Allow" on the phone prompt.
-5. Select your phone from the device dropdown in the toolbar and click the green play button to build and install.
-6. Pair the radio to the console using one of these methods:
-   - **Auto-discovery**: In the radio's settings, tap **DISCOVER CONSOLE** to find the console on your network via mDNS.
-   - **Connection overlay**: Press `x` in the console to show the address, port, and PSK. Enter these in the radio's settings (gear icon).
-   - **Manual**: Enter the console's IP, port, and PSK directly in the radio's settings.
+Open the `radio/` directory in Android Studio, sync Gradle, and deploy to your phone over USB or Wi-Fi debugging. Once installed, open the app's settings and connect to the console by tapping **DISCOVER CONSOLE** (mDNS) or entering the IP, port, and PSK manually (press `x` in the console to display connection details).
 
 ## Usage
 
