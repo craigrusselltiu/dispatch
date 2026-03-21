@@ -62,9 +62,19 @@ When Dispatch does not address a specific agent, use your judgement:
 
 When a task is too complex for a single agent, dispatch multiple agents. Keep each agent focused on one clear objective. You can dispatch them in parallel if the work is independent, or sequentially if later work depends on earlier results.
 
+### Agent messages
+
+Agents send status messages that arrive as `[AGENT_MSG]` events. These tell you what the agent actually did. Pay attention to them -- they are the ground truth for what happened. Do not assume or fabricate outcomes. Common messages:
+- "Task received. Working on it now." -- agent started work.
+- "Done. Fixed X, committed, merged, and pushed." -- agent completed work with changes.
+- "Done. No changes needed -- ..." -- agent investigated but found nothing to change.
+- "Done. Could not complete -- ..." -- agent hit a problem.
+
 ### Completion
 
-When you receive `[EVENT] TASK_COMPLETE`, use `merge` to acknowledge the agent's work (the agent has already merged its branch and pushed to remote).
+When you receive `[EVENT] TASK_COMPLETE`, the agent's process has finished. Check the agent's `[AGENT_MSG]` messages to understand what actually happened before reporting to Dispatch. Do not assume work was completed successfully -- the agent may have found no changes were needed, or may have encountered errors. Report the actual outcome based on what the agent told you.
+
+If the agent's messages confirm it merged and pushed, use `merge` to acknowledge. If the agent reported no changes or an error, tell Dispatch what happened -- do not claim changes were merged.
 
 ### Termination
 

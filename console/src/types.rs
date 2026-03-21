@@ -57,6 +57,8 @@ pub enum OrchestratorEventKind {
     ToolCallIssued { name: String },
     /// Tool result sent back to orchestrator.
     ToolResultSent { name: String, success: bool },
+    /// Status message from an agent (@@DISPATCH_MSG).
+    AgentMessage { agent: String, text: String },
 }
 
 /// Workspace mode: single repo or multi-repo parent directory (dispatch-sa1).

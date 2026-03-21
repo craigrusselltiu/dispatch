@@ -437,6 +437,11 @@ pub fn render_orchestrator(f: &mut Frame, area: Rect, app: &App) {
                 if *success { Style::default().fg(Color::Green) } else { Style::default().fg(Color::Red) },
                 format!("<- {} {}", name, if *success { "ok" } else { "error" }),
             ),
+            OrchestratorEventKind::AgentMessage { agent, text } => (
+                "AGENT",
+                Style::default().fg(Color::Blue),
+                format!("{}: {}", agent, text),
+            ),
         };
         lines.push(Line::from(vec![
             Span::styled(
