@@ -158,4 +158,4 @@ dispatch/
 
 ## Inspiration
 
-Inspired by Brian Harms's project, also named Dispatch.
+A fun little side-project inspired by Brian Harms's project, also named Dispatch. Not to be confused with Claude's new Dispatch feature.
