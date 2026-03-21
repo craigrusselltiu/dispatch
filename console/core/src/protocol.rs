@@ -13,19 +13,6 @@ pub const NATO_DEFAULTS: [&str; 26] = [
     "X-ray", "Yankee", "Zulu",
 ];
 
-/// Callsign for a 1-indexed slot number, given the configured callsign list.
-pub fn callsign_for_slot(slot: u32, callsigns: &[String]) -> &str {
-    callsigns.get((slot as usize).saturating_sub(1))
-        .map(|s| s.as_str())
-        .unwrap_or("Agent")
-}
-
-/// Resolve a callsign to its 0-indexed slot. Case-insensitive.
-pub fn callsign_to_slot(callsign: &str, callsigns: &[String]) -> Option<usize> {
-    let upper = callsign.to_uppercase();
-    callsigns.iter().position(|n| n.to_uppercase() == upper)
-}
-
 // --- Inbound messages (radio → console) ---
 
 /// Flat deserialization of all inbound message types.

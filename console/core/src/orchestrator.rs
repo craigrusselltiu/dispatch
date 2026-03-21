@@ -75,7 +75,7 @@ pub fn build_system_prompt(
 
     let callsign_list = callsigns.join(", ");
     format!(
-        "Repository: {}\n\nThe user's callsign is: {}\nYour name (the orchestrator) is: {}\n\nAvailable agent callsigns (slot 1 through {}): {}\n\n{}",
+        "Repository: {}\n\nThe user's callsign is: {}\nYour name (the orchestrator) is: {}\n\nAvailable agent callsigns ({} slots): {}\nCallsigns are dynamically assigned to the next available slot.\n\n{}",
         repo_name, user_callsign, console_name, callsigns.len(), callsign_list, md_content
     )
 }

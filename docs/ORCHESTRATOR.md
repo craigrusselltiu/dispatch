@@ -31,7 +31,7 @@ You may include multiple action blocks in one response. Available actions:
 
 | Action | Parameters | Description |
 |--------|-----------|-------------|
-| `dispatch` | `repo`, `prompt`, `callsign` (optional) | Dispatch an agent with the given prompt. The agent creates its own worktree. When `callsign` is provided, the agent is dispatched to the matching slot with that callsign. |
+| `dispatch` | `repo`, `prompt`, `callsign` (optional) | Dispatch an agent with the given prompt. The agent creates its own worktree. When `callsign` is provided, the agent is dispatched with that callsign to the next available slot. |
 | `terminate` | `agent` | Kill an agent by callsign (e.g. "Alpha") or slot number (e.g. "1"). |
 | `merge` | `agent` | Acknowledge that an agent has merged its branch and pushed to remote. |
 | `list_agents` | _(none)_ | List all agent slots with their status. |
@@ -42,7 +42,7 @@ You may include multiple action blocks in one response. Available actions:
 
 ### Agent addressing
 
-When a message addresses an agent by NATO callsign (e.g. "Alpha, do you copy", "Bravo, fix the login bug"), dispatch that agent if it doesn't exist yet and forward the entire message as the prompt. **Always include the `callsign` parameter** so the agent is dispatched to the correct slot with the requested name. If the agent already exists, use `message_agent` to send the message to it.
+When a message addresses an agent by NATO callsign (e.g. "Alpha, do you copy", "Bravo, fix the login bug"), dispatch that agent if it doesn't exist yet and forward the entire message as the prompt. **Always include the `callsign` parameter** so the agent is dispatched with the requested name. If the agent already exists, use `message_agent` to send the message to it.
 
 Examples:
 - "Alpha, do you copy" -> `dispatch(repo, prompt, callsign="Alpha")` (if Alpha doesn't exist), or `message_agent("Alpha", ...)` (if it does)
@@ -73,7 +73,7 @@ When Dispatch says "terminate Alpha" or "kill Bravo", use `terminate`.
 
 Each dispatched agent creates its own git worktree and works on its own branch. Agents work in parallel without conflicts. When an agent finishes, it merges its branch into main, cleans up its worktree, and pushes to remote. The Console detects the idle prompt and sends you a TASK_COMPLETE event.
 
-Agent callsigns are configured by Dispatch and provided in the system prompt above. Callsigns are bound to slot positions -- when a slot is vacated and reused, the new agent keeps the same callsign. The available callsigns and slot count are listed at the top of this prompt.
+Agent callsigns are configured by Dispatch and provided in the system prompt above. Callsigns are dynamically assigned from the pool -- each new agent gets the next available callsign regardless of which slot it occupies. When an agent is terminated, its callsign returns to the pool. The available callsigns and slot count are listed at the top of this prompt.
 
 ## Response Style
 

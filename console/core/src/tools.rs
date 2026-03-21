@@ -137,7 +137,7 @@ pub fn tool_definitions() -> serde_json::Value {
                     },
                     "callsign": {
                         "type": "string",
-                        "description": "Optional NATO callsign to assign (e.g. \"Delta\"). When provided, the agent is dispatched to the matching slot with this callsign."
+                        "description": "Optional NATO callsign to assign (e.g. \"Delta\"). When provided, the agent is dispatched with this callsign to the next available slot."
                     }
                 },
                 "required": ["repo", "prompt"]

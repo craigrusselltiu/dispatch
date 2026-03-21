@@ -5,7 +5,7 @@
 
 use std::sync::{mpsc, Arc, Mutex};
 
-use crate::protocol::{callsign_for_slot, OutboundMsg, RawInbound, SlotInfo};
+use crate::protocol::{OutboundMsg, RawInbound, SlotInfo};
 
 // --- Event channel -------------------------------------------------------
 
@@ -109,6 +109,24 @@ impl ConsoleState {
             } else {
                 None
             }
+        })
+    }
+
+    /// Next unused callsign from the configured list (dynamic assignment).
+    pub fn next_callsign(&self) -> Option<String> {
+        let used: std::collections::HashSet<String> = self.slots.iter()
+            .filter_map(|s| s.as_ref().map(|a| a.callsign.to_uppercase()))
+            .collect();
+        self.callsigns.iter()
+            .find(|cs| !used.contains(&cs.to_uppercase()))
+            .cloned()
+    }
+
+    /// Find the 0-indexed slot containing an agent with the given callsign.
+    pub fn find_slot_by_callsign(&self, callsign: &str) -> Option<usize> {
+        let upper = callsign.to_uppercase();
+        self.slots.iter().position(|s| {
+            s.as_ref().map(|a| a.callsign.to_uppercase() == upper).unwrap_or(false)
         })
     }
 }
@@ -252,7 +270,16 @@ pub fn handle_message(raw: RawInbound, state: &SharedState) -> Option<OutboundMs
                 });
             }
 
-            let callsign = callsign_for_slot(slot, &st.callsigns).to_string();
+            // Dynamic callsign: pick the next unused callsign from the pool.
+            let callsign = match st.next_callsign() {
+                Some(cs) => cs,
+                None => {
+                    return Some(OutboundMsg::Error {
+                        message: "no callsigns available".to_string(),
+                        seq,
+                    })
+                }
+            };
             st.slots[idx] = Some(AgentSlot {
                 callsign: callsign.clone(),
                 tool: tool.clone(),
@@ -548,5 +575,63 @@ mod tests {
             }
             other => panic!("unexpected event: {:?}", other),
         }
+    }
+
+    #[test]
+    fn dynamic_callsign_assignment() {
+        // Callsigns are assigned from the pool, not tied to slot positions.
+        let state = make_state();
+
+        // Dispatch first agent — gets Alpha (first in pool).
+        let mut d1 = raw("dispatch");
+        d1.tool = Some("claude-code".to_string());
+        let resp1 = handle_message(d1, &state).unwrap();
+        let json1 = serde_json::to_string(&resp1).unwrap();
+        assert!(json1.contains("\"slot\":1"));
+        assert!(json1.contains("\"callsign\":\"Alpha\""));
+
+        // Dispatch second — gets Bravo (next in pool).
+        let mut d2 = raw("dispatch");
+        d2.tool = Some("claude-code".to_string());
+        let resp2 = handle_message(d2, &state).unwrap();
+        let json2 = serde_json::to_string(&resp2).unwrap();
+        assert!(json2.contains("\"slot\":2"));
+        assert!(json2.contains("\"callsign\":\"Bravo\""));
+
+        // Terminate Alpha (slot 1).
+        let mut t = raw("terminate");
+        t.slot = Some(1);
+        handle_message(t, &state);
+
+        // Dispatch again — goes to slot 1 (first empty) but gets Alpha
+        // again (first unused callsign in pool after Bravo takes slot 2).
+        let mut d3 = raw("dispatch");
+        d3.tool = Some("claude-code".to_string());
+        let resp3 = handle_message(d3, &state).unwrap();
+        let json3 = serde_json::to_string(&resp3).unwrap();
+        assert!(json3.contains("\"slot\":1"));
+        assert!(json3.contains("\"callsign\":\"Alpha\""));
+    }
+
+    #[test]
+    fn next_callsign_skips_used() {
+        let state = make_state();
+
+        // Dispatch into slot 3 explicitly, gets Alpha from pool.
+        let mut d1 = raw("dispatch");
+        d1.tool = Some("claude-code".to_string());
+        d1.slot = Some(3);
+        let resp = handle_message(d1, &state).unwrap();
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"slot\":3"));
+        assert!(json.contains("\"callsign\":\"Alpha\""));
+
+        // Next dispatch goes to slot 1 (first empty) with Bravo (next in pool).
+        let mut d2 = raw("dispatch");
+        d2.tool = Some("claude-code".to_string());
+        let resp2 = handle_message(d2, &state).unwrap();
+        let json2 = serde_json::to_string(&resp2).unwrap();
+        assert!(json2.contains("\"slot\":1"));
+        assert!(json2.contains("\"callsign\":\"Bravo\""));
     }
 }

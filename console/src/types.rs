@@ -90,7 +90,7 @@ pub enum RadioState {
 /// Per-slot PTY and display state (dispatch-bgz.2).
 /// Not Send — only used on the main thread.
 pub struct SlotState {
-    pub callsign: String,            // config-defined (slot-bound)
+    pub callsign: String,            // dynamically assigned from pool
     pub custom_name: Option<String>, // user rename (dispatch-bgz.3)
     pub tool: String,
     pub task_id: Option<String>,

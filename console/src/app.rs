@@ -144,6 +144,16 @@ impl App {
         }
     }
 
+    /// Next unused callsign from the configured list (dynamic assignment).
+    pub fn next_callsign(&self) -> Option<String> {
+        let used: std::collections::HashSet<String> = self.slots.iter()
+            .filter_map(|s| s.as_ref().map(|slot| slot.display_name().to_uppercase()))
+            .collect();
+        self.callsigns.iter()
+            .find(|cs| !used.contains(&cs.to_uppercase()))
+            .cloned()
+    }
+
     /// Re-scan child directories for git repos in multi-repo mode (dispatch-sa1).
     pub fn rescan_repos(&mut self) {
         if let Workspace::MultiRepo { parent, repos } = &mut self.workspace {
@@ -229,38 +239,64 @@ impl App {
     pub fn execute_tool(&mut self, call: &tools::ToolCall) -> tools::ToolResult {
         match call {
             tools::ToolCall::Dispatch { repo: _, prompt, callsign: requested_callsign } => {
-                // When a callsign is explicitly requested, dispatch to its
-                // matching slot (e.g. Delta -> slot 4) instead of picking the
-                // first empty slot.
-                let slot_idx = if let Some(cs) = requested_callsign.as_deref() {
-                    match protocol::callsign_to_slot(cs, &self.callsigns) {
-                        Some(idx) => {
-                            // Slot must be empty or idle (no active task).
-                            match &self.slots[idx] {
-                                Some(slot) if slot.task_id.is_some() => {
-                                    return tools::ToolResult::Error {
-                                        message: format!("{} (slot {}) is busy", cs, idx + 1),
-                                    };
-                                }
-                                _ => Some(idx),
+                // Dynamic callsign assignment: agents go into the next
+                // available slot rather than a fixed slot per callsign.
+                let (slot_idx, callsign_for_prompt) = if let Some(cs) = requested_callsign.as_deref() {
+                    // Check if an agent with this callsign is already active.
+                    let active_idx = self.slots.iter().enumerate().find_map(|(i, s)| {
+                        s.as_ref().and_then(|slot| {
+                            if slot.display_name().eq_ignore_ascii_case(cs) {
+                                Some(i)
+                            } else {
+                                None
                             }
+                        })
+                    });
+
+                    if let Some(idx) = active_idx {
+                        // Agent exists — must be idle (no active task).
+                        match &self.slots[idx] {
+                            Some(slot) if slot.task_id.is_some() => {
+                                return tools::ToolResult::Error {
+                                    message: format!("{} (slot {}) is busy", cs, idx + 1),
+                                };
+                            }
+                            _ => (Some(idx), cs.to_string()),
                         }
-                        None => {
-                            return tools::ToolResult::Error {
-                                message: format!("unknown callsign '{}'", cs),
-                            };
+                    } else {
+                        // Callsign not active — assign to first empty slot.
+                        match self.slots.iter().position(|s| s.is_none()) {
+                            Some(idx) => (Some(idx), cs.to_string()),
+                            None => return tools::ToolResult::Error {
+                                message: "no available slots".to_string(),
+                            },
                         }
                     }
                 } else {
                     // No callsign requested: find an idle slot or empty slot.
-                    self.slots.iter().enumerate().find_map(|(i, s)| {
+                    let idle = self.slots.iter().enumerate().find_map(|(i, s)| {
                         match s {
                             Some(slot) if slot.task_id.is_none() => Some(i),
                             _ => None,
                         }
-                    }).or_else(|| {
-                        self.slots.iter().position(|s| s.is_none())
-                    })
+                    });
+
+                    if let Some(idx) = idle {
+                        let cs = self.slots[idx].as_ref().unwrap().display_name().to_string();
+                        (Some(idx), cs)
+                    } else {
+                        // Empty slot + next available callsign from the pool.
+                        match self.slots.iter().position(|s| s.is_none()) {
+                            Some(idx) => {
+                                let cs = self.next_callsign()
+                                    .unwrap_or_else(|| format!("Agent-{}", idx + 1));
+                                (Some(idx), cs)
+                            }
+                            None => return tools::ToolResult::Error {
+                                message: "no available slots".to_string(),
+                            },
+                        }
+                    }
                 };
 
                 let slot_idx = match slot_idx {
@@ -272,10 +308,6 @@ impl App {
 
                 let target_repo = self.default_repo_root().to_string();
 
-                // Determine callsign before spawn so it can be included in the prompt.
-                let callsign_for_prompt = requested_callsign
-                    .as_deref()
-                    .unwrap_or_else(|| protocol::callsign_for_slot((slot_idx + 1) as u32, &self.callsigns));
                 let full_prompt = format!("Your callsign is {}. {}", callsign_for_prompt, prompt);
 
                 // Spawn PTY if slot is empty. Agent creates its own worktree.
@@ -287,7 +319,7 @@ impl App {
                         repo_name_from_path(&target_repo), &target_repo,
                         Some(&full_prompt),
                         self.agent_msg_tx.clone(),
-                        callsign_for_prompt,
+                        &callsign_for_prompt,
                     ) {
                         Some(slot) => { self.slots[slot_idx] = Some(slot); }
                         None => return tools::ToolResult::Error {

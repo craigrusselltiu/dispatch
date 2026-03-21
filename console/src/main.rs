@@ -517,7 +517,7 @@ fn main() -> io::Result<()> {
                                             // Dispatch into the first empty slot, targeting the selected repo.
                                             if let Some(g) = app.slots.iter().position(|s| s.is_none()) {
                                                 let cmd = app.tool_cmd("claude-code").to_string();
-                                                let cs = app.callsigns.get(g).cloned().unwrap_or_else(|| format!("Agent-{}", g + 1));
+                                                let cs = app.next_callsign().unwrap_or_else(|| format!("Agent-{}", g + 1));
                                                 if let Some(slot) = pty::dispatch_slot(
                                                     g, "claude-code", &cmd, app.pane_rows, app.pane_cols,
                                                     Some(&selected_repo), app.scrollback_lines,

@@ -67,9 +67,9 @@ callsigns = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "H
 
 Users can customize this list with any names they prefer. The number of entries determines the slot count (4-26), and pages are allocated automatically (4 slots per page).
 
-Callsigns are bound to slots, not agent instances. If Alpha is terminated and a new agent is dispatched into slot 1, it becomes Alpha again.
+Callsigns are dynamically assigned from the configured list. Each new agent gets the next available callsign regardless of which slot it occupies. When an agent is terminated, its callsign returns to the pool and can be reused by the next dispatch.
 
-Agents can be renamed by the orchestrator. Custom names replace the configured default until the agent is terminated, at which point the slot reverts.
+Agents can be renamed by the orchestrator. Custom names replace the assigned callsign until the agent is terminated.
 
 Callsigns are the primary identifier for voice commands. All agents are addressable by voice regardless of which page is currently displayed in the console.
 
