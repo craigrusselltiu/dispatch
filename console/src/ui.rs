@@ -500,7 +500,7 @@ pub fn render_footer(f: &mut Frame, area: Rect, app: &App) {
             } else if target_empty {
                 " n:new  o:orch  ?:help  q:quit"
             } else {
-                " Enter:input  k:kill  o:orch  ?:help  q:quit"
+                " Enter:input  ←→:page  x:info  p:psk  k:kill  o:orch  ?:help  q:quit"
             };
             Line::from(vec![
                 Span::styled(

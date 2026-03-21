@@ -554,7 +554,7 @@ Bright green border on the active pane. Footer shows mode indicator.
    - **Info strip**: callsign, tool type, status (busy/idle), dispatch time, and runtime.
    - **Terminal area**: live embedded terminal output rendered from the VTE parser.
    - Empty slots show "STANDBY".
-4. **Footer bar** -- command mode: radio state, target (regardless of page), page navigation, shortcuts. Input mode: `-- INPUT ({CALLSIGN}) --` with ESC hint.
+4. **Footer bar** -- command mode: radio state, target (regardless of page), context-sensitive hotkey hints (occupied slots show Enter, arrow keys, x, p, k, o, ?, q; empty slots show n, o, ?, q). Input mode: `-- INPUT ({CALLSIGN}) --` with ESC hint.
 
 ### Input Model
 

@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## v0.3.5
+
+### Changed
+
+- Footer hotkey hints for occupied slots now show page navigation (arrow keys), connection info (x), and PSK toggle (p) in addition to existing hints.
+
 ## v0.3.4
 
 ### Added
