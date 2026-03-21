@@ -440,8 +440,13 @@ fn main() -> io::Result<()> {
             app.push_orch(OrchestratorEventKind::AgentMessage { agent: callsign.clone(), text: text.clone() });
             // Forward agent status messages to the orchestrator so it has
             // visibility into agent progress (e.g. "Task received", "Merging").
+            // Fence the message body to prevent artifacts (markdown, XML, etc.)
+            // from being misinterpreted as action blocks or structured content.
             if let Some(orch) = &mut app.orchestrator {
-                orch.send_message(&format!("[AGENT_MSG] {}: {}", callsign, text));
+                orch.send_message(&format!(
+                    "[AGENT_MSG] {}:\n```\n{}\n```",
+                    callsign, text
+                ));
             }
         }
 
