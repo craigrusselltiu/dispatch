@@ -30,6 +30,7 @@ class VolumeUpHandler(
 
     private val handler = Handler(Looper.getMainLooper())
     private var longPressTriggered = false
+    private var isKeyDown = false
     private var statusOverlay: AgentStatusOverlay? = null
 
     private val longPressRunnable = Runnable {
@@ -46,6 +47,8 @@ class VolumeUpHandler(
 
     /** Call from Activity.onKeyDown for KEYCODE_VOLUME_UP. Returns true to consume. */
     fun onKeyDown(agents: List<Agent>): Boolean {
+        if (isKeyDown) return true // Ignore key-repeat events while held
+        isKeyDown = true
         longPressTriggered = false
         handler.postDelayed(longPressRunnable, LONG_PRESS_MS)
         if (VolumeKeyBridge.isActivityInForeground) {
@@ -56,6 +59,7 @@ class VolumeUpHandler(
 
     /** Call from Activity.onKeyUp for KEYCODE_VOLUME_UP. Returns true to consume. */
     fun onKeyUp(): Boolean {
+        isKeyDown = false
         handler.removeCallbacks(longPressRunnable)
         if (!longPressTriggered) {
             haptics.shortPulse()

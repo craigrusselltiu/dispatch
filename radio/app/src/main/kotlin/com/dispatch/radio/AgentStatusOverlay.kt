@@ -2,9 +2,11 @@ package com.dispatch.radio
 
 import android.app.AlertDialog
 import android.content.Context
+import android.content.DialogInterface
 import android.graphics.Color
 import android.graphics.Typeface
 import android.view.Gravity
+import android.view.KeyEvent
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.dispatch.radio.model.Agent
@@ -76,6 +78,12 @@ class AgentStatusOverlay(private val context: Context) {
             .setView(layout)
             .setCancelable(false)
             .create()
+
+        // Consume volume key events so they don't leak to the system volume handler
+        // while the overlay is visible (the dialog window steals focus from the activity).
+        dialog?.setOnKeyListener(DialogInterface.OnKeyListener { _, keyCode, _ ->
+            keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
+        })
 
         dialog?.show()
     }
