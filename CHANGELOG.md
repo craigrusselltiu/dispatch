@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## v0.3.1
+
+### Added
+
+- Agent idle detection: the console monitors PTY output activity and detects when an agent stops producing output (10-second threshold). On each working-to-idle transition, the orchestrator receives an `[EVENT] AGENT_IDLE` event so it can take action (e.g. acknowledge completion, dispatch follow-up work).
+- Activity status indicator in TUI pane info strip: shows "WORK" (green) when agent is actively producing output, "IDLE" (gray) when quiet.
+- `list_agents` now reports "working" or "idle" status based on actual PTY output activity, replacing the previous task-presence-only heuristic.
+
 ## v0.3.0
 
 ### Added

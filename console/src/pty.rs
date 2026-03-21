@@ -115,6 +115,9 @@ pub fn dispatch_slot(
     let screen_w = Arc::clone(&screen);
     let child_exited = Arc::new(AtomicBool::new(false));
     let child_exited_w = Arc::clone(&child_exited);
+    let now = Instant::now();
+    let last_output_at = Arc::new(Mutex::new(now));
+    let last_output_w = Arc::clone(&last_output_at);
     let mut pty_reader = pair.master.try_clone_reader().ok()?;
 
     thread::spawn(move || {
@@ -129,6 +132,9 @@ pub fn dispatch_slot(
             match pty_reader.read(&mut buf) {
                 Ok(0) | Err(_) => break,
                 Ok(n) => {
+                    // Update last output timestamp for idle detection.
+                    *last_output_w.lock().unwrap() = Instant::now();
+
                     // Scan for @@DISPATCH_MSG: markers in the byte stream.
                     //
                     // Only process the line buffer on true line endings (\n
@@ -188,7 +194,6 @@ pub fn dispatch_slot(
     let callsign = callsign.to_string();
     let wall = Local::now().format("%H:%M").to_string();
 
-    let now = Instant::now();
     Some(SlotState {
         callsign,
         custom_name: None,
@@ -203,7 +208,8 @@ pub fn dispatch_slot(
         child_exited,
         child_pid,
         master: pair.master,
-        last_output_at: now,
+        last_output_at,
+        idle: false,
         scroll_offset: 0,
     })
 }

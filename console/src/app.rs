@@ -299,7 +299,8 @@ impl App {
                 let callsign = {
                     let slot = self.slots[slot_idx].as_mut().unwrap();
                     slot.task_id = Some(prompt.clone());
-                    slot.last_output_at = Instant::now();
+                    *slot.last_output_at.lock().unwrap() = Instant::now();
+                    slot.idle = false;
                     slot.display_name().to_string()
                 };
 
@@ -385,13 +386,20 @@ impl App {
             tools::ToolCall::ListAgents => {
                 let agents: Vec<tools::AgentInfo> = self.slots.iter().enumerate()
                     .filter_map(|(i, s)| {
-                        s.as_ref().map(|slot| tools::AgentInfo {
-                            slot: (i + 1) as u32,
-                            callsign: slot.display_name().to_string(),
-                            tool: slot.tool.clone(),
-                            status: if slot.task_id.is_some() { "busy".to_string() } else { "idle".to_string() },
-                            task: slot.task_id.clone(),
-                            repo: Some(slot.repo_name.clone()),
+                        s.as_ref().map(|slot| {
+                            let status = if slot.task_id.is_some() && !slot.idle {
+                                "working".to_string()
+                            } else {
+                                "idle".to_string()
+                            };
+                            tools::AgentInfo {
+                                slot: (i + 1) as u32,
+                                callsign: slot.display_name().to_string(),
+                                tool: slot.tool.clone(),
+                                status,
+                                task: slot.task_id.clone(),
+                                repo: Some(slot.repo_name.clone()),
+                            }
                         })
                     })
                     .collect();
@@ -429,7 +437,8 @@ impl App {
                 let msg = format!("{}\r", text);
                 let _ = slot.writer.write_all(msg.as_bytes());
                 let _ = slot.writer.flush();
-                slot.last_output_at = Instant::now();
+                *slot.last_output_at.lock().unwrap() = Instant::now();
+                slot.idle = false;
 
                 self.push_chat(&self.console_name, &format!("Message to {}: {}", agent_name, text));
 

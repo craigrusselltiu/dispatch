@@ -259,6 +259,47 @@ fn main() -> io::Result<()> {
             break;
         }
 
+        // Idle detection: detect when a working agent stops producing output.
+        // An agent with a task that has no PTY output for IDLE_TIMEOUT is
+        // considered idle (finished work, sitting at prompt). The orchestrator
+        // is notified on the working->idle transition so it can take action.
+        const IDLE_TIMEOUT: Duration = Duration::from_secs(10);
+        for i in 0..slot_count {
+            if let Some(s) = &mut app.slots[i] {
+                if s.task_id.is_some() {
+                    let elapsed = s.last_output_at.lock().unwrap().elapsed();
+                    let is_idle_now = elapsed >= IDLE_TIMEOUT;
+                    if is_idle_now && !s.idle {
+                        // Transition: working -> idle.
+                        s.idle = true;
+                        let callsign = s.display_name().to_string();
+                        if let Some(orch) = &mut app.orchestrator {
+                            orch.send_message(&format!(
+                                "[EVENT] AGENT_IDLE agent={} slot={}",
+                                callsign, i + 1
+                            ));
+                        }
+                        // Sync ws_state.
+                        {
+                            let mut st = app.ws_state.lock().unwrap();
+                            if let Some(agent) = &mut st.slots[i] {
+                                agent.status = ws_server::AgentStatus::Idle;
+                            }
+                        }
+                    } else if !is_idle_now && s.idle {
+                        // Transition: idle -> working (new output detected).
+                        s.idle = false;
+                        {
+                            let mut st = app.ws_state.lock().unwrap();
+                            if let Some(agent) = &mut st.slots[i] {
+                                agent.status = ws_server::AgentStatus::Busy;
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
         // Advance ticker animation each frame (dispatch-ami).
         app.tick_ticker();
         // Advance status blink animation (REC-light pulse).
