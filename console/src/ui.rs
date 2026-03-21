@@ -195,7 +195,7 @@ fn pane_info_strip(global_idx: usize, local_idx: usize, app: &App) -> Text<'stat
                 "┄".repeat(40),
                 Style::default().fg(Color::DarkGray),
             ));
-            Text::from(vec![line1, Line::default(), Line::default(), sep])
+            Text::from(vec![line1, Line::default(), sep])
         }
         Some(agent) => {
             let name_style = if is_target {
@@ -209,6 +209,7 @@ fn pane_info_strip(global_idx: usize, local_idx: usize, app: &App) -> Text<'stat
             } else {
                 ("IDLE", Style::default().fg(Color::DarkGray))
             };
+            let runtime = format_runtime(agent.dispatch_time.elapsed());
             let line1 = Line::from(vec![
                 Span::styled(marker_str.to_string(), marker_style),
                 Span::styled(
@@ -217,6 +218,10 @@ fn pane_info_strip(global_idx: usize, local_idx: usize, app: &App) -> Text<'stat
                 ),
                 Span::styled(" ", Style::default()),
                 Span::styled(activity_label, activity_style),
+                Span::styled(
+                    format!("  @{} {}", agent.dispatch_wall_str, runtime),
+                    Style::default().fg(Color::DarkGray),
+                ),
             ]);
             let task_span = match &agent.task_id {
                 Some(id) => Span::styled(id.clone(), Style::default().fg(Color::Yellow)),
@@ -228,21 +233,12 @@ fn pane_info_strip(global_idx: usize, local_idx: usize, app: &App) -> Text<'stat
                     Style::default().fg(Color::DarkGray),
                 ),
                 task_span,
-                Span::styled(
-                    format!(" | {}", agent.repo_name),
-                    Style::default().fg(Color::DarkGray),
-                ),
             ]);
-            let runtime = format_runtime(agent.dispatch_time.elapsed());
-            let line3 = Line::from(Span::styled(
-                format!("  dispatched {} | {}", agent.dispatch_wall_str, runtime),
-                Style::default().fg(Color::DarkGray),
-            ));
             let sep = Line::from(Span::styled(
                 "┄".repeat(40),
                 Style::default().fg(Color::DarkGray),
             ));
-            Text::from(vec![line1, line2, line3, sep])
+            Text::from(vec![line1, line2, sep])
         }
     }
 }
@@ -290,7 +286,7 @@ fn render_pane(
 
     let chunks = Layout::default()
         .direction(Direction::Vertical)
-        .constraints([Constraint::Length(4), Constraint::Min(0)])
+        .constraints([Constraint::Length(3), Constraint::Min(0)])
         .split(inner);
 
     f.render_widget(Paragraph::new(pane_info_strip(global_idx, local_idx, app)), chunks[0]);
