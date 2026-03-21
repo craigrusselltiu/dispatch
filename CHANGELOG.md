@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## v0.2.1
+
+### Added
+
+- `dispatch edit-config` command to open config.toml in VS Code.
+
 ## v0.2.0
 
 ### Added

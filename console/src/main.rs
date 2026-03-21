@@ -65,6 +65,8 @@ enum Commands {
     ShowPsk,
     /// Print the config file path
     Config,
+    /// Open the config file in VS Code
+    EditConfig,
 }
 
 // ── main ──────────────────────────────────────────────────────────────────────
@@ -83,6 +85,20 @@ fn main() -> io::Result<()> {
         }
         Some(Commands::Config) => {
             println!("{}", config::config_path().display());
+            return Ok(());
+        }
+        Some(Commands::EditConfig) => {
+            let path = config::config_path();
+            // Ensure the config file exists before opening.
+            let _ = config::load_or_create();
+            let status = Command::new("code")
+                .arg(&path)
+                .status()
+                .expect("failed to launch VS Code — is `code` on your PATH?");
+            if !status.success() {
+                eprintln!("VS Code exited with status {}", status);
+                std::process::exit(1);
+            }
             return Ok(());
         }
         None => {}
