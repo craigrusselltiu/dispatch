@@ -552,9 +552,7 @@ class MainActivity : AppCompatActivity() {
 
             val msg = """{"type":"send_image","callsign":${gson.toJson(callsign)},"data":"$b64","filename":${gson.toJson(filename)}}"""
             val sent = wsClient?.send(msg) ?: false
-            if (sent) {
-                addChatMessage(userCallsign, "[image -> $callsign] $filename")
-            } else {
+            if (!sent) {
                 addChatMessage("System", "Failed to send image (not connected).")
             }
         } catch (e: Exception) {
