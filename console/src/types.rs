@@ -139,9 +139,9 @@ pub struct App {
     pub pane_rows: u16,
     pub pane_cols: u16,
     pub tools: std::collections::HashMap<String, String>,
-    // Ticker: LED-style scrolling marquee
-    pub ticker_queue: std::collections::VecDeque<String>,
-    pub ticker_current: String,
+    // Ticker: LED-style scrolling marquee (continuous tape)
+    pub ticker_tape: String,
+    pub ticker_tape_chars: usize,
     pub ticker_offset: usize,
     pub ticker_frame_counter: u8,
     /// Workspace mode: single-repo or multi-repo.

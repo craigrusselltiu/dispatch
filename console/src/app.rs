@@ -47,8 +47,8 @@ impl App {
             pane_rows,
             pane_cols,
             tools,
-            ticker_queue: std::collections::VecDeque::new(),
-            ticker_current: String::new(),
+            ticker_tape: String::new(),
+            ticker_tape_chars: 0,
             ticker_offset: 0,
             ticker_frame_counter: 0,
             workspace,
@@ -190,60 +190,57 @@ impl App {
         (self.status_blink_frame % 60) < 42
     }
 
-    /// Queue a message on the ticker (dispatch-ami).
+    /// Append a message to the continuous ticker tape.
+    /// New content flows in from the right after any existing content.
     pub fn push_ticker(&mut self, msg: impl Into<String>) {
-        self.ticker_queue.push_back(msg.into());
+        let msg = msg.into();
+        if self.ticker_tape.is_empty() || self.ticker_offset > self.ticker_tape_chars + 300 {
+            // Tape is empty or all content has scrolled off-screen; start fresh.
+            self.ticker_tape = msg;
+            self.ticker_tape_chars = self.ticker_tape.chars().count();
+            self.ticker_offset = 0;
+            self.ticker_frame_counter = 0;
+        } else {
+            // Append with separator so it flows in after existing content.
+            self.ticker_tape.push_str("  ///  ");
+            self.ticker_tape.push_str(&msg);
+            self.ticker_tape_chars = self.ticker_tape.chars().count();
+        }
     }
 
-    /// Advance the ticker state by one frame (dispatch-ami).
-    /// Call once per render loop iteration (~16ms). Scrolls one character every 3 frames (~50ms).
+    /// Advance the ticker by one frame (~16ms). Scrolls one char every 3 frames (~50ms).
     pub fn tick_ticker(&mut self) {
-        self.ticker_frame_counter = self.ticker_frame_counter.wrapping_add(1);
-        let advance = self.ticker_frame_counter % 3 == 0;
-
-        if self.ticker_current.is_empty() {
-            // Load next message from queue if available.
-            if let Some(msg) = self.ticker_queue.pop_front() {
-                self.ticker_current = msg;
-                self.ticker_offset = 0;
-                self.ticker_frame_counter = 0;
-            }
+        if self.ticker_tape.is_empty() {
             return;
         }
-
-        if advance {
-            // Count display characters (not bytes) for offset tracking.
-            let char_len = self.ticker_current.chars().count();
+        self.ticker_frame_counter = self.ticker_frame_counter.wrapping_add(1);
+        if self.ticker_frame_counter % 3 == 0 {
             self.ticker_offset += 1;
-            // Message is fully scrolled off when offset > char_len + display_width.
-            // Use 200 as a conservative maximum terminal width estimate.
-            if self.ticker_offset > char_len + 200 {
-                self.ticker_current = String::new();
+            // Clear tape once everything has scrolled off-screen.
+            if self.ticker_offset > self.ticker_tape_chars + 300 {
+                self.ticker_tape.clear();
+                self.ticker_tape_chars = 0;
                 self.ticker_offset = 0;
-                // Load next message immediately if queued.
-                if let Some(msg) = self.ticker_queue.pop_front() {
-                    self.ticker_current = msg;
-                    self.ticker_frame_counter = 0;
-                }
             }
         }
     }
 
-    /// Build the visible ticker string for a display width (dispatch-ami).
-    /// The message scrolls right-to-left: starts fully off the right edge, moves left.
+    /// Build the visible ticker string for a given display width.
+    /// Content scrolls right-to-left: enters from the right edge, exits left.
+    /// Tape char at index i appears at screen position (width - offset + i).
     pub fn ticker_display(&self, width: usize) -> String {
-        if self.ticker_current.is_empty() {
+        if self.ticker_tape.is_empty() {
             return " ".repeat(width);
         }
-        let chars: Vec<char> = self.ticker_current.chars().collect();
-        // Total virtual width: display area + message length (message starts off right edge).
-        // offset 0 = message starts just off-screen to the right.
-        // offset N = message has moved N chars to the left.
-        let virtual_start = width as isize - self.ticker_offset as isize;
         let mut line = vec![' '; width];
-        for (i, &ch) in chars.iter().enumerate() {
-            let pos = virtual_start + i as isize;
-            if pos >= 0 && (pos as usize) < width {
+        // Skip chars already off-screen to the left.
+        let start = self.ticker_offset.saturating_sub(width);
+        for (idx, ch) in self.ticker_tape.chars().enumerate().skip(start) {
+            let pos = width as isize - self.ticker_offset as isize + idx as isize;
+            if pos >= width as isize {
+                break; // Rest is off-screen to the right.
+            }
+            if pos >= 0 {
                 line[pos as usize] = ch;
             }
         }
