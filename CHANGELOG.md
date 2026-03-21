@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## v0.3.6
+
+### Changed
+
+- Prompt system messages in the radio app are now collapsible. Dispatch and send-to-agent messages show a single line by default and expand on tap, reducing screen clutter on the phone.
+
 ## v0.3.5
 
 ### Changed

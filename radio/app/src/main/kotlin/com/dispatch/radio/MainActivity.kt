@@ -373,6 +373,13 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /** Check if a system message is a prompt/task message that should be collapsible. */
+    private fun isPromptMessage(sender: String, text: String): Boolean {
+        if (sender != "System") return false
+        return text.matches(Regex("^Dispatched .+ to slot \\d+: .+")) ||
+               text.matches(Regex("^\\[to .+\\] .+"))
+    }
+
     // dispatch-chat: add a message to the scrollable chat log
     private fun addChatMessage(sender: String, text: String) {
         // Trim old messages if over the cap
@@ -391,12 +398,30 @@ class MainActivity : AppCompatActivity() {
             else -> callsignColor(sender) // Distinct color per agent callsign
         }
 
+        val fullText = "$timestamp $displayName: $text"
+        val isPrompt = isPromptMessage(sender, text)
+
         val tv = TextView(this).apply {
-            this.text = "$timestamp $displayName: $text"
+            this.text = fullText
             textSize = 11f
             typeface = android.graphics.Typeface.MONOSPACE
             setTextColor(colorInt)
             setPadding(0, 2, 0, 2)
+
+            // Prompt system messages are collapsed by default to save screen space.
+            if (isPrompt) {
+                maxLines = 1
+                ellipsize = android.text.TextUtils.TruncateAt.END
+                setOnClickListener {
+                    if (maxLines == 1) {
+                        maxLines = Int.MAX_VALUE
+                        ellipsize = null
+                    } else {
+                        maxLines = 1
+                        ellipsize = android.text.TextUtils.TruncateAt.END
+                    }
+                }
+            }
         }
         llChat.addView(tv)
         chatMessageCount++
