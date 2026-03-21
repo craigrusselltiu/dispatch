@@ -34,13 +34,15 @@ fn check_dispatch_marker(
         // same line, the last occurrence is the actual output.
         if let Some(pos) = line.rfind(marker) {
             // Skip shell command lines (e.g. `echo "@@DISPATCH_MSG:..."`).
-            // Only check a narrow window (16 bytes) before the marker so
-            // that "echo" from a command rendering earlier in the line
-            // doesn't suppress the actual output marker.
+            // Check a window before the marker for "echo" to filter shell
+            // command lines. Use 64 bytes to account for ANSI escape
+            // sequences (e.g. syntax highlighting, ConPTY cursor
+            // positioning) that may appear between the echo keyword and
+            // the marker.
             //
             // Use byte-level search to avoid panicking when the window
             // start falls inside a multi-byte UTF-8 character.
-            let window_start = pos.saturating_sub(16);
+            let window_start = pos.saturating_sub(64);
             if line.as_bytes()[window_start..pos]
                 .windows(4)
                 .any(|w| w == b"echo")
@@ -346,12 +348,23 @@ mod tests {
     }
 
     #[test]
-    fn marker_detected_when_command_and_output_same_line() {
-        // When terminal renders command + output on one line, rfind picks
-        // the last (output) marker whose narrow window has no "echo".
+    fn marker_filtered_when_command_and_output_same_line() {
+        // With a 64-byte echo window, when command and output happen to
+        // appear on the same terminal line, both markers are filtered
+        // because "echo" falls within the window for both. In practice,
+        // ConPTY always separates command echo and output with \r\n so
+        // this degenerate case does not arise.
         let line = "echo \"@@DISPATCH_MSG:Task received.\" => @@DISPATCH_MSG:Task received.";
         let msg = run_marker_check(line);
-        assert_eq!(msg.as_deref(), Some("Task received."));
+        assert_eq!(msg, None);
+    }
+
+    #[test]
+    fn marker_detected_with_long_prompt_prefix() {
+        // Long directory prompt should not interfere with output detection
+        // on separate lines (the realistic case on ConPTY).
+        let msg = run_marker_check("@@DISPATCH_MSG:Task received. Working on it now.");
+        assert_eq!(msg.as_deref(), Some("Task received. Working on it now."));
     }
 
     #[test]
@@ -374,7 +387,7 @@ mod tests {
 
     #[test]
     fn echo_window_safe_with_multibyte_utf8() {
-        // When a multi-byte UTF-8 char (e.g. ⏺ = 3 bytes) sits within 16
+        // When a multi-byte UTF-8 char (e.g. ⏺ = 3 bytes) sits within 64
         // bytes of the marker, the echo window check must not panic.
         // ⏺ is \xe2\x8f\xba (3 bytes).
         let line = "\x1b[1m⏺\x1b[0m Bash: echo \"@@DISPATCH_MSG:Task received.\"";

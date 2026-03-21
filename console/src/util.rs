@@ -44,14 +44,19 @@ pub fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-/// Clean a dispatch message: strip ANSI escapes and non-printable chars,
-/// truncate at cursor-movement sequences (which indicate terminal noise
+/// Clean a dispatch message: strip ANSI escapes and control chars,
+/// handle cursor-movement sequences (which may indicate terminal noise
 /// like status bars rendered after the message), and trim shell artifacts
 /// like trailing `")` from echo output.
 pub fn clean_dispatch_msg(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars();
-    'outer: while let Some(c) = chars.next() {
+    // Track the first cursor-movement-after-punctuation position as a
+    // candidate truncation point. We defer the decision until the end so
+    // multi-sentence messages ("Task received. Working on it now.") are
+    // preserved while terminal noise ("Done.\x1b[10Cthinking...") is stripped.
+    let mut truncate_candidate: Option<usize> = None;
+    while let Some(c) = chars.next() {
         if c == '\x1b' {
             match chars.next() {
                 Some('[') => {
@@ -60,18 +65,22 @@ pub fn clean_dispatch_msg(s: &str) -> String {
                     loop {
                         match chars.next() {
                             Some(fb) if ('\x40'..='\x7e').contains(&fb) => {
-                                // Cursor movement after a complete sentence
-                                // means the terminal is positioning for
-                                // unrelated content (e.g. status bar text).
-                                // Only truncate when the content so far ends
-                                // with sentence-ending punctuation; mid-message
-                                // cursor repositioning (from TUI redraws) should
-                                // be skipped so the full message is preserved.
                                 if matches!(fb, 'A' | 'B' | 'C' | 'D' | 'H' | 'f')
                                     && !out.trim().is_empty()
-                                    && out.trim_end().ends_with(|c: char| c == '.' || c == '!' || c == '?')
                                 {
-                                    break 'outer;
+                                    // Record first cursor-movement after sentence
+                                    // punctuation as a potential truncation point.
+                                    if truncate_candidate.is_none()
+                                        && out.trim_end().ends_with(|c: char| c == '.' || c == '!' || c == '?')
+                                    {
+                                        truncate_candidate = Some(out.len());
+                                    }
+                                    // Insert space to preserve word boundaries —
+                                    // ConPTY uses cursor positioning instead of
+                                    // spaces within a line.
+                                    if !out.is_empty() && !out.ends_with(' ') {
+                                        out.push(' ');
+                                    }
                                 }
                                 break;
                             }
@@ -93,8 +102,21 @@ pub fn clean_dispatch_msg(s: &str) -> String {
                 Some(c2) if ('\x40'..='\x5f').contains(&c2) => {}
                 _ => {}
             }
-        } else if c.is_ascii_graphic() || c == ' ' {
+        } else if !c.is_control() {
+            // Collapse runs of whitespace to a single space.
+            if c == ' ' && out.ends_with(' ') {
+                continue;
+            }
             out.push(c);
+        }
+    }
+    // If we recorded a candidate truncation point, only truncate if the
+    // text after it contains no sentence-ending punctuation (terminal noise).
+    // Multi-sentence messages will have punctuation in both halves.
+    if let Some(trunc_pos) = truncate_candidate {
+        let tail = &out[trunc_pos..];
+        if !tail.contains('.') && !tail.contains('!') && !tail.contains('?') {
+            out.truncate(trunc_pos);
         }
     }
     // Truncate at closing ") from echo command — everything after is terminal noise.
@@ -265,6 +287,25 @@ mod tests {
         assert_eq!(
             clean_dispatch_msg("Working\x1b[10C on the fix."),
             "Working on the fix."
+        );
+    }
+
+    #[test]
+    fn clean_dispatch_msg_preserves_multi_sentence() {
+        // Cursor movement between sentences should not truncate when both
+        // halves contain sentence-ending punctuation.
+        assert_eq!(
+            clean_dispatch_msg("Task received.\x1b[1;30H Working on it now."),
+            "Task received. Working on it now."
+        );
+    }
+
+    #[test]
+    fn clean_dispatch_msg_preserves_long_multi_sentence() {
+        // Multi-sentence messages with cursor repositioning throughout.
+        assert_eq!(
+            clean_dispatch_msg("Done.\x1b[1;20H Fixed the bug.\x1b[1;40H Pushed to remote."),
+            "Done. Fixed the bug. Pushed to remote."
         );
     }
 }
