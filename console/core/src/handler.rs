@@ -91,7 +91,7 @@ impl ConsoleState {
                 slot,
                 callsign: Some(a.callsign.clone()),
                 tool: Some(a.tool.clone()),
-                status: if a.status == AgentStatus::Busy { "busy" } else { "idle" },
+                status: if a.status == AgentStatus::Busy { "working" } else { "idle" },
                 task: a.task.clone(),
                 repo: a.repo.clone(),
             },

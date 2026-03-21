@@ -12,6 +12,7 @@ Messages arrive with these prefixes:
 - `[AGENT_MSG] Alpha: Task received. Working on it now.` -- status message from an agent.
 - `[EVENT] TASK_COMPLETE agent=Alpha` -- an agent finished its work.
 - `[EVENT] AGENT_EXITED agent=Alpha slot=1` -- an agent process died.
+- `[EVENT] AGENT_IDLE agent=Alpha slot=1` -- an agent stopped producing output (likely finished working and is sitting at its prompt).
 
 ## Actions
 

@@ -130,6 +130,10 @@ Each agent runs in an isolated git worktree to prevent agents from stepping on e
 
 The agent's PTY is launched in the repo root. The agent creates its own worktree and works there.
 
+**Idle detection:**
+
+The console monitors each agent's PTY output to detect activity. When an agent with a task produces no output for 10 seconds, it transitions to "idle" state -- this typically means the agent finished its work and is sitting at a prompt. The orchestrator is notified via an `[EVENT] AGENT_IDLE` message on each working-to-idle transition. Activity status is reported in `list_agents` as "working" or "idle" and shown in the TUI pane info strip.
+
 **On completion:**
 
 The agent merges its own branch back to main, removes the worktree, deletes the branch, and pushes. If the merge has conflicts, the agent stops and returns to the prompt.
@@ -174,7 +178,7 @@ The console parses the `"action"` field to determine which tool to execute. Para
 | `dispatch` | `repo`, `prompt`, `callsign` (optional) | Dispatch an agent with a prompt. The agent creates its own worktree. Returns slot and callsign. |
 | `terminate` | `agent` | Kill an agent by callsign or slot number. Frees the slot. |
 | `merge` | `task_id` | Acknowledge that an agent has merged its branch. |
-| `list_agents` | _(none)_ | List all active agent slots with callsign, tool, busy/idle status, and repo. |
+| `list_agents` | _(none)_ | List all active agent slots with callsign, tool, working/idle status, and repo. |
 | `list_repos` | _(none)_ | List available repositories that agents can work in. |
 | `message_agent` | `agent`, `text` | Send text to an agent's terminal (PTY). Use for follow-up instructions or answering agent questions. |
 

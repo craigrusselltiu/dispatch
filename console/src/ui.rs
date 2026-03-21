@@ -203,12 +203,20 @@ fn pane_info_strip(global_idx: usize, local_idx: usize, app: &App) -> Text<'stat
             } else {
                 Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
             };
+            // Activity indicator: shows WORK or IDLE based on PTY output.
+            let (activity_label, activity_style) = if agent.task_id.is_some() && !agent.idle {
+                ("WORK", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
+            } else {
+                ("IDLE", Style::default().fg(Color::DarkGray))
+            };
             let line1 = Line::from(vec![
                 Span::styled(marker_str.to_string(), marker_style),
                 Span::styled(
                     format!("[{}] {}", slot_num, agent.display_name()),
                     name_style,
                 ),
+                Span::styled(" ", Style::default()),
+                Span::styled(activity_label, activity_style),
             ]);
             let task_span = match &agent.task_id {
                 Some(id) => Span::styled(id.clone(), Style::default().fg(Color::Yellow)),
