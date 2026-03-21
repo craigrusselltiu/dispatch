@@ -115,6 +115,46 @@
 
         </ScrollView>
 
+        <!-- Text input: alternative to voice -->
+        <LinearLayout
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:orientation="horizontal"
+            android:gravity="center_vertical"
+            android:layout_marginTop="4dp">
+
+            <EditText
+                android:id="@+id/et_chat_input"
+                android:layout_width="0dp"
+                android:layout_height="40dp"
+                android:layout_weight="1"
+                android:background="@drawable/input_background"
+                android:textColor="@color/white"
+                android:textColorHint="@color/dim_grey"
+                android:textSize="13sp"
+                android:fontFamily="monospace"
+                android:hint="Type a message..."
+                android:inputType="text"
+                android:imeOptions="actionSend"
+                android:singleLine="true"
+                android:paddingStart="8dp"
+                android:paddingEnd="8dp" />
+
+            <TextView
+                android:id="@+id/btn_send"
+                android:layout_width="40dp"
+                android:layout_height="40dp"
+                android:text="&#x25B6;"
+                android:textColor="@color/green"
+                android:background="@drawable/settings_button_bg"
+                android:textSize="16sp"
+                android:gravity="center"
+                android:clickable="true"
+                android:focusable="true"
+                android:layout_marginStart="4dp" />
+
+        </LinearLayout>
+
     </LinearLayout>
 
     <!-- Listening area: overlays on top during PTT / continuous listening -->

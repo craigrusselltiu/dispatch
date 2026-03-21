@@ -13,6 +13,8 @@ import android.util.Base64
 import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
+import android.view.inputmethod.EditorInfo
+import android.widget.EditText
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
@@ -69,6 +71,8 @@ class MainActivity : AppCompatActivity() {
     private lateinit var audioLevelView: AudioLevelView
     private lateinit var svChat: ScrollView
     private lateinit var llChat: LinearLayout
+    private lateinit var etChatInput: EditText
+    private lateinit var btnSend: TextView
 
     private val gson = Gson()
 
@@ -158,6 +162,15 @@ class MainActivity : AppCompatActivity() {
             showImageSourceDialog()
         }
 
+        // Text input: submit on send button click or keyboard action
+        btnSend.setOnClickListener { submitTextInput() }
+        etChatInput.setOnEditorActionListener { _, actionId, _ ->
+            if (actionId == EditorInfo.IME_ACTION_SEND) {
+                submitTextInput()
+                true
+            } else false
+        }
+
         // Register bridge so the AccessibilityService can forward volume keys
         // when the activity is backgrounded or the screen is off (dispatch-ct2.7)
         VolumeKeyBridge.onKeyEvent = { event ->
@@ -211,6 +224,8 @@ class MainActivity : AppCompatActivity() {
         audioLevelView = findViewById(R.id.audio_level_view)
         svChat = findViewById(R.id.sv_chat)
         llChat = findViewById(R.id.ll_chat)
+        etChatInput = findViewById(R.id.et_chat_input)
+        btnSend = findViewById(R.id.btn_send)
     }
 
     private fun applyScreenOnFlag() {
@@ -309,6 +324,14 @@ class MainActivity : AppCompatActivity() {
     private fun handleTranscript(transcript: String) {
         val msg = """{"type":"send","text":${gson.toJson(transcript)},"auto":true}"""
         wsClient?.send(msg)
+    }
+
+    /** Submit typed text through the same pipeline as voice transcripts. */
+    private fun submitTextInput() {
+        val text = etChatInput.text.toString().trim()
+        if (text.isEmpty()) return
+        etChatInput.text.clear()
+        handleTranscript(text)
     }
 
     private fun handleMessage(text: String) {
