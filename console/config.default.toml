@@ -12,7 +12,7 @@ scrollback_lines = 1000
 [agents]
 # Agent names, in slot order. The number of entries determines the slot count.
 # Pages are allocated automatically (4 slots per page).
-callsigns = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel"]
+callsigns = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel", "India", "Juliet", "Kilo", "Lima", "Mike", "November", "Oscar", "Papa", "Quebec", "Romeo", "Sierra", "Tango", "Uniform", "Victor", "Whiskey", "X-ray", "Yankee", "Zulu"]
 
 [identity]
 # Display name for the user (shown in chat log and used in prompts).

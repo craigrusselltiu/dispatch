@@ -58,11 +58,11 @@ The `.dispatch/` directory is gitignored by the console on first run.
 
 ## Agent Naming
 
-Agent names are defined in the `[agents]` section of `config.toml`. The list determines both the callsigns and the number of available slots. By default, the first 8 NATO phonetic alphabet names are used:
+Agent names are defined in the `[agents]` section of `config.toml`. The list determines both the callsigns and the number of available slots. By default, the full NATO phonetic alphabet is used:
 
 ```toml
 [agents]
-callsigns = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel"]
+callsigns = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel", "India", "Juliet", "Kilo", "Lima", "Mike", "November", "Oscar", "Papa", "Quebec", "Romeo", "Sierra", "Tango", "Uniform", "Victor", "Whiskey", "X-ray", "Yankee", "Zulu"]
 ```
 
 Users can customize this list with any names they prefer. The number of entries determines the slot count (4-26), and pages are allocated automatically (4 slots per page).
@@ -674,7 +674,7 @@ scrollback_lines = 1000
 [agents]
 # Agent names, in slot order. The number of entries determines the slot count.
 # Pages are allocated automatically (4 slots per page).
-callsigns = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel"]
+callsigns = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel", "India", "Juliet", "Kilo", "Lima", "Mike", "November", "Oscar", "Papa", "Quebec", "Romeo", "Sierra", "Tango", "Uniform", "Victor", "Whiskey", "X-ray", "Yankee", "Zulu"]
 
 [tools]
 claude-code = "claude"

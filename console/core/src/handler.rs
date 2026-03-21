@@ -332,7 +332,10 @@ mod tests {
     use super::*;
 
     fn default_callsigns() -> Vec<String> {
-        ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel"]
+        ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel",
+         "India", "Juliet", "Kilo", "Lima", "Mike", "November", "Oscar", "Papa",
+         "Quebec", "Romeo", "Sierra", "Tango", "Uniform", "Victor", "Whiskey",
+         "X-ray", "Yankee", "Zulu"]
             .iter().map(|s| s.to_string()).collect()
     }
 
