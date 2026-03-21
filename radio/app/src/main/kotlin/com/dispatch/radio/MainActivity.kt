@@ -3,9 +3,13 @@ package com.dispatch.radio
 import android.Manifest
 import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
+import android.app.AlertDialog
 import android.content.Intent
 import android.content.pm.PackageManager
+import android.net.Uri
 import android.os.Bundle
+import android.provider.MediaStore
+import android.util.Base64
 import android.view.KeyEvent
 import android.view.View
 import android.view.WindowManager
@@ -15,11 +19,13 @@ import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
+import androidx.core.content.FileProvider
 import com.dispatch.radio.model.Agent
 import com.dispatch.radio.model.callsignColor
 import com.dispatch.radio.ui.AudioLevelView
 import com.google.gson.Gson
 import com.google.gson.JsonObject
+import java.io.File
 
 /**
  * Single-activity entry point for Dispatch Radio (dispatch-88k.1).
@@ -66,9 +72,16 @@ class MainActivity : AppCompatActivity() {
 
     private val gson = Gson()
 
+    // Image sending state
+    private var pendingImageUri: Uri? = null
+    private var cameraImageFile: File? = null
+
     companion object {
         private const val SETTINGS_REQUEST = 1001
+        private const val IMAGE_PICK_REQUEST = 1002
+        private const val IMAGE_CAPTURE_REQUEST = 1003
         private const val MAX_CHAT_MESSAGES = 100
+        private const val MAX_IMAGE_BYTES = 5 * 1024 * 1024 // 5 MB
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -135,6 +148,10 @@ class MainActivity : AppCompatActivity() {
         findViewById<android.widget.TextView>(R.id.btn_settings).setOnClickListener {
             @Suppress("DEPRECATION")
             startActivityForResult(Intent(this, SettingsActivity::class.java), SETTINGS_REQUEST)
+        }
+
+        findViewById<android.widget.TextView>(R.id.btn_attach_image).setOnClickListener {
+            showImageSourceDialog()
         }
 
         // Register bridge so the AccessibilityService can forward volume keys
@@ -408,6 +425,17 @@ class MainActivity : AppCompatActivity() {
     @Suppress("DEPRECATION")
     override fun onActivityResult(requestCode: Int, resultCode: Int, data: Intent?) {
         super.onActivityResult(requestCode, resultCode, data)
+        if (requestCode == IMAGE_PICK_REQUEST && resultCode == RESULT_OK) {
+            data?.data?.let { uri -> onImageReady(uri) }
+            return
+        }
+        if (requestCode == IMAGE_CAPTURE_REQUEST && resultCode == RESULT_OK) {
+            cameraImageFile?.let { file ->
+                val uri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", file)
+                onImageReady(uri)
+            }
+            return
+        }
         if (requestCode == SETTINGS_REQUEST && resultCode == RESULT_OK) {
             // Reload settings and reconnect
             settings = RadioSettings(this)
@@ -447,6 +475,89 @@ class MainActivity : AppCompatActivity() {
             } catch (_: Exception) {
                 // Settings changed but reconnect failed — app stays running
             }
+        }
+    }
+
+    // ── Image sending ─────────────────────────────────────────────────────
+
+    /** Show dialog to pick image source: gallery or camera. */
+    private fun showImageSourceDialog() {
+        val options = arrayOf("Gallery", "Camera")
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
+            .setTitle("Send image")
+            .setItems(options) { _, which ->
+                when (which) {
+                    0 -> pickFromGallery()
+                    1 -> captureFromCamera()
+                }
+            }
+            .show()
+    }
+
+    @Suppress("DEPRECATION")
+    private fun pickFromGallery() {
+        val intent = Intent(Intent.ACTION_PICK, MediaStore.Images.Media.EXTERNAL_CONTENT_URI)
+        intent.type = "image/*"
+        startActivityForResult(intent, IMAGE_PICK_REQUEST)
+    }
+
+    @Suppress("DEPRECATION")
+    private fun captureFromCamera() {
+        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
+            != PackageManager.PERMISSION_GRANTED) {
+            ActivityCompat.requestPermissions(this, arrayOf(Manifest.permission.CAMERA), 101)
+            return
+        }
+        val imageFile = File(cacheDir, "dispatch_capture_${System.currentTimeMillis()}.jpg")
+        cameraImageFile = imageFile
+        val uri = FileProvider.getUriForFile(this, "${packageName}.fileprovider", imageFile)
+        val intent = Intent(MediaStore.ACTION_IMAGE_CAPTURE)
+        intent.putExtra(MediaStore.EXTRA_OUTPUT, uri)
+        startActivityForResult(intent, IMAGE_CAPTURE_REQUEST)
+    }
+
+    /** After image is selected/captured, show agent picker then send. */
+    private fun onImageReady(uri: Uri) {
+        val active = agents.filter { it.status != "empty" }
+        if (active.isEmpty()) {
+            addChatMessage("System", "No active agents to send image to.")
+            return
+        }
+
+        val names = active.map { it.callsign }.toTypedArray()
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
+            .setTitle("Send to agent")
+            .setItems(names) { _, which ->
+                val target = active[which]
+                sendImageToAgent(uri, target.callsign)
+            }
+            .show()
+    }
+
+    /** Read image bytes, base64 encode, and send over WebSocket. */
+    private fun sendImageToAgent(uri: Uri, callsign: String) {
+        try {
+            val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return
+            if (bytes.size > MAX_IMAGE_BYTES) {
+                addChatMessage("System", "Image too large (max 5 MB).")
+                return
+            }
+            val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+
+            // Derive filename from URI or use default
+            val filename = uri.lastPathSegment?.substringAfterLast('/')?.let {
+                if (it.contains('.')) it else "$it.jpg"
+            } ?: "image.jpg"
+
+            val msg = """{"type":"send_image","callsign":${gson.toJson(callsign)},"data":"$b64","filename":${gson.toJson(filename)}}"""
+            val sent = wsClient?.send(msg) ?: false
+            if (sent) {
+                addChatMessage(userCallsign, "[image -> $callsign] $filename")
+            } else {
+                addChatMessage("System", "Failed to send image (not connected).")
+            }
+        } catch (e: Exception) {
+            addChatMessage("System", "Failed to read image.")
         }
     }
 

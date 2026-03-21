@@ -22,6 +22,7 @@ mod ui;
 mod util;
 mod ws_server;
 
+use base64::Engine;
 use dispatch_core::{orchestrator, tools};
 
 use clap::{Parser, Subcommand};
@@ -338,6 +339,59 @@ fn main() -> io::Result<()> {
                 }
                 ws_server::WsEvent::InvalidPsk { addr } => {
                     app.push_ticker(format!("REJECTED: invalid PSK from {}", addr));
+                }
+                ws_server::WsEvent::ImageReceived { callsign, data, filename } => {
+                    // Save image to .dispatch/images/ in the repo root.
+                    let images_dir = format!("{}/.dispatch/images", app.default_repo_root());
+                    let _ = std::fs::create_dir_all(&images_dir);
+                    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+                    let image_path = format!("{}/{}_{}", images_dir, timestamp, filename);
+
+                    let decoded = base64::engine::general_purpose::STANDARD.decode(&data);
+                    if let Ok(bytes) = decoded {
+                        if std::fs::write(&image_path, &bytes).is_ok() {
+                            // Find agent by callsign and write the image path to its PTY.
+                            let slot_idx = app.slots.iter().enumerate().find_map(|(i, s)| {
+                                s.as_ref().and_then(|slot| {
+                                    if slot.display_name().eq_ignore_ascii_case(&callsign) {
+                                        Some(i)
+                                    } else {
+                                        None
+                                    }
+                                })
+                            });
+
+                            if let Some(idx) = slot_idx {
+                                if let Some(slot) = app.slots[idx].as_mut() {
+                                    let msg = format!(
+                                        "Dispatch sent you an image ({}). View it at: {}\r",
+                                        filename, image_path
+                                    );
+                                    let _ = slot.writer.write_all(msg.as_bytes());
+                                    let _ = slot.writer.flush();
+                                    *slot.last_output_at.lock().unwrap() = Instant::now();
+                                    slot.idle = false;
+                                }
+                                app.push_chat(
+                                    &app.user_callsign.clone(),
+                                    &format!("[image -> {}] {}", callsign, filename),
+                                );
+                                app.push_ticker(format!("IMAGE: sent to {}", callsign));
+
+                                // Notify orchestrator so it has visibility.
+                                if let Some(orch) = &mut app.orchestrator {
+                                    orch.send_message(&format!(
+                                        "[EVENT] IMAGE_SENT to={} file={}",
+                                        callsign, filename
+                                    ));
+                                }
+                            }
+                        } else {
+                            app.push_ticker(format!("IMAGE ERROR: failed to save {}", filename));
+                        }
+                    } else {
+                        app.push_ticker("IMAGE ERROR: invalid base64 data".to_string());
+                    }
                 }
             }
         }
