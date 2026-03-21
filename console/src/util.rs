@@ -112,8 +112,9 @@ pub fn clean_dispatch_msg(s: &str) -> String {
     out.trim().to_string()
 }
 
-/// Strip ```action ... ``` and <tool_call>...</tool_call> blocks from text,
-/// returning only the prose/reasoning portion for chat display (dispatch-chat).
+/// Strip ```action ... ```, <tool_call>...</tool_call>, and
+/// <tool_result>...</tool_result> blocks from text, returning only the
+/// prose/reasoning portion for chat display (dispatch-chat).
 pub fn strip_action_blocks(text: &str) -> String {
     let mut result = text.to_string();
     // Remove ```action ... ``` blocks
@@ -129,6 +130,14 @@ pub fn strip_action_blocks(text: &str) -> String {
     while let Some(start) = result.find("<tool_call>") {
         if let Some(end) = result.find("</tool_call>") {
             result.replace_range(start..end + "</tool_call>".len(), "");
+        } else {
+            break;
+        }
+    }
+    // Remove <tool_result>...</tool_result> blocks
+    while let Some(start) = result.find("<tool_result>") {
+        if let Some(end) = result.find("</tool_result>") {
+            result.replace_range(start..end + "</tool_result>".len(), "");
         } else {
             break;
         }
