@@ -342,7 +342,7 @@ impl App {
                 self.push_ticker(format!(
                     "DISPATCH: {} (slot {})", callsign, slot_idx + 1
                 ));
-                self.push_chat(&self.console_name, &format!("Dispatched agent {}.", callsign));
+                self.push_chat("System", &format!("Dispatched agent {} to slot {}.", callsign, slot_idx + 1));
 
                 // Sync ws_state.
                 {
@@ -386,7 +386,7 @@ impl App {
                     agent: callsign.clone(), slot: idx + 1,
                 });
                 self.push_ticker(format!("TERMINATED: {} (slot {})", callsign, idx + 1));
-                self.push_chat(&self.console_name, &format!("Terminated agent {}.", callsign));
+                self.push_chat("System", &format!("Terminated agent {} (slot {}).", callsign, idx + 1));
 
                 // Sync ws_state.
                 {
@@ -407,7 +407,7 @@ impl App {
             tools::ToolCall::Merge { task_id } => {
                 self.push_orch(OrchestratorEventKind::Merged { id: task_id.clone() });
                 self.push_ticker(format!("MERGED: {}", task_id));
-                self.push_chat(&self.console_name, &format!("{} merged.", task_id));
+                self.push_chat("System", &format!("{} merged.", task_id));
                 tools::ToolResult::Merged {
                     task_id: task_id.clone(),
                     success: true,
@@ -472,7 +472,7 @@ impl App {
                 *slot.last_output_at.lock().unwrap() = Instant::now();
                 slot.idle = false;
 
-                self.push_chat(&self.console_name, &format!("Message to {}: {}", agent_name, text));
+                self.push_chat("System", &format!("[to {}] {}", agent_name, text));
 
                 tools::ToolResult::MessageSent {
                     agent: agent_name,

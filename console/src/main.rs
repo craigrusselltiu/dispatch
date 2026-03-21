@@ -239,13 +239,14 @@ fn main() -> io::Result<()> {
                     }
                     if let Some(id) = task_id {
                         app.push_orch(OrchestratorEventKind::TaskComplete { id: id.clone(), agent: callsign.clone() });
-                        app.push_chat(&callsign, &format!("Task {} complete.", id));
+                        app.push_chat("System", &format!("{} completed task (slot {}).", callsign, i + 1));
                         // Notify orchestrator of completion so it can decide next steps.
                         if let Some(orch) = &mut app.orchestrator {
                             orch.send_message(&format!("[EVENT] TASK_COMPLETE agent={} task={}", callsign, id));
                         }
                         app.push_ticker(format!("TASK COMPLETE: {} closed {} — slot {} now standby", callsign, id, i + 1));
                     } else {
+                        app.push_chat("System", &format!("{} exited (slot {}).", callsign, i + 1));
                         app.push_ticker(format!("AGENT EXITED: {} (slot {}) — standby", callsign, i + 1));
                         if let Some(orch) = &mut app.orchestrator {
                             orch.send_message(&format!("[EVENT] AGENT_EXITED agent={} slot={}", callsign, i + 1));
@@ -273,6 +274,7 @@ fn main() -> io::Result<()> {
                         // Transition: working -> idle.
                         s.idle = true;
                         let callsign = s.display_name().to_string();
+                        app.push_chat("System", &format!("{} is now idle (slot {}).", callsign, i + 1));
                         if let Some(orch) = &mut app.orchestrator {
                             orch.send_message(&format!(
                                 "[EVENT] AGENT_IDLE agent={} slot={}",
@@ -310,6 +312,7 @@ fn main() -> io::Result<()> {
             if let Ok(orch) = orch_ready_rx.try_recv() {
                 app.orchestrator = Some(orch);
                 app.push_ticker("ORCHESTRATOR: online".to_string());
+                app.push_chat("System", "Orchestrator online.");
                 // Flush any voice messages that arrived before orchestrator was ready.
                 let pending: Vec<String> = app.pending_voice.drain(..).collect();
                 if let Some(orch) = &mut app.orchestrator {
@@ -408,6 +411,7 @@ fn main() -> io::Result<()> {
                 }
                 orchestrator::OrchestratorOutput::Exited => {
                     app.push_ticker("ORCHESTRATOR: process exited — manual mode only".to_string());
+                    app.push_chat("System", "Orchestrator exited.");
                     app.orchestrator = None;
                 }
             }
@@ -519,6 +523,7 @@ fn main() -> io::Result<()> {
                                         let callsign = app.slots[target_g].as_ref().map(|s| s.display_name().to_string()).unwrap_or_default();
                                         if !callsign.is_empty() {
                                             app.push_orch(OrchestratorEventKind::Terminated { agent: callsign.clone(), slot: target_g + 1 });
+                                            app.push_chat("System", &format!("Terminated agent {} (slot {}).", callsign, target_g + 1));
                                         }
                                         let task_id = pty::terminate_slot(&mut app.slots[target_g]);
                                         if task_id.is_some() {
@@ -573,6 +578,7 @@ fn main() -> io::Result<()> {
                                                     let name = slot.display_name().to_string();
                                                     app.push_orch(OrchestratorEventKind::Dispatched { agent: name.clone(), slot: g + 1, tool: "claude-code".to_string() });
                                                     app.push_ticker(format!("DISPATCH: {} launched in slot {} — repo {}", name, g + 1, util::repo_name_from_path(&selected_repo)));
+                                                    app.push_chat("System", &format!("Dispatched agent {} to slot {}.", name, g + 1));
                                                     app.slots[g] = Some(slot);
                                                     app.current_page = page;
                                                     app.target = local;
