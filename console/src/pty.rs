@@ -19,8 +19,8 @@ use crate::util;
 /// Usage: `echo "@@DISPATCH_MSG:your message here"`
 pub const DISPATCH_MSG_MARKER: &str = "@@DISPATCH_MSG:";
 
-/// Check a completed line buffer for a dispatch marker and send the message
-/// if it's new. Called only on true line endings (\n or \r\n), not on bare \r.
+/// Check a line buffer for a dispatch marker and send the message if it's new.
+/// Called on line endings (\n, \r\n, \r\r) and on bare \r (before redraw discard).
 fn check_dispatch_marker(
     line_buf: &[u8],
     marker: &str,
@@ -34,11 +34,17 @@ fn check_dispatch_marker(
         // same line, the last occurrence is the actual output.
         if let Some(pos) = line.rfind(marker) {
             // Skip shell command lines (e.g. `echo "@@DISPATCH_MSG:..."`).
-            // Only check a narrow window (16 chars) before the marker so
+            // Only check a narrow window (16 bytes) before the marker so
             // that "echo" from a command rendering earlier in the line
             // doesn't suppress the actual output marker.
+            //
+            // Use byte-level search to avoid panicking when the window
+            // start falls inside a multi-byte UTF-8 character.
             let window_start = pos.saturating_sub(16);
-            if line[window_start..pos].contains("echo") {
+            if line.as_bytes()[window_start..pos]
+                .windows(4)
+                .any(|w| w == b"echo")
+            {
                 return;
             }
             let msg = util::clean_dispatch_msg(&line[pos + marker.len()..]);
@@ -165,7 +171,11 @@ pub fn dispatch_slot(
                                 continue;
                             }
                             // Bare \r followed by content — terminal redraw.
-                            // Discard the partial line so it doesn't emit a message.
+                            // Still check for markers before discarding: TUI
+                            // renderers (Ink/ConPTY) may write the marker then
+                            // reposition the cursor with \r in the same pass.
+                            // Dedup (last_msg) prevents duplicate emissions.
+                            check_dispatch_marker(&line_buf, DISPATCH_MSG_MARKER, &mut last_msg, &agent_msg_tx, global_idx);
                             line_buf.clear();
                             // Fall through to handle the current byte.
                         }
@@ -320,6 +330,108 @@ mod tests {
         // Only one message should be sent.
         assert!(rx.try_recv().is_ok());
         assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn echo_window_safe_with_multibyte_utf8() {
+        // When a multi-byte UTF-8 char (e.g. ⏺ = 3 bytes) sits within 16
+        // bytes of the marker, the echo window check must not panic.
+        // ⏺ is \xe2\x8f\xba (3 bytes).
+        let line = "\x1b[1m⏺\x1b[0m Bash: echo \"@@DISPATCH_MSG:Task received.\"";
+        // This is a command line — should be filtered (contains echo in window).
+        let msg = run_marker_check(line);
+        assert_eq!(msg, None);
+    }
+
+    #[test]
+    fn echo_window_safe_with_wide_unicode_prefix() {
+        // Multiple multi-byte chars before the marker.
+        let line = "──── @@DISPATCH_MSG:Task complete.";
+        let msg = run_marker_check(line);
+        assert_eq!(msg.as_deref(), Some("Task complete."));
+    }
+
+    /// Simulate the full byte processing loop to test bare-\r marker recovery.
+    fn simulate_pty_bytes(input: &[u8]) -> Vec<String> {
+        let (tx, rx) = mpsc::channel();
+        let mut line_buf: Vec<u8> = Vec::with_capacity(512);
+        let mut last_msg = String::new();
+        let mut cr_pending = false;
+        for &byte in input {
+            if cr_pending {
+                cr_pending = false;
+                if byte == b'\n' {
+                    check_dispatch_marker(&line_buf, DISPATCH_MSG_MARKER, &mut last_msg, &tx, 0);
+                    line_buf.clear();
+                    continue;
+                }
+                if byte == b'\r' {
+                    check_dispatch_marker(&line_buf, DISPATCH_MSG_MARKER, &mut last_msg, &tx, 0);
+                    line_buf.clear();
+                    cr_pending = true;
+                    continue;
+                }
+                check_dispatch_marker(&line_buf, DISPATCH_MSG_MARKER, &mut last_msg, &tx, 0);
+                line_buf.clear();
+            }
+            if byte == b'\r' {
+                cr_pending = true;
+            } else if byte == b'\n' {
+                check_dispatch_marker(&line_buf, DISPATCH_MSG_MARKER, &mut last_msg, &tx, 0);
+                line_buf.clear();
+            } else {
+                line_buf.push(byte);
+                if line_buf.len() > 4096 {
+                    line_buf.clear();
+                }
+            }
+        }
+        let mut msgs = Vec::new();
+        while let Ok((_, msg)) = rx.try_recv() {
+            msgs.push(msg);
+        }
+        msgs
+    }
+
+    #[test]
+    fn bare_cr_does_not_lose_marker() {
+        // ConPTY / TUI redraw: marker text followed by bare \r then new content.
+        // Before the fix, the bare \r discarded the buffer and the marker was lost.
+        let input = b"@@DISPATCH_MSG:Task received.\rMore content\r\n";
+        let msgs = simulate_pty_bytes(input);
+        assert_eq!(msgs, vec!["Task received."]);
+    }
+
+    #[test]
+    fn marker_via_normal_crlf_still_works() {
+        let input = b"@@DISPATCH_MSG:Task received.\r\n";
+        let msgs = simulate_pty_bytes(input);
+        assert_eq!(msgs, vec!["Task received."]);
+    }
+
+    #[test]
+    fn marker_via_double_cr_lf_still_works() {
+        // Windows \r\r\n line ending.
+        let input = b"@@DISPATCH_MSG:Task received.\r\r\n";
+        let msgs = simulate_pty_bytes(input);
+        assert_eq!(msgs, vec!["Task received."]);
+    }
+
+    #[test]
+    fn bare_cr_dedup_prevents_double_emit() {
+        // Marker on a line that ends with \r then gets redrawn with the same
+        // marker. The bare-\r check emits the first, dedup prevents the second.
+        let input = b"@@DISPATCH_MSG:Task received.\r@@DISPATCH_MSG:Task received.\r\n";
+        let msgs = simulate_pty_bytes(input);
+        assert_eq!(msgs, vec!["Task received."]);
+    }
+
+    #[test]
+    fn echo_command_filtered_in_byte_stream() {
+        // The echo command line should be filtered, output line detected.
+        let input = b"echo \"@@DISPATCH_MSG:Task received.\"\r\n@@DISPATCH_MSG:Task received.\r\n";
+        let msgs = simulate_pty_bytes(input);
+        assert_eq!(msgs, vec!["Task received."]);
     }
 }
 
