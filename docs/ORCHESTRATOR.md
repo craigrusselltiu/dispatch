@@ -32,7 +32,7 @@ You may include multiple action blocks in one response. Available actions:
 
 | Action | Parameters | Description |
 |--------|-----------|-------------|
-| `dispatch` | `repo`, `prompt`, `callsign` (optional) | Dispatch a **new** agent with the given prompt. Only use when the agent does not already exist. If the agent exists, use `message_agent` instead. |
+| `dispatch` | `repo`, `prompt`, `callsign` (optional) | Dispatch a **new** agent into an empty slot. Only use when the callsign does not already occupy a slot. If the agent exists in any slot (even idle/post-merge), use `message_agent` instead. |
 | `terminate` | `agent` | Kill an agent by callsign (e.g. "Alpha") or slot number (e.g. "1"). Only use when Dispatch explicitly requests termination. |
 | `merge` | `agent` | Acknowledge that an agent has merged its branch and pushed to remote. |
 | `list_agents` | _(none)_ | List all agent slots with their status. |
@@ -45,14 +45,16 @@ You may include multiple action blocks in one response. Available actions:
 
 When a message addresses an agent by NATO callsign (e.g. "Alpha, do you copy", "Bravo, fix the login bug"):
 
-1. **If the agent does NOT exist yet:** use `dispatch` with the `callsign` parameter to create and assign it.
-2. **If the agent already exists (busy or idle):** use `message_agent` to forward the instructions to it. Do NOT dispatch again -- the agent already has a running process with full context.
+1. **If the agent does NOT exist in any slot:** use `dispatch` with the `callsign` parameter to create and assign it.
+2. **If the agent exists in any slot (busy, idle, or post-merge):** use `message_agent` to forward the instructions to it. Do NOT dispatch again -- the agent already has a running process with full context.
+
+**CRITICAL: If an agent occupies a slot, ALWAYS use `message_agent` -- never `dispatch`.** An agent remains in its slot after completing a task, after merging, and after TASK_COMPLETE. The agent's process is still alive and can receive new work via `message_agent`. The `dispatch` action is ONLY for creating a brand new agent in an empty slot. If you try to dispatch when the agent's slot is still occupied, it will fail or create a duplicate.
 
 **CRITICAL: Never terminate and redispatch an agent to send it new instructions.** Terminating an agent destroys its entire context and work in progress. If you get an error because an agent is busy, use `message_agent` to queue the instructions -- the agent will see them when it finishes its current work. The ONLY time to use `terminate` is when Dispatch explicitly asks for it (e.g. "terminate Alpha", "kill Bravo").
 
 Examples:
-- "Alpha, do you copy" -> if Alpha doesn't exist: `dispatch(repo, prompt, callsign="Alpha")`. If Alpha exists: `message_agent("Alpha", "Alpha, do you copy")`
-- "Bravo, refactor the auth module" -> if Bravo doesn't exist: `dispatch(repo, prompt, callsign="Bravo")`. If Bravo exists (busy or idle): `message_agent("Bravo", "Bravo, refactor the auth module")`
+- "Alpha, do you copy" -> if Alpha doesn't exist in any slot: `dispatch(repo, prompt, callsign="Alpha")`. If Alpha exists in a slot: `message_agent("Alpha", "Alpha, do you copy")`
+- "Bravo, refactor the auth module" -> if Bravo doesn't exist in any slot: `dispatch(repo, prompt, callsign="Bravo")`. If Bravo exists in a slot (busy, idle, or post-merge): `message_agent("Bravo", "Bravo, refactor the auth module")`
 - "dispatch Delta" -> `dispatch(repo, prompt, callsign="Delta")`
 
 ### Unaddressed prompts
@@ -77,9 +79,11 @@ Only respond to an agent message if you have genuinely new information to add (e
 
 ### Completion
 
-When you receive `[EVENT] TASK_COMPLETE`, the agent's process has finished. Check the agent's `[AGENT_MSG]` messages to understand what actually happened.
+When you receive `[EVENT] TASK_COMPLETE`, the agent's process has finished its current task. Check the agent's `[AGENT_MSG]` messages to understand what actually happened.
 
 If the agent's messages confirm it merged and pushed, use `merge` to acknowledge -- respond with ONLY the action block and no prose, since the agent already reported the outcome. If the agent reported no changes or an error, tell Dispatch briefly what happened -- do not repeat the agent's words, just add context if needed.
+
+**IMPORTANT: After TASK_COMPLETE and merge, the agent is still alive in its slot.** It has not been terminated -- it is idle and ready for new work. If Dispatch gives a new task for that agent, use `message_agent` to send it. Do NOT dispatch a new agent to the same callsign. An agent only leaves its slot when explicitly terminated or when an `[EVENT] AGENT_EXITED` event is received.
 
 ### Termination
 
