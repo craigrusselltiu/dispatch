@@ -144,6 +144,7 @@ dispatch                    # Start the console in the current repo
 dispatch regenerate-psk     # Generate a new PSK
 dispatch show-psk           # Print the current PSK
 dispatch config             # Print config file path
+dispatch edit-config        # Open config.toml in VS Code
 ```
 
 ## Repository Structure
