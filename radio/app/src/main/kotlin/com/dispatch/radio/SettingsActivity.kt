@@ -25,7 +25,7 @@ import androidx.core.content.ContextCompat
  * - Haptic feedback toggle (default on)
  * - Confirm before send toggle (default off)
  * - Keep screen on toggle (default on)
- * - Speech recognition locale (default en-AU)
+ * - Speech recognition locale (default en-US)
  */
 class SettingsActivity : AppCompatActivity() {
 
@@ -186,7 +186,7 @@ class SettingsActivity : AppCompatActivity() {
         settings.consoleHost = etHost.text.toString().trim().ifEmpty { "192.168.1.1" }
         settings.consolePort = etPort.text.toString().trim().toIntOrNull() ?: 9800
         settings.psk = etPsk.text.toString().trim()
-        settings.speechLocale = etLocale.text.toString().trim().ifEmpty { "en-AU" }
+        settings.speechLocale = etLocale.text.toString().trim().ifEmpty { "en-US" }
         settings.hapticEnabled = cbHaptic.isChecked
         settings.confirmBeforeSend = cbConfirm.isChecked
         settings.keepScreenOn = cbScreenOn.isChecked

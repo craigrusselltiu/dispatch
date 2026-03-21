@@ -752,7 +752,7 @@ Minimal, high-contrast, dark theme. Uppercase labels, monospaced accents.
 - **Haptic feedback**: toggle (default on).
 - **Confirm before send**: toggle (default off).
 - **Keep screen on**: toggle (default on).
-- **Language**: speech recognition locale (default `en-AU`).
+- **Language**: speech recognition locale (default `en-US`).
 - **Continuous listening**: toggle (default off). When enabled, Volume Down toggles continuous listening on/off instead of push-to-talk. Uses SpeechRecognizer's built-in silence detection as VAD.
 - **Background volume keys**: opens Android Accessibility Settings to enable `VolumeKeyAccessibilityService`. Shows ENABLED/DISABLED status.
 

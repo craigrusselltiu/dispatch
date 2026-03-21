@@ -21,7 +21,7 @@ import android.speech.SpeechRecognizer
  */
 class ContinuousListenManager(
     private val context: Context,
-    private val locale: String = "en-AU",
+    private val locale: String = "en-US",
     val onListeningStart: () -> Unit,
     val onPartialResult: (String) -> Unit,
     val onFinalResult: (String) -> Unit,

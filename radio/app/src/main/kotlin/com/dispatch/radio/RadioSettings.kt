@@ -61,6 +61,6 @@ class RadioSettings(context: Context) {
         private const val KEY_CERT_FP = "cert_fingerprint"
         private const val DEFAULT_HOST = "192.168.1.1"
         private const val DEFAULT_PORT = 9800
-        private const val DEFAULT_LOCALE = "en-AU"
+        private const val DEFAULT_LOCALE = "en-US"
     }
 }
