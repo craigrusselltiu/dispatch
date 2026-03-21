@@ -410,7 +410,7 @@ class MainActivity : AppCompatActivity() {
         val tv = TextView(this).apply {
             this.text = fullText
             textSize = 11f
-            typeface = androidx.core.content.res.ResourcesCompat.getFont(this@MainActivity, R.font.share_tech_mono)
+            typeface = android.graphics.Typeface.MONOSPACE
             setTextColor(colorInt)
             setPadding(0, 2, 0, 2)
 

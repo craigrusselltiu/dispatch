@@ -94,7 +94,7 @@
                 android:text="DISCONNECTED"
                 android:textColor="@color/red"
                 android:textSize="12sp"
-                android:fontFamily="@font/share_tech_mono" />
+                android:fontFamily="monospace" />
 
         </LinearLayout>
 
