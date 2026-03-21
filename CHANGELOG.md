@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## v0.3.3
+
+### Added
+
+- Image sending from radio to agents: the phone app can now send images (from gallery or camera) targeted at a specific agent by callsign. The console saves images to `.dispatch/images/` and writes the file path to the agent's PTY so the agent can view it. New `send_image` WebSocket message type, image attach button in the radio UI, and agent picker dialog for targeting.
+
 ## v0.3.2
 
 ### Added

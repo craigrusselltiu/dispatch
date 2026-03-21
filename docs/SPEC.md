@@ -355,6 +355,15 @@ Sent to the current target.
 -> { "type": "radio_status", "state": "idle" }
 ```
 
+**Send image to agent**
+
+```
+-> { "type": "send_image", "callsign": "Alpha", "data": "<base64>", "filename": "screenshot.png" }
+<- { "type": "ack", "slot": 0, "callsign": "Alpha", "task": "image_received" }
+```
+
+Sends a base64-encoded image targeted at a specific agent by callsign. The console saves the image to `.dispatch/images/` in the repo root and writes the file path to the agent's PTY so it can view the image. The radio app provides gallery and camera capture as image sources.
+
 **Chat (server push)**
 
 ```

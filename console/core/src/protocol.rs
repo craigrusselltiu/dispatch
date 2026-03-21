@@ -36,6 +36,10 @@ pub struct RawInbound {
     pub callsign: Option<String>,
     /// Used by: radio_status — "listening" | "idle".
     pub state: Option<String>,
+    /// Used by: send_image — base64-encoded image data.
+    pub data: Option<String>,
+    /// Used by: send_image — original filename (e.g. "screenshot.png").
+    pub filename: Option<String>,
 }
 
 // --- Outbound messages (console → radio) ---

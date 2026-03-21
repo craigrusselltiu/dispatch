@@ -17,6 +17,8 @@ pub enum WsEvent {
     VoiceTranscript { text: String },
     /// A client connected with an invalid PSK.
     InvalidPsk { addr: String },
+    /// Image sent from radio, targeted at a specific agent by callsign.
+    ImageReceived { callsign: String, data: String, filename: String },
 }
 
 // --- Agent state ---------------------------------------------------------
@@ -339,6 +341,49 @@ pub fn handle_message(raw: RawInbound, state: &SharedState) -> Option<OutboundMs
             }
         }
 
+        "send_image" => {
+            let callsign = raw.callsign.as_deref().unwrap_or("").to_string();
+            let data = match raw.data {
+                Some(d) => d,
+                None => return Some(OutboundMsg::Error {
+                    message: "send_image requires data field".to_string(),
+                    seq,
+                }),
+            };
+            let filename = raw.filename.as_deref().unwrap_or("image.png").to_string();
+
+            if callsign.is_empty() {
+                return Some(OutboundMsg::Error {
+                    message: "send_image requires a callsign".to_string(),
+                    seq,
+                });
+            }
+
+            let st = state.lock().unwrap();
+            if st.find_slot_by_callsign(&callsign).is_none() {
+                return Some(OutboundMsg::Error {
+                    message: format!("agent '{}' not found", callsign),
+                    seq,
+                });
+            }
+
+            if let Some(tx) = &st.event_tx {
+                let _ = tx.send(WsEvent::ImageReceived {
+                    callsign: callsign.clone(),
+                    data,
+                    filename,
+                });
+            }
+
+            Some(OutboundMsg::Ack {
+                slot: 0,
+                callsign,
+                task: "image_received".to_string(),
+                auto_dispatched: None,
+                seq,
+            })
+        }
+
         "radio_status" => {
             // Consumed for state tracking; no response needed.
             let _state_str = raw.state.as_deref().unwrap_or("idle");
@@ -380,6 +425,8 @@ mod tests {
             tool: None,
             callsign: None,
             state: None,
+            data: None,
+            filename: None,
         }
     }
 
@@ -525,6 +572,62 @@ mod tests {
         msg.state = Some("listening".to_string());
         let resp = handle_message(msg, &state);
         assert!(resp.is_none());
+    }
+
+    #[test]
+    fn send_image_routes_to_agent() {
+        let state = make_state();
+        let (tx, rx) = std::sync::mpsc::channel();
+        state.lock().unwrap().event_tx = Some(tx);
+
+        // Dispatch an agent first
+        let mut d = raw("dispatch");
+        d.tool = Some("claude-code".to_string());
+        handle_message(d, &state);
+
+        // Send image to Alpha
+        let mut msg = raw("send_image");
+        msg.callsign = Some("Alpha".to_string());
+        msg.data = Some("aGVsbG8=".to_string()); // base64 "hello"
+        msg.filename = Some("test.png".to_string());
+        let resp = handle_message(msg, &state).unwrap();
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"type\":\"ack\""));
+        assert!(json.contains("\"callsign\":\"Alpha\""));
+        assert!(json.contains("\"task\":\"image_received\""));
+
+        // Verify event was sent
+        match rx.try_recv().unwrap() {
+            WsEvent::ImageReceived { callsign, data, filename } => {
+                assert_eq!(callsign, "Alpha");
+                assert_eq!(data, "aGVsbG8=");
+                assert_eq!(filename, "test.png");
+            }
+            other => panic!("unexpected event: {:?}", other),
+        }
+    }
+
+    #[test]
+    fn send_image_error_no_agent() {
+        let state = make_state();
+        let mut msg = raw("send_image");
+        msg.callsign = Some("Alpha".to_string());
+        msg.data = Some("aGVsbG8=".to_string());
+        let resp = handle_message(msg, &state).unwrap();
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"type\":\"error\""));
+        assert!(json.contains("not found"));
+    }
+
+    #[test]
+    fn send_image_error_no_callsign() {
+        let state = make_state();
+        let mut msg = raw("send_image");
+        msg.data = Some("aGVsbG8=".to_string());
+        let resp = handle_message(msg, &state).unwrap();
+        let json = serde_json::to_string(&resp).unwrap();
+        assert!(json.contains("\"type\":\"error\""));
+        assert!(json.contains("requires a callsign"));
     }
 
     #[test]
