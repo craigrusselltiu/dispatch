@@ -1,13 +1,9 @@
 package com.dispatch.radio
 
 import android.Manifest
-import android.accessibilityservice.AccessibilityServiceInfo
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Bundle
-import android.provider.Settings
-import android.view.WindowManager
-import android.view.accessibility.AccessibilityManager
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
@@ -23,7 +19,6 @@ import androidx.core.content.ContextCompat
  * - Console IP + port
  * - Pre-shared key (manual entry or QR scan)
  * - Haptic feedback toggle (default on)
- * - Confirm before send toggle (default off)
  * - Keep screen on toggle (default on)
  * - Speech recognition locale (default en-US)
  */
@@ -37,15 +32,13 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var etPsk: EditText
     private lateinit var etLocale: EditText
     private lateinit var cbHaptic: CheckBox
-    private lateinit var cbConfirm: CheckBox
     private lateinit var cbScreenOn: CheckBox
     private lateinit var cbContinuous: CheckBox
     private lateinit var btnSave: Button
+    private lateinit var btnReset: Button
     private lateinit var btnScanQr: Button
     private lateinit var btnDiscover: Button
     private lateinit var tvDiscoverStatus: TextView
-    private lateinit var btnAccessibility: Button
-    private lateinit var tvAccessibilityStatus: TextView
 
     private val qrScanLauncher = registerForActivityResult(
         ActivityResultContracts.StartActivityForResult()
@@ -81,44 +74,20 @@ class SettingsActivity : AppCompatActivity() {
         etPsk = findViewById(R.id.et_psk)
         etLocale = findViewById(R.id.et_locale)
         cbHaptic = findViewById(R.id.cb_haptic)
-        cbConfirm = findViewById(R.id.cb_confirm)
         cbScreenOn = findViewById(R.id.cb_screen_on)
         cbContinuous = findViewById(R.id.cb_continuous)
         btnSave = findViewById(R.id.btn_save)
+        btnReset = findViewById(R.id.btn_reset)
         btnScanQr = findViewById(R.id.btn_scan_qr)
         btnDiscover = findViewById(R.id.btn_discover)
         tvDiscoverStatus = findViewById(R.id.tv_discover_status)
-        btnAccessibility = findViewById(R.id.btn_accessibility)
-        tvAccessibilityStatus = findViewById(R.id.tv_accessibility_status)
 
         loadSettings()
-        refreshAccessibilityStatus()
 
         btnSave.setOnClickListener { saveSettings() }
+        btnReset.setOnClickListener { resetToDefaults() }
         btnScanQr.setOnClickListener { onScanQrClicked() }
         btnDiscover.setOnClickListener { onDiscoverClicked() }
-        btnAccessibility.setOnClickListener {
-            startActivity(Intent(Settings.ACTION_ACCESSIBILITY_SETTINGS))
-        }
-    }
-
-    override fun onResume() {
-        super.onResume()
-        refreshAccessibilityStatus()
-    }
-
-    private fun isAccessibilityServiceEnabled(): Boolean {
-        val am = getSystemService(ACCESSIBILITY_SERVICE) as AccessibilityManager
-        return am.getEnabledAccessibilityServiceList(AccessibilityServiceInfo.FEEDBACK_GENERIC)
-            .any { it.resolveInfo.serviceInfo.name == VolumeKeyAccessibilityService::class.java.name }
-    }
-
-    private fun refreshAccessibilityStatus() {
-        val enabled = isAccessibilityServiceEnabled()
-        tvAccessibilityStatus.text = if (enabled) "ENABLED" else "DISABLED"
-        tvAccessibilityStatus.setTextColor(
-            getColor(if (enabled) R.color.green else R.color.dim_grey)
-        )
     }
 
     private fun onDiscoverClicked() {
@@ -168,9 +137,13 @@ class SettingsActivity : AppCompatActivity() {
         etPsk.setText(settings.psk)
         etLocale.setText(settings.speechLocale)
         cbHaptic.isChecked = settings.hapticEnabled
-        cbConfirm.isChecked = settings.confirmBeforeSend
         cbScreenOn.isChecked = settings.keepScreenOn
         cbContinuous.isChecked = settings.continuousListening
+    }
+
+    private fun resetToDefaults() {
+        settings.resetToDefaults()
+        loadSettings()
     }
 
     override fun onDestroy() {
@@ -188,7 +161,6 @@ class SettingsActivity : AppCompatActivity() {
         settings.psk = etPsk.text.toString().trim()
         settings.speechLocale = etLocale.text.toString().trim().ifEmpty { "en-US" }
         settings.hapticEnabled = cbHaptic.isChecked
-        settings.confirmBeforeSend = cbConfirm.isChecked
         settings.keepScreenOn = cbScreenOn.isChecked
         settings.continuousListening = cbContinuous.isChecked
 

@@ -27,10 +27,6 @@ class RadioSettings(context: Context) {
         get() = prefs.getBoolean(KEY_HAPTIC, true)
         set(value) = prefs.edit().putBoolean(KEY_HAPTIC, value).apply()
 
-    var confirmBeforeSend: Boolean
-        get() = prefs.getBoolean(KEY_CONFIRM, false)
-        set(value) = prefs.edit().putBoolean(KEY_CONFIRM, value).apply()
-
     var keepScreenOn: Boolean
         get() = prefs.getBoolean(KEY_SCREEN_ON, true)
         set(value) = prefs.edit().putBoolean(KEY_SCREEN_ON, value).apply()
@@ -43,6 +39,11 @@ class RadioSettings(context: Context) {
         get() = prefs.getBoolean(KEY_CONTINUOUS, false)
         set(value) = prefs.edit().putBoolean(KEY_CONTINUOUS, value).apply()
 
+    /** Clears all preferences and restores defaults. */
+    fun resetToDefaults() {
+        prefs.edit().clear().apply()
+    }
+
     /** TLS certificate fingerprint (SHA-256 hex). Set via QR scan. */
     var certFingerprint: String?
         get() = prefs.getString(KEY_CERT_FP, null)
@@ -54,7 +55,6 @@ class RadioSettings(context: Context) {
         private const val KEY_PORT = "console_port"
         private const val KEY_PSK = "psk"
         private const val KEY_HAPTIC = "haptic_enabled"
-        private const val KEY_CONFIRM = "confirm_before_send"
         private const val KEY_SCREEN_ON = "keep_screen_on"
         private const val KEY_LOCALE = "speech_locale"
         private const val KEY_CONTINUOUS = "continuous_listening"

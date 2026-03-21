@@ -166,16 +166,6 @@
             android:layout_marginBottom="12dp" />
 
         <CheckBox
-            android:id="@+id/cb_confirm"
-            android:layout_width="match_parent"
-            android:layout_height="wrap_content"
-            android:text="CONFIRM BEFORE SEND"
-            android:textColor="@color/white"
-            android:fontFamily="monospace"
-            android:buttonTint="@color/white"
-            android:layout_marginBottom="12dp" />
-
-        <CheckBox
             android:id="@+id/cb_screen_on"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
@@ -195,36 +185,16 @@
             android:buttonTint="@color/white"
             android:layout_marginBottom="24dp" />
 
-        <!-- Accessibility Service -->
-        <TextView
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text="BACKGROUND VOLUME KEYS"
-            android:textColor="@color/dim_grey"
-            android:textSize="11sp"
-            android:fontFamily="monospace"
-            android:layout_marginBottom="4dp" />
-
         <Button
-            android:id="@+id/btn_accessibility"
+            android:id="@+id/btn_reset"
             android:layout_width="match_parent"
             android:layout_height="wrap_content"
-            android:text="ENABLE ACCESSIBILITY SERVICE"
-            android:textColor="@color/background"
+            android:text="RESET TO DEFAULTS"
+            android:textColor="@color/white"
             android:backgroundTint="@color/dim_grey"
             android:fontFamily="monospace"
             android:textSize="12sp"
-            android:layout_marginBottom="4dp" />
-
-        <TextView
-            android:id="@+id/tv_accessibility_status"
-            android:layout_width="wrap_content"
-            android:layout_height="wrap_content"
-            android:text=""
-            android:textColor="@color/dim_grey"
-            android:textSize="11sp"
-            android:fontFamily="monospace"
-            android:layout_marginBottom="32dp" />
+            android:layout_marginBottom="12dp" />
 
         <Button
             android:id="@+id/btn_save"
