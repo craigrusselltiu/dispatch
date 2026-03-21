@@ -44,31 +44,33 @@ pub fn truncate(s: &str, max: usize) -> String {
     }
 }
 
-/// Clean a dispatch message: convert cursor-forward sequences to spaces,
-/// strip remaining ANSI escapes and non-printable chars, then trim shell
-/// artifacts like trailing `")` from echo output.
+/// Clean a dispatch message: strip ANSI escapes and non-printable chars,
+/// truncate at cursor-movement sequences (which indicate terminal noise
+/// like status bars rendered after the message), and trim shell artifacts
+/// like trailing `")` from echo output.
 pub fn clean_dispatch_msg(s: &str) -> String {
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars();
-    while let Some(c) = chars.next() {
+    'outer: while let Some(c) = chars.next() {
         if c == '\x1b' {
             match chars.next() {
                 Some('[') => {
                     // CSI sequence: collect params, then check final byte.
-                    let mut param = String::new();
+                    let mut _param = String::new();
                     loop {
                         match chars.next() {
                             Some(fb) if ('\x40'..='\x7e').contains(&fb) => {
-                                if fb == 'C' {
-                                    // Cursor forward -> insert space(s).
-                                    let n: usize = param.parse().unwrap_or(1);
-                                    for _ in 0..n.min(8) {
-                                        out.push(' ');
-                                    }
+                                // Cursor movement after message content means
+                                // the terminal is positioning for unrelated
+                                // content (e.g. status bar text). Truncate.
+                                if matches!(fb, 'A' | 'B' | 'C' | 'D' | 'H' | 'f')
+                                    && !out.trim().is_empty()
+                                {
+                                    break 'outer;
                                 }
                                 break;
                             }
-                            Some(c2) => param.push(c2),
+                            Some(c2) => _param.push(c2),
                             None => break,
                         }
                     }
@@ -202,6 +204,33 @@ mod tests {
         assert_eq!(
             clean_dispatch_msg("Fixed the \"login\" bug."),
             "Fixed the \"login\" bug."
+        );
+    }
+
+    #[test]
+    fn clean_dispatch_msg_truncates_at_cursor_forward() {
+        // Cursor-forward (\x1b[10C) followed by status bar text is terminal noise.
+        assert_eq!(
+            clean_dispatch_msg("Done. Added timestamps.\x1b[10Cthinking with high effort"),
+            "Done. Added timestamps."
+        );
+    }
+
+    #[test]
+    fn clean_dispatch_msg_truncates_at_cursor_position() {
+        // Cursor-position (\x1b[1;40H) followed by noise.
+        assert_eq!(
+            clean_dispatch_msg("Task complete.\x1b[1;40Hstatus text"),
+            "Task complete."
+        );
+    }
+
+    #[test]
+    fn clean_dispatch_msg_ignores_cursor_move_before_content() {
+        // Cursor movement before any message content should not truncate.
+        assert_eq!(
+            clean_dispatch_msg("\x1b[CTask received."),
+            "Task received."
         );
     }
 }
