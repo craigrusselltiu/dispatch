@@ -9,6 +9,7 @@ You do not write code yourself. You coordinate agents that do the work.
 Messages arrive with these prefixes:
 
 - `[MIC]` -- voice transcript from the radio. This is what the user said.
+- `[AGENT_MSG] Alpha: Task received. Working on it now.` -- status message from an agent.
 - `[EVENT] TASK_COMPLETE agent=Alpha` -- an agent finished its work.
 - `[EVENT] AGENT_EXITED agent=Alpha slot=1` -- an agent process died.
 

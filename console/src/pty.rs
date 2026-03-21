@@ -29,10 +29,16 @@ fn check_dispatch_marker(
     slot_idx: usize,
 ) {
     if let Ok(line) = std::str::from_utf8(line_buf) {
-        if let Some(pos) = line.find(marker) {
+        // Use rfind to get the LAST occurrence of the marker. When the
+        // terminal renders the shell command echo and its output on the
+        // same line, the last occurrence is the actual output.
+        if let Some(pos) = line.rfind(marker) {
             // Skip shell command lines (e.g. `echo "@@DISPATCH_MSG:..."`).
-            // Only process the actual echo output, where the marker starts the line.
-            if line[..pos].contains("echo") {
+            // Only check a narrow window (16 chars) before the marker so
+            // that "echo" from a command rendering earlier in the line
+            // doesn't suppress the actual output marker.
+            let window_start = pos.saturating_sub(16);
+            if line[window_start..pos].contains("echo") {
                 return;
             }
             let msg = util::clean_dispatch_msg(&line[pos + marker.len()..]);
@@ -236,6 +242,78 @@ pub fn resize_all_slots(slots: &mut [Option<SlotState>], new_size: PtySize) {
         let _ = slot.master.resize(new_size);
         let mut parser = slot.screen.lock().unwrap();
         *parser = vt100::Parser::new(new_size.rows, new_size.cols, 0);
+    }
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::mpsc;
+
+    fn run_marker_check(line: &str) -> Option<String> {
+        let (tx, rx) = mpsc::channel();
+        let mut last_msg = String::new();
+        check_dispatch_marker(
+            line.as_bytes(),
+            DISPATCH_MSG_MARKER,
+            &mut last_msg,
+            &tx,
+            0,
+        );
+        rx.try_recv().ok().map(|(_, msg)| msg)
+    }
+
+    #[test]
+    fn marker_detected_at_line_start() {
+        let msg = run_marker_check("@@DISPATCH_MSG:Task received.");
+        assert_eq!(msg.as_deref(), Some("Task received."));
+    }
+
+    #[test]
+    fn marker_detected_with_ansi_prefix() {
+        let msg = run_marker_check("\x1b[0m@@DISPATCH_MSG:Task received.");
+        assert_eq!(msg.as_deref(), Some("Task received."));
+    }
+
+    #[test]
+    fn marker_filtered_on_echo_command_line() {
+        let msg = run_marker_check("echo \"@@DISPATCH_MSG:Task received.\"");
+        assert_eq!(msg, None);
+    }
+
+    #[test]
+    fn marker_filtered_with_prompt_and_echo() {
+        let msg = run_marker_check("$ echo \"@@DISPATCH_MSG:Task received.\"");
+        assert_eq!(msg, None);
+    }
+
+    #[test]
+    fn marker_detected_when_command_and_output_same_line() {
+        // When terminal renders command + output on one line, rfind picks
+        // the last (output) marker whose narrow window has no "echo".
+        let line = "echo \"@@DISPATCH_MSG:Task received.\" => @@DISPATCH_MSG:Task received.";
+        let msg = run_marker_check(line);
+        assert_eq!(msg.as_deref(), Some("Task received."));
+    }
+
+    #[test]
+    fn marker_detected_with_indentation() {
+        let msg = run_marker_check("  @@DISPATCH_MSG:Task complete.");
+        assert_eq!(msg.as_deref(), Some("Task complete."));
+    }
+
+    #[test]
+    fn dedup_prevents_same_message_twice() {
+        let (tx, rx) = mpsc::channel();
+        let mut last_msg = String::new();
+        let line = b"@@DISPATCH_MSG:Task received.";
+        check_dispatch_marker(line, DISPATCH_MSG_MARKER, &mut last_msg, &tx, 0);
+        check_dispatch_marker(line, DISPATCH_MSG_MARKER, &mut last_msg, &tx, 0);
+        // Only one message should be sent.
+        assert!(rx.try_recv().is_ok());
+        assert!(rx.try_recv().is_err());
     }
 }
 

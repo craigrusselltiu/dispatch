@@ -96,6 +96,9 @@ pub fn clean_dispatch_msg(s: &str) -> String {
         Some(pos) => &out[..pos],
         None => out,
     };
+    // Strip trailing quote characters left over from shell command echo
+    // (e.g. `echo "@@DISPATCH_MSG:msg"` output may include trailing `"`).
+    let out = out.trim_end_matches('"').trim_end_matches('\'');
     out.trim().to_string()
 }
 
@@ -129,6 +132,68 @@ pub fn local_ip() -> Option<String> {
     let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
     socket.connect("8.8.8.8:80").ok()?;
     socket.local_addr().ok().map(|a| a.ip().to_string())
+}
+
+// ── Tests ────────────────────────────────────────────────────────────────────
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn clean_dispatch_msg_plain() {
+        assert_eq!(
+            clean_dispatch_msg("Task received. Working on it now."),
+            "Task received. Working on it now."
+        );
+    }
+
+    #[test]
+    fn clean_dispatch_msg_strips_trailing_double_quote() {
+        // From command echo: echo "@@DISPATCH_MSG:msg" leaves trailing "
+        assert_eq!(
+            clean_dispatch_msg("Task received.\""),
+            "Task received."
+        );
+    }
+
+    #[test]
+    fn clean_dispatch_msg_strips_trailing_single_quote() {
+        assert_eq!(
+            clean_dispatch_msg("Task received.'"),
+            "Task received."
+        );
+    }
+
+    #[test]
+    fn clean_dispatch_msg_strips_ansi() {
+        assert_eq!(
+            clean_dispatch_msg("\x1b[0mTask received.\x1b[0m"),
+            "Task received."
+        );
+    }
+
+    #[test]
+    fn clean_dispatch_msg_truncates_at_close_paren_quote() {
+        assert_eq!(
+            clean_dispatch_msg("Task received.\")extra noise"),
+            "Task received."
+        );
+    }
+
+    #[test]
+    fn clean_dispatch_msg_empty_input() {
+        assert_eq!(clean_dispatch_msg(""), "");
+    }
+
+    #[test]
+    fn clean_dispatch_msg_preserves_internal_quotes() {
+        // Quotes in the middle of the message should be preserved.
+        assert_eq!(
+            clean_dispatch_msg("Fixed the \"login\" bug."),
+            "Fixed the \"login\" bug."
+        );
+    }
 }
 
 /// Compute PTY dimensions from terminal size.

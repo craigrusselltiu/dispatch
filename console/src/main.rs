@@ -280,6 +280,11 @@ fn main() -> io::Result<()> {
                 .map(|s| s.display_name().to_string())
                 .unwrap_or_else(|| format!("Agent-{}", slot_idx + 1));
             app.push_chat(&callsign, &text);
+            // Forward agent status messages to the orchestrator so it has
+            // visibility into agent progress (e.g. "Task received", "Merging").
+            if let Some(orch) = &mut app.orchestrator {
+                orch.send_message(&format!("[AGENT_MSG] {}: {}", callsign, text));
+            }
         }
 
         // dispatch-h62: poll orchestrator output and execute tool calls.
