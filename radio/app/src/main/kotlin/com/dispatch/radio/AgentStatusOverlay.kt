@@ -3,11 +3,11 @@ package com.dispatch.radio
 import android.app.AlertDialog
 import android.content.Context
 import android.graphics.Color
-import android.graphics.Typeface
 import android.view.Gravity
 import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
+import androidx.core.content.res.ResourcesCompat
 import com.dispatch.radio.model.Agent
 
 /**
@@ -24,6 +24,7 @@ class AgentStatusOverlay(private val context: Context) {
     fun show(agents: List<Agent>) {
         dismiss()
 
+        val font = ResourcesCompat.getFont(context, R.font.share_tech_mono)
         val active = agents.filter { it.status != "empty" }.sortedBy { it.slot }
 
         val layout = LinearLayout(context).apply {
@@ -31,12 +32,11 @@ class AgentStatusOverlay(private val context: Context) {
             setPadding(48, 24, 48, 24)
         }
 
-        // Monospace title matching the app's font (AlertDialog.setTitle uses sans-serif)
         val titleView = TextView(context).apply {
             text = "AGENT STATUS"
             setTextColor(Color.WHITE)
             textSize = 18f
-            typeface = Typeface.MONOSPACE
+            typeface = font
             setPadding(48, 36, 48, 12)
         }
 
@@ -45,7 +45,7 @@ class AgentStatusOverlay(private val context: Context) {
                 text = "No agents online"
                 setTextColor(Color.GRAY)
                 textSize = 16f
-                typeface = Typeface.MONOSPACE
+                typeface = font
             })
         } else {
             for (agent in active) {
@@ -58,7 +58,7 @@ class AgentStatusOverlay(private val context: Context) {
                     text = agent.callsign
                     setTextColor(Color.WHITE)
                     textSize = 18f
-                    typeface = Typeface.MONOSPACE
+                    typeface = font
                     layoutParams = LinearLayout.LayoutParams(
                         0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
                     )
@@ -74,7 +74,7 @@ class AgentStatusOverlay(private val context: Context) {
                     text = agent.status.replaceFirstChar { it.uppercase() }
                     setTextColor(statusColor)
                     textSize = 18f
-                    typeface = Typeface.MONOSPACE
+                    typeface = font
                     gravity = Gravity.END
                 })
 

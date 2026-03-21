@@ -17,7 +17,7 @@
             android:text="DISPATCH RADIO"
             android:textColor="@color/white"
             android:textSize="20sp"
-            android:fontFamily="monospace"
+            android:fontFamily="@font/share_tech_mono"
             android:layout_marginBottom="4dp" />
 
         <TextView
@@ -26,7 +26,7 @@
             android:text="SETTINGS"
             android:textColor="@color/white"
             android:textSize="14sp"
-            android:fontFamily="monospace"
+            android:fontFamily="@font/share_tech_mono"
             android:layout_marginBottom="32dp" />
 
         <!-- Discover Console -->
@@ -37,7 +37,7 @@
             android:text="DISCOVER CONSOLE"
             android:textColor="@color/background"
             android:backgroundTint="@color/dim_grey"
-            android:fontFamily="monospace"
+            android:fontFamily="@font/share_tech_mono"
             android:textSize="12sp"
             android:layout_marginBottom="8dp" />
 
@@ -48,7 +48,7 @@
             android:text=""
             android:textColor="@color/dim_grey"
             android:textSize="11sp"
-            android:fontFamily="monospace"
+            android:fontFamily="@font/share_tech_mono"
             android:layout_marginBottom="16dp" />
 
         <!-- Console Address -->
@@ -58,7 +58,7 @@
             android:text="CONSOLE ADDRESS"
             android:textColor="@color/dim_grey"
             android:textSize="11sp"
-            android:fontFamily="monospace"
+            android:fontFamily="@font/share_tech_mono"
             android:layout_marginBottom="4dp" />
 
         <EditText
@@ -70,7 +70,7 @@
             android:textColor="@color/white"
             android:textColorHint="@color/dim_grey"
             android:background="@drawable/input_background"
-            android:fontFamily="monospace"
+            android:fontFamily="@font/share_tech_mono"
             android:padding="12dp"
             android:layout_marginBottom="12dp" />
 
@@ -81,7 +81,7 @@
             android:text="PORT"
             android:textColor="@color/dim_grey"
             android:textSize="11sp"
-            android:fontFamily="monospace"
+            android:fontFamily="@font/share_tech_mono"
             android:layout_marginBottom="4dp" />
 
         <EditText
@@ -93,7 +93,7 @@
             android:textColor="@color/white"
             android:textColorHint="@color/dim_grey"
             android:background="@drawable/input_background"
-            android:fontFamily="monospace"
+            android:fontFamily="@font/share_tech_mono"
             android:padding="12dp"
             android:layout_marginBottom="24dp" />
 
@@ -104,7 +104,7 @@
             android:text="PRE-SHARED KEY"
             android:textColor="@color/dim_grey"
             android:textSize="11sp"
-            android:fontFamily="monospace"
+            android:fontFamily="@font/share_tech_mono"
             android:layout_marginBottom="4dp" />
 
         <EditText
@@ -116,7 +116,7 @@
             android:textColor="@color/white"
             android:textColorHint="@color/dim_grey"
             android:background="@drawable/input_background"
-            android:fontFamily="monospace"
+            android:fontFamily="@font/share_tech_mono"
             android:padding="12dp"
             android:layout_marginBottom="8dp" />
 
@@ -127,7 +127,7 @@
             android:text="SCAN QR CODE"
             android:textColor="@color/background"
             android:backgroundTint="@color/dim_grey"
-            android:fontFamily="monospace"
+            android:fontFamily="@font/share_tech_mono"
             android:textSize="12sp"
             android:layout_marginBottom="24dp" />
 
@@ -138,7 +138,7 @@
             android:text="SPEECH RECOGNITION LOCALE"
             android:textColor="@color/dim_grey"
             android:textSize="11sp"
-            android:fontFamily="monospace"
+            android:fontFamily="@font/share_tech_mono"
             android:layout_marginBottom="4dp" />
 
         <EditText
@@ -150,7 +150,7 @@
             android:textColor="@color/white"
             android:textColorHint="@color/dim_grey"
             android:background="@drawable/input_background"
-            android:fontFamily="monospace"
+            android:fontFamily="@font/share_tech_mono"
             android:padding="12dp"
             android:layout_marginBottom="24dp" />
 
@@ -161,7 +161,7 @@
             android:layout_height="wrap_content"
             android:text="HAPTIC FEEDBACK"
             android:textColor="@color/white"
-            android:fontFamily="monospace"
+            android:fontFamily="@font/share_tech_mono"
             android:buttonTint="@color/white"
             android:layout_marginBottom="12dp" />
 
@@ -171,7 +171,7 @@
             android:layout_height="wrap_content"
             android:text="KEEP SCREEN ON"
             android:textColor="@color/white"
-            android:fontFamily="monospace"
+            android:fontFamily="@font/share_tech_mono"
             android:buttonTint="@color/white"
             android:layout_marginBottom="12dp" />
 
@@ -181,7 +181,7 @@
             android:layout_height="wrap_content"
             android:text="CONTINUOUS LISTENING (VAD)"
             android:textColor="@color/white"
-            android:fontFamily="monospace"
+            android:fontFamily="@font/share_tech_mono"
             android:buttonTint="@color/white"
             android:layout_marginBottom="24dp" />
 
@@ -192,7 +192,7 @@
             android:text="RESET TO DEFAULTS"
             android:textColor="@color/white"
             android:backgroundTint="@color/dim_grey"
-            android:fontFamily="monospace"
+            android:fontFamily="@font/share_tech_mono"
             android:textSize="12sp"
             android:layout_marginBottom="12dp" />
 
@@ -203,7 +203,7 @@
             android:text="SAVE"
             android:textColor="@color/background"
             android:backgroundTint="@color/white"
-            android:fontFamily="monospace"
+            android:fontFamily="@font/share_tech_mono"
             android:textSize="14sp" />
 
     </LinearLayout>
