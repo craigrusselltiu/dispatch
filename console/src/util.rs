@@ -65,7 +65,7 @@ pub fn clean_dispatch_msg(s: &str) -> String {
                     loop {
                         match chars.next() {
                             Some(fb) if ('\x40'..='\x7e').contains(&fb) => {
-                                if matches!(fb, 'A' | 'B' | 'C' | 'D' | 'H' | 'f')
+                                if matches!(fb, 'A' | 'B' | 'C' | 'D' | 'E' | 'F' | 'G' | 'H' | 'd' | 'f')
                                     && !out.trim().is_empty()
                                 {
                                     // Record first cursor-movement after sentence
@@ -119,6 +119,17 @@ pub fn clean_dispatch_msg(s: &str) -> String {
             out.truncate(trunc_pos);
         }
     }
+    // Strip Claude Code streaming status indicators. The agent's Ink-based
+    // TUI renders spinner + status text (e.g. "thinking with high effort")
+    // on the same PTY line as dispatch message output. After ANSI codes are
+    // stripped, these appear as plain text noise appended to the message.
+    while let Some(start) = out.find("(thinking") {
+        if let Some(rel_end) = out[start..].find(')') {
+            out.replace_range(start..start + rel_end + 1, "");
+        } else {
+            break;
+        }
+    }
     // Truncate at closing ") from echo command — everything after is terminal noise.
     let out = out.trim();
     let out = match out.find("\")") {
@@ -128,14 +139,21 @@ pub fn clean_dispatch_msg(s: &str) -> String {
     // Strip trailing quote characters left over from shell command echo
     // (e.g. `echo "@@DISPATCH_MSG:msg"` output may include trailing `"`).
     let out = out.trim_end_matches('"').trim_end_matches('\'');
-    // Strip any trailing non-punctuation characters that follow the last
-    // sentence-ending punctuation — these are terminal noise (e.g. "now.U").
+    // Strip trailing noise after the last sentence-ending punctuation.
+    // Dispatch messages always end with punctuation; anything after the last
+    // '.', '!', or '?' is terminal noise (spinner chars, partial redraws).
+    // Heuristic: if no alphabetic run in the tail is longer than 3 chars,
+    // it's noise (e.g. "+ a Q n", "U", "hi g n") rather than real words.
     let out = out.trim();
-    if let Some(end) = out.rfind(|c| c == '.' || c == '!' || c == '?') {
-        // Only truncate if the trailing chars are short (noise), not a whole word.
-        let tail = &out[end + 1..];
-        if !tail.is_empty() && tail.len() <= 3 && tail.chars().all(|c| c.is_ascii_alphanumeric()) {
-            return out[..=end].trim().to_string();
+    if let Some(end) = out.rfind(|c: char| c == '.' || c == '!' || c == '?') {
+        let tail = out[end + 1..].trim();
+        if !tail.is_empty() {
+            let has_real_word = tail
+                .split(|c: char| !c.is_alphabetic())
+                .any(|w| w.len() > 3);
+            if !has_real_word {
+                return out[..=end].trim().to_string();
+            }
         }
     }
     out.trim().to_string()
@@ -306,6 +324,66 @@ mod tests {
         assert_eq!(
             clean_dispatch_msg("Done.\x1b[1;20H Fixed the bug.\x1b[1;40H Pushed to remote."),
             "Done. Fixed the bug. Pushed to remote."
+        );
+    }
+
+    #[test]
+    fn clean_dispatch_msg_truncates_at_cursor_home_absolute() {
+        // CHA (\x1b[1G) is used by Ink to move cursor to column 1 for
+        // redraws. Noise after it should be truncated.
+        assert_eq!(
+            clean_dispatch_msg("Task received.\x1b[1Gspinner text"),
+            "Task received."
+        );
+    }
+
+    #[test]
+    fn clean_dispatch_msg_strips_thinking_status() {
+        // Claude Code's Ink TUI renders "(thinking with high effort)" as
+        // status text that can leak into dispatch messages.
+        assert_eq!(
+            clean_dispatch_msg("Task received. Working on it now. + a Q n (thinking with high effort)"),
+            "Task received. Working on it now."
+        );
+    }
+
+    #[test]
+    fn clean_dispatch_msg_strips_multiple_thinking() {
+        // Multiple thinking indicators interspersed with noise chars.
+        assert_eq!(
+            clean_dispatch_msg("Task received. Working on it now. hi g (thinking with high effort) n (thinking with high effort)"),
+            "Task received. Working on it now."
+        );
+    }
+
+    #[test]
+    fn clean_dispatch_msg_strips_thinking_variants() {
+        assert_eq!(
+            clean_dispatch_msg("Done.(thinking)"),
+            "Done."
+        );
+        assert_eq!(
+            clean_dispatch_msg("Done. (thinking with medium effort) x"),
+            "Done."
+        );
+    }
+
+    #[test]
+    fn clean_dispatch_msg_strips_trailing_spinner_chars() {
+        // After thinking patterns are removed, remaining single-char noise
+        // (spinner artifacts) should be stripped.
+        assert_eq!(
+            clean_dispatch_msg("Task complete. + a Q n"),
+            "Task complete."
+        );
+    }
+
+    #[test]
+    fn clean_dispatch_msg_preserves_real_words_after_punct() {
+        // Real words (>3 alpha chars) after punctuation should be preserved.
+        assert_eq!(
+            clean_dispatch_msg("Done. Merged changes."),
+            "Done. Merged changes."
         );
     }
 }
