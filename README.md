@@ -103,8 +103,7 @@ Open the `radio/` directory in Android Studio, sync Gradle, and deploy to your p
 | Volume Down (hold)     | Push-to-talk: speak a command              |
 | Volume Down (release)  | Send transcript to console                 |
 | Volume Down (tap)      | Toggle continuous listening mode            |
-| Volume Up (tap)        | Cycle to next active agent                 |
-| Volume Up (hold >1s)   | Quick dispatch: pick and launch an agent   |
+| Volume Up (hold)       | Show agent status overlay (hold to view)   |
 
 **Continuous listening**: Enable in settings to stay in listen mode without holding Volume Down. Uses voice-activity detection to start and stop automatically.
 

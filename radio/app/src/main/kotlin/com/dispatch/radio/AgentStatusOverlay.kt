@@ -2,11 +2,10 @@ package com.dispatch.radio
 
 import android.app.AlertDialog
 import android.content.Context
-import android.content.DialogInterface
 import android.graphics.Color
 import android.graphics.Typeface
 import android.view.Gravity
-import android.view.KeyEvent
+import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
 import com.dispatch.radio.model.Agent
@@ -19,6 +18,10 @@ import com.dispatch.radio.model.Agent
  * (earliest dispatched first). The caller dismisses when the button is released.
  */
 class AgentStatusOverlay(private val context: Context) {
+
+    companion object {
+        private val MONO_BOLD = Typeface.create(Typeface.MONOSPACE, Typeface.BOLD)
+    }
 
     private var dialog: AlertDialog? = null
 
@@ -37,6 +40,7 @@ class AgentStatusOverlay(private val context: Context) {
                 text = "No agents online"
                 setTextColor(Color.GRAY)
                 textSize = 16f
+                typeface = Typeface.MONOSPACE
             })
         } else {
             for (agent in active) {
@@ -49,7 +53,7 @@ class AgentStatusOverlay(private val context: Context) {
                     text = agent.callsign
                     setTextColor(Color.WHITE)
                     textSize = 18f
-                    typeface = Typeface.DEFAULT_BOLD
+                    typeface = MONO_BOLD
                     layoutParams = LinearLayout.LayoutParams(
                         0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
                     )
@@ -65,7 +69,7 @@ class AgentStatusOverlay(private val context: Context) {
                     text = agent.status.replaceFirstChar { it.uppercase() }
                     setTextColor(statusColor)
                     textSize = 18f
-                    typeface = Typeface.DEFAULT_BOLD
+                    typeface = MONO_BOLD
                     gravity = Gravity.END
                 })
 
@@ -79,11 +83,14 @@ class AgentStatusOverlay(private val context: Context) {
             .setCancelable(false)
             .create()
 
-        // Consume volume key events so they don't leak to the system volume handler
-        // while the overlay is visible (the dialog window steals focus from the activity).
-        dialog?.setOnKeyListener(DialogInterface.OnKeyListener { _, keyCode, _ ->
-            keyCode == KeyEvent.KEYCODE_VOLUME_UP || keyCode == KeyEvent.KEYCODE_VOLUME_DOWN
-        })
+        // Prevent the dialog from stealing input focus so volume key events
+        // continue reaching Activity.dispatchKeyEvent. Without this flag the
+        // dialog window captures key events, the activity never sees KEY_UP,
+        // and the overlay flickers as focus bounces between windows.
+        dialog?.window?.setFlags(
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE,
+            WindowManager.LayoutParams.FLAG_NOT_FOCUSABLE
+        )
 
         dialog?.show()
     }

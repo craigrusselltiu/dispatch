@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## v0.3.8
+
+### Fixed
+
+- Volume Up agent status overlay no longer flickers when held. The dialog now uses FLAG_NOT_FOCUSABLE so it doesn't steal input focus from the activity, allowing key-up events to properly dismiss it.
+
+### Changed
+
+- Agent status overlay font changed to monospace bold, consistent with the rest of the radio app.
+- Volume Up long press (>1s) no longer transitions to quick dispatch picker. The status overlay now stays visible for the entire hold duration.
+
 ## v0.3.7
 
 ### Added

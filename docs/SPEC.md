@@ -746,14 +746,8 @@ If the transcript is empty, double-pulse vibration, no message sent.
 
 | Event     | Action                                                    |
 |-----------|-----------------------------------------------------------|
-| Key down  | Show hold-to-view status overlay listing all active agents sorted by dispatch time. Each line: callsign (left, white), status (right, RED for Busy / YELLOW for Idle). |
+| Key down  | Show hold-to-view status overlay listing all active agents sorted by dispatch time. Each line: callsign (left, white, monospace bold), status (right, RED for Busy / YELLOW for Idle, monospace bold). Overlay stays visible for entire hold duration. |
 | Key up    | Dismiss the status overlay, short vibration.              |
-
-**Volume Up Long Press -- Quick Dispatch**
-
-| Event     | Action                                                    |
-|-----------|-----------------------------------------------------------|
-| Hold >1s  | Dismiss status overlay, show agent type picker. Tap to dispatch. |
 
 ### UI Layout
 

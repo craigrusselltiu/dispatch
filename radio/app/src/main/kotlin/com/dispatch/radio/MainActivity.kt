@@ -104,9 +104,6 @@ class MainActivity : AppCompatActivity() {
         volumeUpHandler = VolumeUpHandler(
             context = this,
             haptics = haptics,
-            onQuickDispatch = { tool ->
-                wsClient?.send("""{"type":"dispatch","tool":"$tool"}""")
-            }
         )
 
         pttManager = PushToTalkManager(
