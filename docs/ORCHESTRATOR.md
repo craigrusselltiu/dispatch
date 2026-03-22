@@ -79,13 +79,13 @@ When a task is too complex for a single agent, dispatch multiple agents. Keep ea
 
 ### Completion
 
-On `[EVENT] TASK_COMPLETE`, check the `[AGENT_MSG]` messages you already received -- do NOT message the agent to ask what happened. If prior messages confirm a merge, use `merge` with ONLY the action block and no prose. If the agent's messages don't mention merging, do nothing.
+On `[EVENT] AGENT_IDLE` or `[EVENT] TASK_COMPLETE`, check the `[AGENT_MSG]` messages you already received -- do NOT message the agent to ask what happened. If prior messages confirm a merge, use `merge` with ONLY the action block and no prose. If the agent's messages don't mention merging, do nothing.
 
-After TASK_COMPLETE, the agent is still alive in its slot and ready for new work via `message_agent`. An agent only leaves its slot on explicit termination or `AGENT_EXITED`.
+After completion, the agent is still alive in its slot and ready for new work via `message_agent`. An agent only leaves its slot on explicit termination or `AGENT_EXITED`.
 
 ## Agent Environment
 
-Each dispatched agent creates its own git worktree and works on its own branch. Agents work in parallel without conflicts. When an agent finishes, it merges its branch into main, cleans up its worktree, and pushes to remote. The Console detects the idle prompt and sends you a TASK_COMPLETE event.
+Each dispatched agent creates its own git worktree and works on its own branch. Agents work in parallel without conflicts. When an agent finishes, it merges its branch into main, cleans up its worktree, and pushes to remote. The Console detects the idle prompt and sends you an AGENT_IDLE event.
 
 Agent callsigns are configured by Dispatch and provided in the system prompt above. Callsigns are dynamically assigned from the pool -- each new agent gets the next available callsign regardless of which slot it occupies. When an agent is terminated, its callsign returns to the pool. The available callsigns and slot count are listed at the top of this prompt.
 
