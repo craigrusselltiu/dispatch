@@ -7,7 +7,7 @@ import android.view.Gravity
 import android.view.WindowManager
 import android.widget.LinearLayout
 import android.widget.TextView
-import androidx.core.content.res.ResourcesCompat
+import android.graphics.Typeface
 import com.dispatch.radio.model.Agent
 
 /**
@@ -24,7 +24,7 @@ class AgentStatusOverlay(private val context: Context) {
     fun show(agents: List<Agent>) {
         dismiss()
 
-        val font = ResourcesCompat.getFont(context, R.font.share_tech_mono)
+        val font = Typeface.MONOSPACE
         val active = agents.filter { it.status != "empty" }.sortedBy { it.slot }
 
         val layout = LinearLayout(context).apply {
