@@ -28,7 +28,7 @@
                 android:text="DISPATCH RADIO"
                 android:textColor="@color/white"
                 android:textSize="18sp"
-                android:fontFamily="@font/share_tech_mono" />
+                android:fontFamily="monospace" />
 
             <ImageView
                 android:id="@+id/btn_interrupt"
@@ -94,7 +94,7 @@
                 android:text="DISCONNECTED"
                 android:textColor="@color/red"
                 android:textSize="12sp"
-                android:fontFamily="@font/share_tech_mono" />
+                android:fontFamily="monospace" />
 
         </LinearLayout>
 
@@ -132,7 +132,7 @@
                 android:textColor="@color/white"
                 android:textColorHint="@color/dim_grey"
                 android:textSize="14sp"
-                android:fontFamily="@font/share_tech_mono"
+                android:fontFamily="monospace"
                 android:hint="Type a message..."
                 android:inputType="text"
                 android:imeOptions="actionSend"
@@ -148,7 +148,7 @@
                 android:textColor="@color/green"
                 android:background="@drawable/settings_button_bg"
                 android:textSize="12sp"
-                android:fontFamily="@font/share_tech_mono"
+                android:fontFamily="monospace"
                 android:gravity="center"
                 android:clickable="true"
                 android:focusable="true"
@@ -199,7 +199,7 @@
                     android:text="LISTENING"
                     android:textColor="@color/white"
                     android:textSize="12sp"
-                    android:fontFamily="@font/share_tech_mono" />
+                    android:fontFamily="monospace" />
 
             </LinearLayout>
 
@@ -210,7 +210,7 @@
                 android:text=""
                 android:textColor="@color/white"
                 android:textSize="13sp"
-                android:fontFamily="@font/share_tech_mono"
+                android:fontFamily="monospace"
                 android:minHeight="40dp" />
 
             <!-- Segmented audio level bar (dispatch-88k.6) -->
