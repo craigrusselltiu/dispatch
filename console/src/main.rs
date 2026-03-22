@@ -249,14 +249,12 @@ fn main() -> io::Result<()> {
                     app.broadcast_agents();
                     if let Some(id) = task_id {
                         app.push_orch(OrchestratorEventKind::TaskComplete { id: id.clone(), agent: callsign.clone() });
-                        app.push_chat("System", &format!("{} completed task (slot {}).", callsign, i + 1));
                         // Notify orchestrator of completion so it can decide next steps.
                         if let Some(orch) = &mut app.orchestrator {
                             orch.send_message(&format!("[EVENT] TASK_COMPLETE agent={} task={}", callsign, id));
                         }
                         app.push_ticker(format!("TASK COMPLETE: {} closed {} — slot {} now standby", callsign, id, i + 1));
                     } else {
-                        app.push_chat("System", &format!("{} exited (slot {}).", callsign, i + 1));
                         app.push_ticker(format!("AGENT EXITED: {} (slot {}) — standby", callsign, i + 1));
                         if let Some(orch) = &mut app.orchestrator {
                             orch.send_message(&format!("[EVENT] AGENT_EXITED agent={} slot={}", callsign, i + 1));
@@ -290,7 +288,6 @@ fn main() -> io::Result<()> {
                         // to show agents as perpetually working.
                         s.task_id = None;
                         let callsign = s.display_name().to_string();
-                        app.push_chat("System", &format!("{} is now idle (slot {}).", callsign, i + 1));
                         if let Some(orch) = &mut app.orchestrator {
                             orch.send_message(&format!(
                                 "[EVENT] AGENT_IDLE agent={} slot={}",
@@ -472,8 +469,10 @@ fn main() -> io::Result<()> {
                 orchestrator::OrchestratorOutput::Text(text) => {
                     app.push_orch(OrchestratorEventKind::OrchestratorText { text: text.clone() });
 
-                    // dispatch-chat: forward orchestrator reasoning to radio (strip action blocks).
+                    // dispatch-chat: forward orchestrator reasoning to radio
+                    // (strip action blocks and internal [EVENT] lines).
                     let chat_text = util::strip_action_blocks(&text);
+                    let chat_text = util::strip_event_lines(&chat_text);
                     let chat_text = chat_text.trim();
                     if !chat_text.is_empty() {
                         app.push_chat(&app.console_name.clone(), chat_text);

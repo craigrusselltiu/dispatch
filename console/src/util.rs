@@ -145,6 +145,16 @@ pub fn strip_action_blocks(text: &str) -> String {
     result
 }
 
+/// Remove lines that are internal `[EVENT]` system notifications.
+/// These are sent to the orchestrator for coordination but should not
+/// be forwarded to the user-facing chat on the radio.
+pub fn strip_event_lines(text: &str) -> String {
+    text.lines()
+        .filter(|line| !line.trim_start().starts_with("[EVENT]"))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// Detect the machine's local network IP by connecting a UDP socket.
 /// No data is sent; this just determines the outgoing interface address.
 pub fn local_ip() -> Option<String> {
