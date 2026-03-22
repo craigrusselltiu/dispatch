@@ -71,15 +71,19 @@ class AgentStatusOverlay(private val context: Context) {
                 }
 
                 row.addView(TextView(context).apply {
+                    text = "-"
+                    setTextColor(Color.GRAY)
+                    textSize = 18f
+                    typeface = font
+                    setPadding(16, 0, 16, 0)
+                })
+
+                row.addView(TextView(context).apply {
                     text = agent.status.replaceFirstChar { it.uppercase() }
                     setTextColor(statusColor)
                     textSize = 18f
                     typeface = font
                     gravity = Gravity.END
-                    layoutParams = LinearLayout.LayoutParams(
-                        LinearLayout.LayoutParams.WRAP_CONTENT,
-                        LinearLayout.LayoutParams.WRAP_CONTENT
-                    ).apply { marginStart = 24 }
                 })
 
                 layout.addView(row)
