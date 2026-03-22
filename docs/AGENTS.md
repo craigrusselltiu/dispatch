@@ -37,8 +37,7 @@ Keep messages to one sentence. Do not include file paths or code.
    cd .dispatch/.worktrees/{callsign}
    ```
 3. Do the work. Commit with clear messages. Run `git status` to ensure nothing is unstaged or untracked.
-4. Send a final status message reporting what you actually did (see Status Messages above).
-5. Merge your branch into main, clean up, and push:
+4. Merge your branch into main, clean up, and push:
    ```bash
    cd "$(git rev-parse --path-format=absolute --git-common-dir)/.."
    git merge dispatch/{callsign} --no-ff -m "Merge dispatch/{callsign}"
@@ -46,6 +45,7 @@ Keep messages to one sentence. Do not include file paths or code.
    git branch -d dispatch/{callsign}
    git push
    ```
+5. Send a final status message reporting what you actually did (see Status Messages above).
 6. Return to the prompt and wait. The Console's completion detector watches for an idle prompt -- do not leave a command running or output streaming.
 
 If the merge fails due to conflicts: `git pull origin main`, retry the merge, fix conflicts manually if needed (`git add` + `git commit`), then push and clean up as normal.
