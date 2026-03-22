@@ -20,11 +20,12 @@ Turn your Android phone into a push-to-talk radio that dispatches AI coding agen
 
 **Dispatch Console** (PC) -- a terminal UI with configurable agent slots displayed in a 2x2 grid across pages. A persistent LLM orchestrator receives voice transcripts and coordinates everything: dispatching agents, routing messages, managing work. Supports direct keyboard input into any agent pane via vim-style modal controls.
 
-<img width="1000" height="1385" alt="image" src="https://github.com/user-attachments/assets/2adbf2be-ac8f-4783-b53b-629fa5317bfb" />
+<img width="2555" height="1343" alt="image" src="https://github.com/user-attachments/assets/563decbe-8171-438b-95cc-ee9e9755b8c0" />
 
 **Dispatch Radio** (Android) -- a push-to-talk app controlled by hardware volume buttons. Hold Volume Down to speak; the app transcribes speech and sends it to the console over a TLS-encrypted WebSocket on your local network.
 
-<img width="400" height="2209" alt="image" src="https://github.com/user-attachments/assets/d3ea073c-1643-493d-98fd-95624d623fee" />
+<img width="500" height="1541" alt="image" src="https://github.com/user-attachments/assets/2230a774-4f7a-4e6b-838d-838fa4c328e7" />
+
 
 ## How It Works
 
