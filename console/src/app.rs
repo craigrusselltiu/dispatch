@@ -333,6 +333,13 @@ impl App {
                             message: "failed to spawn agent PTY".to_string(),
                         },
                     }
+                } else {
+                    // Existing idle agent: write the prompt to the PTY so it
+                    // receives the new task (the agent process is still alive).
+                    let slot = self.slots[slot_idx].as_mut().unwrap();
+                    let msg = format!("{}\r", full_prompt);
+                    let _ = slot.writer.write_all(msg.as_bytes());
+                    let _ = slot.writer.flush();
                 }
 
                 let callsign = {
@@ -482,8 +489,23 @@ impl App {
                 let _ = slot.writer.flush();
                 *slot.last_output_at.lock().unwrap() = Instant::now();
                 slot.idle = false;
+                // Set task_id so idle detection tracks the follow-up work.
+                // Without this, the agent stays in a limbo state where idle
+                // detection never fires and AGENT_IDLE is never sent.
+                if slot.task_id.is_none() {
+                    slot.task_id = Some(text.clone());
+                }
 
                 self.push_chat("System", &format!("[to {}] {}", agent_name, text));
+
+                // Sync ws_state so the radio shows the agent as busy.
+                {
+                    let mut st = self.ws_state.lock().unwrap();
+                    if let Some(agent) = &mut st.slots[idx] {
+                        agent.status = ws_server::AgentStatus::Busy;
+                    }
+                }
+                self.broadcast_agents();
 
                 tools::ToolResult::MessageSent {
                     agent: agent_name,
