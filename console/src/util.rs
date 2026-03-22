@@ -87,6 +87,21 @@ pub fn strip_event_lines(text: &str) -> String {
         .join("\n")
 }
 
+/// Clear stale `.dispatch/messages/` and `.dispatch/images/` contents for a repo.
+/// Called at startup to manage disk space. Removes files only (not subdirectories).
+pub fn clean_dispatch_dirs(repo_root: &str) {
+    for subdir in &["messages", "images"] {
+        let dir = format!("{}/.dispatch/{}", repo_root, subdir);
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            for entry in entries.flatten() {
+                if entry.path().is_file() {
+                    let _ = std::fs::remove_file(entry.path());
+                }
+            }
+        }
+    }
+}
+
 /// Detect the machine's local network IP by connecting a UDP socket.
 /// No data is sent; this just determines the outgoing interface address.
 pub fn local_ip() -> Option<String> {

@@ -175,6 +175,11 @@ fn main() -> io::Result<()> {
         cfg.identity.console_name.clone(),
     );
 
+    // Clear stale agent message and image files from previous sessions.
+    for repo in &app.repo_list() {
+        util::clean_dispatch_dirs(repo);
+    }
+
     // dispatch-guj: eagerly spawn orchestrator in background so it's warm
     // by the time the first voice message arrives (eliminates first-message lag).
     let orch_repos: Vec<String> = app.repo_list().iter().map(|s| s.to_string()).collect();
