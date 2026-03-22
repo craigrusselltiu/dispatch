@@ -76,6 +76,10 @@ class AgentStatusOverlay(private val context: Context) {
                     textSize = 18f
                     typeface = font
                     gravity = Gravity.END
+                    layoutParams = LinearLayout.LayoutParams(
+                        LinearLayout.LayoutParams.WRAP_CONTENT,
+                        LinearLayout.LayoutParams.WRAP_CONTENT
+                    ).apply { marginStart = 24 }
                 })
 
                 layout.addView(row)
