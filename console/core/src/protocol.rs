@@ -121,7 +121,7 @@ pub struct SlotInfo {
     pub slot: u32,
     pub callsign: Option<String>,
     pub tool: Option<String>,
-    /// "busy" | "idle" | "empty"
+    /// "working" | "idle" | "empty"
     pub status: &'static str,
     pub task: Option<String>,
     /// Short repo directory name (dispatch-2dc).

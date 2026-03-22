@@ -4,7 +4,7 @@ data class Agent(
     val slot: Int,
     val callsign: String,
     val tool: String,
-    val status: String, // "busy", "idle", "empty"
+    val status: String, // "working", "idle", "empty"
     val task: String?
 )
 

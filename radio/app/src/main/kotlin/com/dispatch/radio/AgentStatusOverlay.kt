@@ -14,7 +14,7 @@ import com.dispatch.radio.model.Agent
  * Shows a hold-to-view overlay listing all active agent statuses.
  *
  * Each line displays the callsign on the left and its status on the right,
- * colored RED for busy and YELLOW for idle. Agents are listed in slot order
+ * colored RED for working and YELLOW for idle. Agents are listed in slot order
  * (earliest dispatched first). The caller dismisses when the button is released.
  */
 class AgentStatusOverlay(private val context: Context) {
@@ -65,7 +65,7 @@ class AgentStatusOverlay(private val context: Context) {
                 })
 
                 val statusColor = when (agent.status) {
-                    "busy" -> Color.RED
+                    "working" -> Color.RED
                     "idle" -> Color.YELLOW
                     else -> Color.GRAY
                 }

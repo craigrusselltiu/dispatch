@@ -283,6 +283,12 @@ fn main() -> io::Result<()> {
                     if is_idle_now && !s.idle {
                         // Transition: working -> idle.
                         s.idle = true;
+                        // Clear task_id so the idle detection loop stops
+                        // monitoring this agent. Without this, any minor PTY
+                        // output (cursor blink, terminal redraws) flips the
+                        // agent back to "working" for 10s, causing the radio
+                        // to show agents as perpetually working.
+                        s.task_id = None;
                         let callsign = s.display_name().to_string();
                         app.push_chat("System", &format!("{} is now idle (slot {}).", callsign, i + 1));
                         if let Some(orch) = &mut app.orchestrator {
