@@ -412,10 +412,13 @@ impl App {
                 }
             }
 
-            // Agents merge their own branches; this acknowledges the completion.
-            // The system merge message is generated automatically when the
-            // agent's @@DISPATCH_MSG reports "merged" and "pushed" (see main loop).
+            // Agents merge their own branches; this tool acknowledges the
+            // completion and generates the system merge notification.
             tools::ToolCall::Merge { agent } => {
+                self.push_orch(OrchestratorEventKind::Merged { id: agent.clone() });
+                self.push_ticker(format!("MERGED: {}", agent));
+                self.push_chat("System", &format!("{} has merged to remote.", agent));
+
                 tools::ToolResult::Merged {
                     agent: agent.clone(),
                     success: true,

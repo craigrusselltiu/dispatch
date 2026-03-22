@@ -451,11 +451,16 @@ fn main() -> io::Result<()> {
             }
             // Auto-detect merge: when an agent reports merging and pushing,
             // generate the system merge message for the radio and orch log.
-            let lower = text.to_lowercase();
-            if lower.contains("merged") && lower.contains("pushed") {
-                app.push_orch(OrchestratorEventKind::Merged { id: callsign.clone() });
-                app.push_ticker(format!("MERGED: {}", callsign));
-                app.push_chat("System", &format!("{} has merged to remote.", callsign));
+            // Only fire when no orchestrator is running — when the orchestrator
+            // is active, the merge tool call generates the system message instead
+            // (see execute_tool in app.rs) to avoid duplicates.
+            if app.orchestrator.is_none() {
+                let lower = text.to_lowercase();
+                if lower.contains("merged") && lower.contains("pushed") {
+                    app.push_orch(OrchestratorEventKind::Merged { id: callsign.clone() });
+                    app.push_ticker(format!("MERGED: {}", callsign));
+                    app.push_chat("System", &format!("{} has merged to remote.", callsign));
+                }
             }
         }
 
