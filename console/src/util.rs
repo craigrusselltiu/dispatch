@@ -46,21 +46,43 @@ pub fn truncate(s: &str, max: usize) -> String {
 
 /// Clean a dispatch message: strip ANSI escapes and extract content from
 /// triple-backtick fences, ignoring any terminal noise outside them.
+///
+/// ConPTY on Windows often replaces runs of spaces with cursor-forward
+/// CSI sequences (`\x1b[nC`).  We convert those back to spaces so the
+/// message text retains its original spacing.
 pub fn clean_dispatch_msg(s: &str) -> String {
     // Strip ANSI escapes first to get plain text for fence detection.
+    // Cursor-forward (CSI n C) is converted to n spaces instead of being
+    // stripped, because ConPTY uses it in place of literal space characters.
     let mut out = String::with_capacity(s.len());
     let mut chars = s.chars();
     while let Some(c) = chars.next() {
         if c == '\x1b' {
             match chars.next() {
                 Some('[') => {
+                    // Collect parameter bytes, then the final byte.
+                    let mut params = String::new();
+                    let final_byte;
                     loop {
                         match chars.next() {
-                            Some(fb) if ('\x40'..='\x7e').contains(&fb) => break,
-                            Some(_) => {}
-                            None => break,
+                            Some(fb) if ('\x40'..='\x7e').contains(&fb) => {
+                                final_byte = fb;
+                                break;
+                            }
+                            Some(pb) => params.push(pb),
+                            None => { final_byte = '\0'; break; }
                         }
                     }
+                    // CSI n C = cursor forward n columns → emit n spaces.
+                    // An empty parameter means 1 (the default for CUF).
+                    if final_byte == 'C' {
+                        let n: usize = params.parse().unwrap_or(1);
+                        for _ in 0..n {
+                            out.push(' ');
+                        }
+                    }
+                    // All other CSI sequences (colors, cursor positioning, etc.)
+                    // are silently dropped.
                 }
                 Some(']') => {
                     let mut prev = '\0';
@@ -187,6 +209,43 @@ mod tests {
         // Unfenced messages pass through with ANSI stripped.
         assert_eq!(
             clean_dispatch_msg("Task received."),
+            "Task received."
+        );
+    }
+
+    #[test]
+    fn clean_dispatch_msg_conpty_cursor_forward_to_spaces() {
+        // ConPTY replaces spaces with CSI C (cursor forward). Verify they
+        // become spaces so agent messages retain their original spacing.
+        assert_eq!(
+            clean_dispatch_msg("Task\x1b[1Creceived.\x1b[1CWorking\x1b[1Con\x1b[1Cit\x1b[1Cnow."),
+            "Task received. Working on it now."
+        );
+    }
+
+    #[test]
+    fn clean_dispatch_msg_conpty_cursor_forward_default() {
+        // CSI C with no parameter defaults to 1 space.
+        assert_eq!(
+            clean_dispatch_msg("Hello\x1b[Cworld"),
+            "Hello world"
+        );
+    }
+
+    #[test]
+    fn clean_dispatch_msg_conpty_cursor_forward_multi() {
+        // CSI 3 C = 3 spaces.
+        assert_eq!(
+            clean_dispatch_msg("A\x1b[3CB"),
+            "A   B"
+        );
+    }
+
+    #[test]
+    fn clean_dispatch_msg_conpty_fenced_with_cursor_forward() {
+        // Fenced message where ConPTY replaced spaces with cursor-forward.
+        assert_eq!(
+            clean_dispatch_msg("```Task\x1b[Creceived.```"),
             "Task received."
         );
     }
