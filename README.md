@@ -160,4 +160,4 @@ dispatch/
 
 ## Inspiration
 
-A fun little side-project inspired by Brian Harms's project, also named Dispatch. Not to be confused with Claude's new Dispatch feature.
+A fun little vibe-coded side-project inspired by Brian Harms's project, also named Dispatch. Not to be confused with Claude's new Dispatch feature.
