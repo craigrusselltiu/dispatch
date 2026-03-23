@@ -94,7 +94,7 @@ impl Config {
 }
 
 fn default_callsigns() -> Vec<String> {
-    NATO_DEFAULTS[..8].iter().map(|s| s.to_string()).collect()
+    NATO_DEFAULTS.iter().map(|s| s.to_string()).collect()
 }
 
 impl Default for Config {
