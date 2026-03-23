@@ -88,13 +88,17 @@ pub fn build_system_prompt(
 /// `tool_cmd` is the resolved command to execute (from `[tools]` config).
 pub fn spawn(system_prompt: &str, cwd: &str, tool_key: &str, tool_cmd: &str) -> Result<Orchestrator, String> {
     let mut cmd = Command::new(tool_cmd);
+    // Common flags: streaming JSON protocol for multi-turn orchestrator.
     cmd.args([
         "-p",
         "--output-format", "stream-json",
         "--input-format", "stream-json",
     ]);
+    // Tool-specific flags.
     if tool_key == "claude" {
         cmd.arg("--verbose");
+    } else if tool_key == "copilot" {
+        cmd.arg("--yolo");
     }
     cmd.args(["--system-prompt", system_prompt]);
     cmd.current_dir(cwd);
