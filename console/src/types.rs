@@ -150,6 +150,8 @@ pub struct App {
     pub pane_rows: u16,
     pub pane_cols: u16,
     pub tools: std::collections::HashMap<String, String>,
+    /// Which tool key to use by default when dispatching agents (e.g. "claude-code" or "copilot").
+    pub default_tool: String,
     // Ticker: LED-style scrolling marquee (independent items)
     pub ticker_items: Vec<TickerItem>,
     pub ticker_frame_counter: u8,

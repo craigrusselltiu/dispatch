@@ -167,6 +167,7 @@ fn main() -> io::Result<()> {
         pane_rows,
         pane_cols,
         cfg.tools.clone(),
+        cfg.default_tool_key().to_string(),
         workspace,
         cfg.terminal.scrollback_lines,
         chat_tx,
@@ -653,10 +654,11 @@ fn main() -> io::Result<()> {
                                             app.overlay = Overlay::None;
                                             // Dispatch into the first empty slot, targeting the selected repo.
                                             if let Some(g) = app.slots.iter().position(|s| s.is_none()) {
-                                                let cmd = app.tool_cmd("claude-code").to_string();
+                                                let tool_key = app.default_tool.clone();
+                                                let cmd = app.tool_cmd(&tool_key).to_string();
                                                 let cs = app.next_callsign().unwrap_or_else(|| format!("Agent-{}", g + 1));
                                                 if let Some(slot) = pty::dispatch_slot(
-                                                    g, "claude-code", &cmd, app.pane_rows, app.pane_cols,
+                                                    g, &tool_key, &cmd, app.pane_rows, app.pane_cols,
                                                     Some(&selected_repo), app.scrollback_lines,
                                                     util::repo_name_from_path(&selected_repo), &selected_repo,
                                                     None,
@@ -665,7 +667,7 @@ fn main() -> io::Result<()> {
                                                     let page = g / SLOTS_PER_PAGE;
                                                     let local = g % SLOTS_PER_PAGE;
                                                     let name = slot.display_name().to_string();
-                                                    app.push_orch(OrchestratorEventKind::Dispatched { agent: name.clone(), slot: g + 1, tool: "claude-code".to_string() });
+                                                    app.push_orch(OrchestratorEventKind::Dispatched { agent: name.clone(), slot: g + 1, tool: tool_key });
                                                     app.push_ticker(format!("DISPATCH: {} launched in slot {} — repo {}", name, g + 1, util::repo_name_from_path(&selected_repo)));
                                                     app.push_chat("System", &format!("Dispatched agent {} to slot {}.", name, g + 1));
                                                     app.slots[g] = Some(slot);
@@ -751,16 +753,17 @@ fn main() -> io::Result<()> {
                                     if app.slots[target_g].is_none() {
                                         let cs = app.next_callsign().unwrap_or_else(|| format!("Agent-{}", target_g + 1));
                                         let repo = app.default_repo_root().to_string();
-                                        let cmd = app.tool_cmd("claude-code").to_string();
+                                        let tool_key = app.default_tool.clone();
+                                        let cmd = app.tool_cmd(&tool_key).to_string();
                                         if let Some(slot) = pty::dispatch_slot(
-                                            target_g, "claude-code", &cmd, app.pane_rows, app.pane_cols,
+                                            target_g, &tool_key, &cmd, app.pane_rows, app.pane_cols,
                                             None, app.scrollback_lines,
                                             util::repo_name_from_path(&repo), &repo,
                                             None,
                                             &cs,
                                         ) {
                                             let name = slot.display_name().to_string();
-                                            app.push_orch(OrchestratorEventKind::Dispatched { agent: name.clone(), slot: target_g + 1, tool: "claude-code".to_string() });
+                                            app.push_orch(OrchestratorEventKind::Dispatched { agent: name.clone(), slot: target_g + 1, tool: tool_key.clone() });
                                             app.push_ticker(format!("DISPATCH: {} launched in slot {}", name, target_g + 1));
                                             app.push_chat("System", &format!("Dispatched agent {} to slot {}.", name, target_g + 1));
                                             app.slots[target_g] = Some(slot);
@@ -769,7 +772,7 @@ fn main() -> io::Result<()> {
                                                 let mut st = app.ws_state.lock().unwrap();
                                                 st.slots[target_g] = Some(ws_server::AgentSlot {
                                                     callsign: name.clone(),
-                                                    tool: "claude-code".to_string(),
+                                                    tool: tool_key,
                                                     status: ws_server::AgentStatus::Idle,
                                                     task: None,
                                                     repo: Some(util::repo_name_from_path(&repo).to_string()),
