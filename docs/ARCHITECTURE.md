@@ -221,7 +221,6 @@ radio/app/src/main/
 ├── kotlin/com/dispatch/radio/
 │   ├── MainActivity.kt              # Main UI, key dispatch, chat log
 │   ├── SettingsActivity.kt          # Connection settings UI
-│   ├── QrScanActivity.kt            # CameraX + ML Kit QR scanner
 │   ├── PushToTalkManager.kt         # PTT speech recognition
 │   ├── ContinuousListenManager.kt   # Hands-free VAD listening
 │   ├── VolumeKeyBridge.kt           # Singleton key event bridge
@@ -263,7 +262,7 @@ Volume Down (hold)
 
 ### WebSocket Client
 
-OkHttp-based. Connects to `wss://host:port/?psk=<key>`. TLS trust manager accepts self-signed certs; optional SHA-256 certificate pinning from QR scan. Auto-reconnects with exponential backoff (1s to 30s). Sends `list_agents` on connect to sync state. All callbacks posted to main looper.
+OkHttp-based. Connects to `wss://host:port/?psk=<key>`. TLS trust manager accepts self-signed certs; optional SHA-256 certificate pinning. Auto-reconnects with exponential backoff (1s to 30s). Sends `list_agents` on connect to sync state. All callbacks posted to main looper.
 
 ### Volume Key Architecture
 
@@ -282,11 +281,10 @@ When the activity is in the foreground, `dispatchKeyEvent()` handles keys direct
 
 ### Connection Setup
 
-Three paths to configure the console connection:
+Two paths to configure the console connection:
 
 1. **mDNS discovery** -- browse for `_dispatch._tcp` services on the local network
-2. **QR code** -- scan a code containing `wss://host:port/?psk=<key>&fp=<sha256>`
-3. **Manual entry** -- type host, port, and PSK in settings
+2. **Manual entry** -- type host, port, and PSK in settings
 
 ### Chat Log
 

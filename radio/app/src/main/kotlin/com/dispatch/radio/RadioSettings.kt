@@ -44,7 +44,7 @@ class RadioSettings(context: Context) {
         prefs.edit().clear().apply()
     }
 
-    /** TLS certificate fingerprint (SHA-256 hex). Set via QR scan. */
+    /** TLS certificate fingerprint (SHA-256 hex). */
     var certFingerprint: String?
         get() = prefs.getString(KEY_CERT_FP, null)
         set(value) = prefs.edit().putString(KEY_CERT_FP, value).apply()

@@ -1,23 +1,18 @@
 package com.dispatch.radio
 
-import android.Manifest
-import android.content.Intent
-import android.content.pm.PackageManager
 import android.os.Bundle
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.TextView
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
-import androidx.core.content.ContextCompat
 
 /**
  * Settings screen (dispatch-88k.7).
  *
  * - mDNS console discovery (dispatch-ct2.1)
  * - Console IP + port
- * - Pre-shared key (manual entry or QR scan)
+ * - Pre-shared key (manual entry)
  * - Haptic feedback toggle (default on)
  * - Keep screen on toggle (default on)
  * - Speech recognition locale (default en-US)
@@ -36,31 +31,8 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var cbContinuous: CheckBox
     private lateinit var btnSave: Button
     private lateinit var btnReset: Button
-    private lateinit var btnScanQr: Button
     private lateinit var btnDiscover: Button
     private lateinit var tvDiscoverStatus: TextView
-
-    private val qrScanLauncher = registerForActivityResult(
-        ActivityResultContracts.StartActivityForResult()
-    ) { result ->
-        if (result.resultCode == RESULT_OK) {
-            val data = result.data ?: return@registerForActivityResult
-            data.getStringExtra(QrScanActivity.EXTRA_HOST)?.let { etHost.setText(it) }
-            val port = data.getIntExtra(QrScanActivity.EXTRA_PORT, -1)
-            if (port > 0) etPort.setText(port.toString())
-            data.getStringExtra(QrScanActivity.EXTRA_PSK)?.let { etPsk.setText(it) }
-            // Store TLS cert fingerprint from QR (dispatch-ct2.6)
-            data.getStringExtra(QrScanActivity.EXTRA_CERT_FP)?.let {
-                settings.certFingerprint = it
-            }
-        }
-    }
-
-    private val cameraPermissionLauncher = registerForActivityResult(
-        ActivityResultContracts.RequestPermission()
-    ) { granted ->
-        if (granted) launchQrScanner()
-    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -78,7 +50,6 @@ class SettingsActivity : AppCompatActivity() {
         cbContinuous = findViewById(R.id.cb_continuous)
         btnSave = findViewById(R.id.btn_save)
         btnReset = findViewById(R.id.btn_reset)
-        btnScanQr = findViewById(R.id.btn_scan_qr)
         btnDiscover = findViewById(R.id.btn_discover)
         tvDiscoverStatus = findViewById(R.id.tv_discover_status)
 
@@ -86,7 +57,6 @@ class SettingsActivity : AppCompatActivity() {
 
         btnSave.setOnClickListener { saveSettings() }
         btnReset.setOnClickListener { resetToDefaults() }
-        btnScanQr.setOnClickListener { onScanQrClicked() }
         btnDiscover.setOnClickListener { onDiscoverClicked() }
     }
 
@@ -115,20 +85,6 @@ class SettingsActivity : AppCompatActivity() {
                 btnDiscover.isEnabled = true
             }
         }, 5000)
-    }
-
-    private fun onScanQrClicked() {
-        if (ContextCompat.checkSelfPermission(this, Manifest.permission.CAMERA)
-            == PackageManager.PERMISSION_GRANTED
-        ) {
-            launchQrScanner()
-        } else {
-            cameraPermissionLauncher.launch(Manifest.permission.CAMERA)
-        }
-    }
-
-    private fun launchQrScanner() {
-        qrScanLauncher.launch(Intent(this, QrScanActivity::class.java))
     }
 
     private fun loadSettings() {
