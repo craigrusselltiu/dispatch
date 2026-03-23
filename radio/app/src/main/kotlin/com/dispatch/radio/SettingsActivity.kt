@@ -34,6 +34,10 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var btnDiscover: Button
     private lateinit var tvDiscoverStatus: TextView
 
+    /** Values loaded from settings, used to detect manual edits. */
+    private var loadedHost = ""
+    private var loadedPort = ""
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_settings)
@@ -61,13 +65,21 @@ class SettingsActivity : AppCompatActivity() {
     }
 
     private fun onDiscoverClicked() {
+        // Capture whether the user has manually edited the address fields before
+        // starting discovery, so we don't overwrite their changes with a stale
+        // mDNS result from the old console.
+        val userEditedAddress = etHost.text.toString().trim() != loadedHost ||
+            etPort.text.toString().trim() != loadedPort
+
         tvDiscoverStatus.text = "SCANNING..."
         btnDiscover.isEnabled = false
         discovery.startDiscovery(object : ConsoleDiscovery.Listener {
             override fun onConsoleFound(console: ConsoleDiscovery.Console) {
                 discovery.stopDiscovery()
-                etHost.setText(console.host)
-                etPort.setText(console.port.toString())
+                if (!userEditedAddress) {
+                    etHost.setText(console.host)
+                    etPort.setText(console.port.toString())
+                }
                 tvDiscoverStatus.text = "FOUND: ${console.name} (${console.host}:${console.port})"
                 btnDiscover.isEnabled = true
             }
@@ -90,6 +102,8 @@ class SettingsActivity : AppCompatActivity() {
     private fun loadSettings() {
         etHost.setText(settings.consoleHost)
         etPort.setText(settings.consolePort.toString())
+        loadedHost = settings.consoleHost
+        loadedPort = settings.consolePort.toString()
         etPsk.setText(settings.psk)
         etLocale.setText(settings.speechLocale)
         cbHaptic.isChecked = settings.hapticEnabled
