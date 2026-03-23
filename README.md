@@ -123,6 +123,7 @@ Open the `radio/` directory in Android Studio, sync Gradle, and deploy to your p
 ## Key Features
 
 - **LLM orchestrator** -- a persistent headless Claude process acts as the central coordinator. Voice transcripts go directly to it; it responds with tool calls. No command parsing.
+- **Multi-agent support** -- supports Claude Code and GitHub Copilot CLI as AI agents. The orchestrator can dispatch either tool per task. Copilot runs in YOLO mode for fully autonomous operation.
 - **Embedded terminals** -- each pane is a real PTY with full color, interactive TUI support, tab completion, and signal handling.
 - **Git worktree isolation** -- each agent works on its own branch in its own worktree. Agents run in parallel without conflicts and handle their own merging.
 - **Configurable agent names** -- agent callsigns are defined in `config.toml`. The number of entries determines slot count and page layout. Defaults to NATO phonetic alphabet (Alpha through Hotel). All agents are addressable by voice from any page.

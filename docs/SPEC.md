@@ -186,7 +186,7 @@ The console parses the `"action"` field to determine which tool to execute. Para
 
 | Action | Parameters | Description |
 |--------|-----------|-------------|
-| `dispatch` | `repo`, `prompt`, `callsign` (optional) | Dispatch an agent with a prompt. The agent creates its own worktree. Returns slot and callsign. |
+| `dispatch` | `repo`, `prompt`, `callsign` (optional), `tool` (optional) | Dispatch an agent with a prompt. The agent creates its own worktree. Returns slot and callsign. The `tool` parameter selects which AI agent to use: `"claude-code"` (default) or `"copilot"`. |
 | `terminate` | `agent` | Kill an agent by callsign or slot number. Frees the slot. |
 | `merge` | `task_id` | Acknowledge that an agent has merged its branch. |
 | `list_agents` | _(none)_ | List all active agent slots with callsign, tool, working/idle status, and repo. |
@@ -409,7 +409,7 @@ Each agent pane is a real terminal emulator, not a text capture. The console man
 - **Linux/macOS**: uses native Unix PTYs (via `openpty`).
 - **Windows**: uses ConPTY (Console Pseudo Terminal), available on Windows 10 1809+. ConPTY is what Windows Terminal uses internally. The `portable-pty` crate (by the WezTerm author) abstracts over both backends behind a single API, so application code is platform-agnostic.
 
-The rest of the stack is also cross-platform: `crossterm` for terminal input/output, `ratatui` for rendering, `vt100` for escape sequence parsing (it operates on byte streams, so it's OS-independent). Claude Code and `gh copilot` both support Windows natively.
+The rest of the stack is also cross-platform: `crossterm` for terminal input/output, `ratatui` for rendering, `vt100` for escape sequence parsing (it operates on byte streams, so it's OS-independent). Claude Code and GitHub Copilot CLI both support Windows natively.
 
 **Architecture per slot:**
 
@@ -470,7 +470,7 @@ Pages are cycled with `Left` / `Right` arrow keys. The header shows the current 
 │ COPILOT | idle                 │ CLAUDE-CODE | busy                 │
 │ dispatched 14:15 | 17m12s      │ dispatched 14:30 | 2m04s           │
 │ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄      │ ┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄┄      │
-│ ~/project$ gh copilot suggest  │ ~/project$ claude                  │
+│ ~/project$ copilot --yolo  │ ~/project$ claude                  │
 │                                │                                    │
 │ ? What would you like help     │ > Setting up the CI pipeline...    │
 │   with?                        │                                    │
@@ -704,8 +704,10 @@ callsigns = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "H
 
 [tools]
 claude-code = "claude"
-copilot = "gh copilot suggest"
+copilot = "copilot"
 ```
+
+The console automatically adds tool-specific flags when spawning agents: `--dangerously-skip-permissions` and `--system-prompt` for Claude Code, `--yolo` for Copilot (auto-accepts all permissions for autonomous operation).
 
 ### CLI
 

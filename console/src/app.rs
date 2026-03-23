@@ -245,7 +245,7 @@ impl App {
     /// Execute a tool call from the orchestrator agent. Returns the result.
     pub fn execute_tool(&mut self, call: &tools::ToolCall) -> tools::ToolResult {
         match call {
-            tools::ToolCall::Dispatch { repo: _, prompt, callsign: requested_callsign } => {
+            tools::ToolCall::Dispatch { repo: _, prompt, callsign: requested_callsign, tool: requested_tool } => {
                 // Dynamic callsign assignment: agents go into the next
                 // available slot rather than a fixed slot per callsign.
                 let (slot_idx, callsign_for_prompt) = if let Some(cs) = requested_callsign.as_deref() {
@@ -317,12 +317,16 @@ impl App {
 
                 let full_prompt = format!("Your callsign is {}. {}", callsign_for_prompt, prompt);
 
+                // Resolve which tool to use for this dispatch.
+                let effective_tool = requested_tool.as_deref()
+                    .unwrap_or(&self.default_tool)
+                    .to_string();
+
                 // Spawn PTY if slot is empty. Agent creates its own worktree.
                 if self.slots[slot_idx].is_none() {
-                    let tool_key = self.default_tool.clone();
-                    let cmd = self.tool_cmd(&tool_key).to_string();
+                    let cmd = self.tool_cmd(&effective_tool).to_string();
                     match dispatch_slot(
-                        slot_idx, &tool_key, &cmd, self.pane_rows, self.pane_cols,
+                        slot_idx, &effective_tool, &cmd, self.pane_rows, self.pane_cols,
                         None, self.scrollback_lines,
                         repo_name_from_path(&target_repo), &target_repo,
                         Some(&full_prompt),
@@ -351,7 +355,7 @@ impl App {
                 };
 
                 self.push_orch(OrchestratorEventKind::Dispatched {
-                    agent: callsign.clone(), slot: slot_idx + 1, tool: self.default_tool.clone(),
+                    agent: callsign.clone(), slot: slot_idx + 1, tool: effective_tool.clone(),
                 });
                 self.push_ticker(format!(
                     "DISPATCH: {} (slot {})", callsign, slot_idx + 1
@@ -363,7 +367,7 @@ impl App {
                     let mut st = self.ws_state.lock().unwrap();
                     st.slots[slot_idx] = Some(ws_server::AgentSlot {
                         callsign: callsign.clone(),
-                        tool: self.default_tool.clone(),
+                        tool: effective_tool.clone(),
                         status: ws_server::AgentStatus::Busy,
                         task: None,
                         repo: Some(repo_name_from_path(&target_repo).to_string()),
