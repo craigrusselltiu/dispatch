@@ -58,6 +58,8 @@ pub struct ConsoleState {
     pub user_callsign: String,
     /// Display name for the console/orchestrator (default: "Console").
     pub console_name: String,
+    /// Default tool key for dispatching agents (e.g. "claude-code" or "copilot").
+    pub default_tool: String,
 }
 
 impl ConsoleState {
@@ -72,6 +74,7 @@ impl ConsoleState {
             event_tx: None,
             user_callsign: "Dispatch".to_string(),
             console_name: "Console".to_string(),
+            default_tool: "claude-code".to_string(),
         }
     }
 
@@ -249,8 +252,8 @@ pub fn handle_message(raw: RawInbound, state: &SharedState) -> Option<OutboundMs
         }
 
         "dispatch" => {
-            let tool = raw.tool.as_deref().unwrap_or("claude-code").to_string();
             let mut st = state.lock().unwrap();
+            let tool = raw.tool.as_deref().unwrap_or(&st.default_tool).to_string();
 
             let slot = if let Some(s) = raw.slot {
                 s

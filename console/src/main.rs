@@ -114,6 +114,7 @@ fn main() -> io::Result<()> {
         let mut state = ws_server::ConsoleState::new(callsigns.clone());
         state.user_callsign = cfg.identity.user_callsign.clone();
         state.console_name = cfg.identity.console_name.clone();
+        state.default_tool = cfg.default_tool_key().to_string();
         state
     }));
     {
