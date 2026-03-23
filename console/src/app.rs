@@ -49,6 +49,7 @@ impl App {
             tools,
             default_tool,
             ticker_items: Vec::new(),
+            ticker_pending: std::collections::VecDeque::new(),
             ticker_frame_counter: 0,
             workspace,
             repo_select_idx: 0,
@@ -190,20 +191,25 @@ impl App {
     }
 
     /// Push a new independently-scrolling ticker message.
-    /// Each message starts at the right edge and scrolls left on its own.
+    /// If an item is already scrolling, queue the new message so it waits
+    /// rather than overlapping the current display.
     pub fn push_ticker(&mut self, msg: impl Into<String>) {
         let text = msg.into();
-        let char_count = text.chars().count();
-        self.ticker_items.push(TickerItem {
-            text,
-            char_count,
-            offset: 0,
-        });
+        if self.ticker_items.is_empty() && self.ticker_pending.is_empty() {
+            let char_count = text.chars().count();
+            self.ticker_items.push(TickerItem {
+                text,
+                char_count,
+                offset: 0,
+            });
+        } else {
+            self.ticker_pending.push_back(text);
+        }
     }
 
     /// Advance the ticker by one frame (~16ms). Scrolls one char every 3 frames (~50ms).
     pub fn tick_ticker(&mut self) {
-        if self.ticker_items.is_empty() {
+        if self.ticker_items.is_empty() && self.ticker_pending.is_empty() {
             return;
         }
         self.ticker_frame_counter = self.ticker_frame_counter.wrapping_add(1);
@@ -214,6 +220,26 @@ impl App {
             // Remove items that have fully scrolled off the left edge.
             // An item is off-screen when its offset exceeds char_count + generous margin.
             self.ticker_items.retain(|item| item.offset <= item.char_count + 300);
+
+            // Promote a pending item once the last active item has fully entered
+            // the screen (scrolled past its own length + a small gap).
+            if !self.ticker_pending.is_empty() {
+                let can_promote = if let Some(last) = self.ticker_items.last() {
+                    last.offset >= last.char_count + 3
+                } else {
+                    true
+                };
+                if can_promote {
+                    if let Some(text) = self.ticker_pending.pop_front() {
+                        let char_count = text.chars().count();
+                        self.ticker_items.push(TickerItem {
+                            text,
+                            char_count,
+                            offset: 0,
+                        });
+                    }
+                }
+            }
         }
     }
 

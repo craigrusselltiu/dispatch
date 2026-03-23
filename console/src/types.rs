@@ -154,6 +154,7 @@ pub struct App {
     pub default_tool: String,
     // Ticker: LED-style scrolling marquee (independent items)
     pub ticker_items: Vec<TickerItem>,
+    pub ticker_pending: std::collections::VecDeque<String>,
     pub ticker_frame_counter: u8,
     /// Workspace mode: single-repo or multi-repo.
     pub workspace: Workspace,
