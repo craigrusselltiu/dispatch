@@ -145,7 +145,7 @@ pub fn tool_definitions() -> serde_json::Value {
                     },
                     "tool": {
                         "type": "string",
-                        "description": "Optional tool to use: \"claude\" (default) or \"copilot\". When omitted, uses the configured default tool."
+                        "description": "Override the configured AI agent for this dispatch only. Values: \"claude\" or \"copilot\". Omit this parameter to use the configured agent (normal behavior). Only specify when Dispatch explicitly requests a different tool."
                     }
                 },
                 "required": ["repo", "prompt"]

@@ -236,6 +236,8 @@ fn main() -> io::Result<()> {
     let orch_callsigns = callsigns;
     let orch_user_callsign = cfg.identity.user_callsign.clone();
     let orch_console_name = cfg.identity.console_name.clone();
+    let orch_default_tool = cfg.default_tool_key().to_string();
+    let orch_claude_cmd = cfg.tools.get("claude").cloned().unwrap_or_else(|| "claude".to_string());
     let (orch_ready_tx, orch_ready_rx) = mpsc::channel::<Result<orchestrator::Orchestrator, String>>();
     {
         let tx = orch_ready_tx.clone();
@@ -244,11 +246,13 @@ fn main() -> io::Result<()> {
         let cs = orch_callsigns.clone();
         let uc = orch_user_callsign.clone();
         let cn = orch_console_name.clone();
+        let dt = orch_default_tool.clone();
+        let cc = orch_claude_cmd.clone();
         thread::spawn(move || {
             let repo_refs: Vec<&str> = repos.iter().map(|s| s.as_str()).collect();
             let tool_defs = tools::tool_definitions();
-            let system_prompt = orchestrator::build_system_prompt(&repo_refs, &tool_defs, &cs, &uc, &cn);
-            let _ = tx.send(orchestrator::spawn(&system_prompt, &cwd));
+            let system_prompt = orchestrator::build_system_prompt(&repo_refs, &tool_defs, &cs, &uc, &cn, &dt);
+            let _ = tx.send(orchestrator::spawn(&system_prompt, &cwd, &cc));
         });
     }
     app.push_ticker("ORCHESTRATOR: starting...".to_string());
@@ -476,11 +480,13 @@ fn main() -> io::Result<()> {
                     let cs = orch_callsigns.clone();
                     let uc = orch_user_callsign.clone();
                     let cn = orch_console_name.clone();
+                    let dt = orch_default_tool.clone();
+                    let cc = orch_claude_cmd.clone();
                     thread::spawn(move || {
                         let repo_refs: Vec<&str> = repos.iter().map(|s| s.as_str()).collect();
                         let tool_defs = tools::tool_definitions();
-                        let system_prompt = orchestrator::build_system_prompt(&repo_refs, &tool_defs, &cs, &uc, &cn);
-                        let _ = tx.send(orchestrator::spawn(&system_prompt, &cwd));
+                        let system_prompt = orchestrator::build_system_prompt(&repo_refs, &tool_defs, &cs, &uc, &cn, &dt);
+                        let _ = tx.send(orchestrator::spawn(&system_prompt, &cwd, &cc));
                     });
                 }
             }
@@ -864,11 +870,13 @@ fn main() -> io::Result<()> {
                                             let cs = orch_callsigns.clone();
                                             let uc = orch_user_callsign.clone();
                                             let cn = orch_console_name.clone();
+                                            let dt = orch_default_tool.clone();
+                                            let cc = orch_claude_cmd.clone();
                                             thread::spawn(move || {
                                                 let repo_refs: Vec<&str> = repos.iter().map(|s| s.as_str()).collect();
                                                 let tool_defs = tools::tool_definitions();
-                                                let system_prompt = orchestrator::build_system_prompt(&repo_refs, &tool_defs, &cs, &uc, &cn);
-                                                let _ = tx.send(orchestrator::spawn(&system_prompt, &cwd));
+                                                let system_prompt = orchestrator::build_system_prompt(&repo_refs, &tool_defs, &cs, &uc, &cn, &dt);
+                                                let _ = tx.send(orchestrator::spawn(&system_prompt, &cwd, &cc));
                                             });
                                         }
                                     }
