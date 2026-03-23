@@ -76,7 +76,7 @@ impl ConsoleState {
             event_tx: None,
             user_callsign: "Dispatch".to_string(),
             console_name: "Console".to_string(),
-            default_tool: String::new(),
+            default_tool: "claude-code".to_string(),
         }
     }
 

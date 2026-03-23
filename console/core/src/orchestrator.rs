@@ -1,6 +1,7 @@
 // Persistent LLM orchestrator (dispatch-h62).
 //
-// Spawns the configured AI tool process as the orchestrator.
+// Spawns a Claude Code process as the orchestrator (always Claude -- the
+// protocol depends on stream-json I/O and session_id handshake).
 // Voice transcripts and system events are piped in as user messages. The
 // orchestrator responds with reasoning and structured action JSON blocks,
 // which the console parses and executes.

@@ -190,8 +190,12 @@ fn main() -> io::Result<()> {
     let orch_callsigns = callsigns;
     let orch_user_callsign = cfg.identity.user_callsign.clone();
     let orch_console_name = cfg.identity.console_name.clone();
-    let orch_tool_key = cfg.default_tool_key().to_string();
-    let orch_tool_cmd = app.tool_cmd(&orch_tool_key).to_string();
+    // The orchestrator always uses Claude Code regardless of the configured
+    // default tool.  Its protocol (stream-json, action blocks, session_id) is
+    // Claude-specific; non-Claude tools never send TurnComplete, which would
+    // leave the state machine stuck in Responding forever.
+    let orch_tool_key = "claude-code".to_string();
+    let orch_tool_cmd = app.tool_cmd("claude-code").to_string();
     let (orch_ready_tx, orch_ready_rx) = mpsc::channel::<Result<orchestrator::Orchestrator, String>>();
     {
         let tx = orch_ready_tx.clone();
