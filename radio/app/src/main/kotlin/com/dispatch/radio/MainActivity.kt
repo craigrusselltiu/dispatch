@@ -4,10 +4,14 @@ import android.Manifest
 import android.animation.ObjectAnimator
 import android.animation.ValueAnimator
 import android.app.AlertDialog
+import android.content.ComponentName
+import android.content.Context
 import android.content.Intent
+import android.content.ServiceConnection
 import android.content.pm.PackageManager
 import android.net.Uri
 import android.os.Bundle
+import android.os.IBinder
 import android.provider.MediaStore
 import android.util.Base64
 import android.view.KeyEvent
@@ -38,6 +42,9 @@ import java.io.File
  *
  * Integrates: WebSocket client (dispatch-88k.5), UI (dispatch-88k.6),
  *             settings (dispatch-88k.7), haptics (dispatch-88k.8).
+ *
+ * The WebSocket connection is owned by [RadioService] so it survives
+ * when the activity is backgrounded or the screen is off.
  */
 class MainActivity : AppCompatActivity() {
 
@@ -46,7 +53,10 @@ class MainActivity : AppCompatActivity() {
     private lateinit var volumeUpHandler: VolumeUpHandler
     private lateinit var pttManager: PushToTalkManager
     private var continuousManager: ContinuousListenManager? = null
-    private var wsClient: RadioWebSocketClient? = null
+
+    // Foreground service that owns the WebSocket connection
+    private var service: RadioService? = null
+    private var serviceBound = false
 
     // App state synced from console
     private var agents: List<Agent> = emptyList()
@@ -89,6 +99,48 @@ class MainActivity : AppCompatActivity() {
         private const val MAX_IMAGE_BYTES = 5 * 1024 * 1024 // 5 MB
     }
 
+    // ── Service binding ──────────────────────────────────────────────────
+
+    private val wsListener = object : RadioWebSocketClient.Listener {
+        override fun onConnected() = setConnected(true)
+        override fun onDisconnected() = setConnected(false)
+        override fun onMessage(text: String) = handleMessage(text)
+    }
+
+    private val serviceConnection = object : ServiceConnection {
+        override fun onServiceConnected(name: ComponentName, binder: IBinder) {
+            service = (binder as RadioService.LocalBinder).getService()
+            serviceBound = true
+            service?.listener = wsListener
+            if (service?.isConnected == true) {
+                // Service already connected (activity was recreated) — refresh state
+                setConnected(true)
+                service?.send("""{"type":"list_agents"}""")
+            } else {
+                connectServiceWebSocket()
+            }
+        }
+
+        override fun onServiceDisconnected(name: ComponentName) {
+            service = null
+            serviceBound = false
+        }
+    }
+
+    /** Send a message through the service's WebSocket. */
+    private fun wsSend(text: String): Boolean = service?.send(text) ?: false
+
+    /** Tell the service to connect/reconnect with current settings. */
+    private fun connectServiceWebSocket() {
+        haptics.enabled = settings.hapticEnabled
+        service?.connectWebSocket(
+            settings.consoleHost, settings.consolePort,
+            settings.psk, settings.certFingerprint
+        )
+    }
+
+    // ── Lifecycle ────────────────────────────────────────────────────────
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_main)
@@ -116,7 +168,7 @@ class MainActivity : AppCompatActivity() {
             locale = settings.speechLocale,
             onListeningStart = {
                 haptics.listeningStart()
-                wsClient?.send("""{"type":"radio_status","state":"listening"}""")
+                wsSend("""{"type":"radio_status","state":"listening"}""")
                 tvListeningLabel.text = "LISTENING"
                 flListening.visibility = View.VISIBLE
                 tvPartial.text = ""
@@ -129,17 +181,17 @@ class MainActivity : AppCompatActivity() {
                 flListening.visibility = View.INVISIBLE
                 audioLevelView.level = 0f
                 haptics.sendConfirm()
-                wsClient?.send("""{"type":"radio_status","state":"idle"}""")
+                wsSend("""{"type":"radio_status","state":"idle"}""")
                 handleTranscript(transcript)
             },
             onEmptyTranscript = {
                 flListening.visibility = View.INVISIBLE
                 haptics.emptyTranscript()
-                wsClient?.send("""{"type":"radio_status","state":"idle"}""")
+                wsSend("""{"type":"radio_status","state":"idle"}""")
             },
             onError = {
                 flListening.visibility = View.INVISIBLE
-                wsClient?.send("""{"type":"radio_status","state":"idle"}""")
+                wsSend("""{"type":"radio_status","state":"idle"}""")
             },
             onRmsChanged = { level ->
                 audioLevelView.level = level
@@ -147,7 +199,11 @@ class MainActivity : AppCompatActivity() {
         )
 
         initContinuousManager()
-        initWebSocket()
+
+        // Start and bind to the foreground service that owns the WebSocket
+        val serviceIntent = Intent(this, RadioService::class.java)
+        startForegroundService(serviceIntent)
+        bindService(serviceIntent, serviceConnection, Context.BIND_AUTO_CREATE)
 
         findViewById<android.widget.ImageView>(R.id.btn_settings).setOnClickListener {
             @Suppress("DEPRECATION")
@@ -155,7 +211,7 @@ class MainActivity : AppCompatActivity() {
         }
 
         findViewById<android.widget.ImageView>(R.id.btn_interrupt).setOnClickListener {
-            wsClient?.send("""{"type":"interrupt"}""")
+            wsSend("""{"type":"interrupt"}""")
             haptics.sendConfirm()
         }
 
@@ -189,7 +245,7 @@ class MainActivity : AppCompatActivity() {
             context = this,
             locale = settings.speechLocale,
             onListeningStart = {
-                wsClient?.send("""{"type":"radio_status","state":"listening"}""")
+                wsSend("""{"type":"radio_status","state":"listening"}""")
                 tvListeningLabel.text = "CONTINUOUS"
                 flListening.visibility = View.VISIBLE
                 tvPartial.text = ""
@@ -232,26 +288,6 @@ class MainActivity : AppCompatActivity() {
     private fun applyScreenOnFlag() {
         if (settings.keepScreenOn) {
             window.addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON)
-        }
-    }
-
-    private fun initWebSocket() {
-        haptics.enabled = settings.hapticEnabled
-        try {
-            wsClient = RadioWebSocketClient(
-                host = settings.consoleHost,
-                port = settings.consolePort,
-                psk = settings.psk,
-                listener = object : RadioWebSocketClient.Listener {
-                    override fun onConnected() = setConnected(true)
-                    override fun onDisconnected() = setConnected(false)
-                    override fun onMessage(text: String) = handleMessage(text)
-                },
-                certFingerprint = settings.certFingerprint,
-            )
-            wsClient?.connect()
-        } catch (_: Exception) {
-            wsClient = null
         }
     }
 
@@ -313,7 +349,7 @@ class MainActivity : AppCompatActivity() {
             haptics.sendConfirm()
             flListening.visibility = View.INVISIBLE
             audioLevelView.level = 0f
-            wsClient?.send("""{"type":"radio_status","state":"idle"}""")
+            wsSend("""{"type":"radio_status","state":"idle"}""")
         } else {
             haptics.listeningStart()
             manager.start()
@@ -324,7 +360,7 @@ class MainActivity : AppCompatActivity() {
     // parsing commands locally. The orchestrator decides what to do.
     private fun handleTranscript(transcript: String) {
         val msg = """{"type":"send","text":${gson.toJson(transcript)},"auto":true}"""
-        wsClient?.send(msg)
+        wsSend(msg)
     }
 
     /** Submit typed text through the same pipeline as voice transcripts. */
@@ -476,16 +512,15 @@ class MainActivity : AppCompatActivity() {
             // Reload settings and reconnect
             settings = RadioSettings(this)
             try {
-                wsClient?.disconnect()
                 pttManager.destroy()
                 continuousManager?.destroy()
-                initWebSocket()
+                connectServiceWebSocket()
                 pttManager = PushToTalkManager(
                     context = this,
                     locale = settings.speechLocale,
                     onListeningStart = {
                         haptics.listeningStart()
-                        wsClient?.send("""{"type":"radio_status","state":"listening"}""")
+                        wsSend("""{"type":"radio_status","state":"listening"}""")
                         tvListeningLabel.text = "LISTENING"
                         flListening.visibility = View.VISIBLE
                         tvPartial.text = ""
@@ -496,17 +531,17 @@ class MainActivity : AppCompatActivity() {
                         flListening.visibility = View.INVISIBLE
                         audioLevelView.level = 0f
                         haptics.sendConfirm()
-                        wsClient?.send("""{"type":"radio_status","state":"idle"}""")
+                        wsSend("""{"type":"radio_status","state":"idle"}""")
                         handleTranscript(transcript)
                     },
                     onEmptyTranscript = {
                         flListening.visibility = View.INVISIBLE
                         haptics.emptyTranscript()
-                        wsClient?.send("""{"type":"radio_status","state":"idle"}""")
+                        wsSend("""{"type":"radio_status","state":"idle"}""")
                     },
                     onError = {
                         flListening.visibility = View.INVISIBLE
-                        wsClient?.send("""{"type":"radio_status","state":"idle"}""")
+                        wsSend("""{"type":"radio_status","state":"idle"}""")
                     },
                     onRmsChanged = { level ->
                         audioLevelView.level = level
@@ -591,7 +626,7 @@ class MainActivity : AppCompatActivity() {
             } ?: "image.jpg"
 
             val msg = """{"type":"send_image","callsign":${gson.toJson(callsign)},"data":"$b64","filename":${gson.toJson(filename)}}"""
-            val sent = wsClient?.send(msg) ?: false
+            val sent = wsSend(msg)
             if (!sent) {
                 addChatMessage("System", "Failed to send image (not connected).")
             }
@@ -607,6 +642,11 @@ class MainActivity : AppCompatActivity() {
         VolumeKeyBridge.isActivityInForeground = false
         pttManager.destroy()
         continuousManager?.destroy()
-        wsClient?.disconnect()
+        if (serviceBound) {
+            service?.listener = null
+            unbindService(serviceConnection)
+            serviceBound = false
+        }
+        // Service keeps running — WebSocket stays alive when backgrounded
     }
 }
