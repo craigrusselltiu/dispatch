@@ -40,6 +40,12 @@ class PushToTalkManager(
     /** Transcript accumulated across recognizer auto-restarts within a single PTT hold. */
     private var accumulatedTranscript = ""
 
+    /** Number of times the recognizer has auto-restarted within the current PTT hold. */
+    private var restartCount = 0
+
+    /** Timestamp (ms) when the current PTT hold started. */
+    private var holdStartTime = 0L
+
     private val handler = Handler(Looper.getMainLooper())
 
     /** Call from onKeyDown for KEYCODE_VOLUME_DOWN. */
@@ -49,6 +55,8 @@ class PushToTalkManager(
         lastPartial = ""
         resultDelivered = false
         accumulatedTranscript = ""
+        restartCount = 0
+        holdStartTime = System.currentTimeMillis()
 
         ensureRecognizer()
         recognizer?.startListening(buildRecognizerIntent())
@@ -91,6 +99,13 @@ class PushToTalkManager(
         // immediately rather than buffering audio for a long expected utterance.
         // The silence-length extras above already prevent auto-stop.
         putExtra(RecognizerIntent.EXTRA_SPEECH_INPUT_MINIMUM_LENGTH_MILLIS, 50L)
+    }
+
+    /** Whether the recognizer can auto-restart (within hold-duration and restart-count limits). */
+    private fun canRestart(): Boolean {
+        if (restartCount >= MAX_RESTARTS) return false
+        if (System.currentTimeMillis() - holdStartTime >= MAX_HOLD_DURATION_MS) return false
+        return true
     }
 
     /** Combine accumulated transcript with the current segment. */
@@ -144,14 +159,16 @@ class PushToTalkManager(
                 ?.firstOrNull()
                 ?: lastPartial
 
-            if (listening) {
+            if (listening && canRestart()) {
                 // Recognizer auto-completed while button still held.
                 // Accumulate what we have and restart to keep capturing speech.
+                restartCount++
                 accumulatedTranscript = combinedTranscript(transcript)
                 lastPartial = ""
                 recognizer?.startListening(buildRecognizerIntent())
             } else {
-                // Button released — deliver the final combined result.
+                // Button released or restart limit reached — deliver the final combined result.
+                listening = false
                 resultDelivered = true
                 handler.removeCallbacksAndMessages(null)
                 val full = combinedTranscript(transcript)
@@ -166,16 +183,18 @@ class PushToTalkManager(
         override fun onError(error: Int) {
             if (resultDelivered) return
 
-            if (listening) {
+            if (listening && canRestart()) {
                 // Recognizer errored while button still held.
                 // Save any partial transcript and restart.
+                restartCount++
                 if (lastPartial.isNotBlank()) {
                     accumulatedTranscript = combinedTranscript(lastPartial)
                     lastPartial = ""
                 }
                 recognizer?.startListening(buildRecognizerIntent())
             } else {
-                // Button released — deliver whatever we have.
+                // Button released or restart limit reached — deliver whatever we have.
+                listening = false
                 deliverIfPending()
             }
         }
@@ -186,5 +205,11 @@ class PushToTalkManager(
     companion object {
         /** Grace period for the safety-net delivery after stopListening(). */
         private const val STOP_SAFETY_DELAY_MS = 500L
+
+        /** Maximum number of auto-restarts within a single PTT hold. */
+        private const val MAX_RESTARTS = 5
+
+        /** Maximum duration (ms) for a single PTT hold before auto-delivering. */
+        private const val MAX_HOLD_DURATION_MS = 120_000L
     }
 }
