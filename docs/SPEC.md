@@ -703,8 +703,10 @@ scrollback_lines = 1000
 callsigns = ["Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel", "India", "Juliet", "Kilo", "Lima", "Mike", "November", "Oscar", "Papa", "Quebec", "Romeo", "Sierra", "Tango", "Uniform", "Victor", "Whiskey", "X-ray", "Yankee", "Zulu"]
 
 [tools]
+# Which AI coding agent to use when dispatching: "claude-code" or "copilot".
+ai-agent = "claude-code"
 claude-code = "claude"
-copilot = "gh copilot suggest"
+copilot = "gh copilot --"
 ```
 
 ### CLI

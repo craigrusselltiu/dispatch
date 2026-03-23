@@ -87,10 +87,11 @@ pub fn strip_event_lines(text: &str) -> String {
         .join("\n")
 }
 
-/// Clear stale `.dispatch/messages/` and `.dispatch/images/` contents for a repo.
+/// Clear stale `.dispatch/messages/`, `.dispatch/images/`, and
+/// `.dispatch/instructions/` contents for a repo.
 /// Called at startup to manage disk space. Removes files only (not subdirectories).
 pub fn clean_dispatch_dirs(repo_root: &str) {
-    for subdir in &["messages", "images"] {
+    for subdir in &["messages", "images", "instructions"] {
         let dir = format!("{}/.dispatch/{}", repo_root, subdir);
         if let Ok(entries) = std::fs::read_dir(&dir) {
             for entry in entries.flatten() {

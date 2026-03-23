@@ -120,7 +120,9 @@ Each slot holds one running agent process in a PTY. Slots are indexed 0-based in
 1. `pty::dispatch_slot()` creates the PTY via `portable-pty`
 2. Reads `docs/AGENTS.md` for agent instructions, appends shared memory from `.dispatch/MEMORY.md`
 3. Sets `DISPATCH_MSG_FILE` env var pointing to `.dispatch/messages/{callsign}`
-4. Spawns `claude --system-prompt <prompt> --dangerously-skip-permissions [task]`
+4. Tool-specific spawn:
+   - **claude-code**: `claude --system-prompt <instructions> --dangerously-skip-permissions [task]`
+   - **Other tools**: Writes instructions to `.dispatch/instructions/{callsign}.md`, sets `DISPATCH_INSTRUCTIONS_FILE` env var, and prepends an instruction-file reference to the task prompt
 5. Starts a reader thread that feeds output to the vt100 parser and updates the idle-detection timestamp
 6. Returns `SlotState` to the main thread
 
@@ -199,8 +201,12 @@ user_callsign = "Dispatch"
 console_name = "Console"
 
 [tools]
+ai-agent = "claude-code"
 claude-code = "claude"
+copilot = "gh copilot --"
 ```
+
+The `ai-agent` key selects which tool is used when dispatching agents. Tool commands are resolved from the same table. The orchestrator always uses Claude Code regardless of this setting.
 
 Callsigns are dynamically assigned from the pool -- each new agent gets the next unused name. The pool size determines max agents and page count (4 per page).
 

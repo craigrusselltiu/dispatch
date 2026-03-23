@@ -105,30 +105,64 @@ pub fn dispatch_slot(
     // instead of echoing to the terminal. This eliminates terminal noise issues.
     cmd.env("DISPATCH_MSG_FILE", &msg_file);
 
-    // Tool-specific flags for agent dispatch.
+    // Build agent instructions from AGENTS.md + shared memory.
+    // All tools need these instructions to participate in the dispatch workflow
+    // (worktrees, callsigns, status messages, merge procedure).
+    let agents_md_path = format!("{}/docs/AGENTS.md", repo_root);
+    let instructions = std::fs::read_to_string(&agents_md_path).ok().map(|mut text| {
+        let memory = read_memory_file(repo_root);
+        let memory = memory.trim();
+        if !memory.is_empty() {
+            text.push_str("\n\n---\n\n## Shared Memory (from prior agents)\n\n");
+            text.push_str(memory);
+            text.push('\n');
+        }
+        text
+    });
+
+    // For non-Claude tools, write instructions to a file the agent can read.
+    // Claude gets them via --system-prompt; other tools reference the file.
+    let instructions_file = if tool_key != "claude-code" {
+        if let Some(ref text) = instructions {
+            let dir = format!("{}/.dispatch/instructions", repo_root);
+            let _ = std::fs::create_dir_all(&dir);
+            let path = format!("{}/{}.md", dir, callsign);
+            let _ = std::fs::write(&path, text);
+            cmd.env("DISPATCH_INSTRUCTIONS_FILE", &path);
+            Some(path)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // Tool-specific CLI flags.
     match tool_key {
         "claude-code" => {
-            let agents_md_path = format!("{}/docs/AGENTS.md", repo_root);
-            if let Ok(mut instructions) = std::fs::read_to_string(&agents_md_path) {
-                let memory = read_memory_file(repo_root);
-                let memory = memory.trim();
-                if !memory.is_empty() {
-                    instructions.push_str("\n\n---\n\n## Shared Memory (from prior agents)\n\n");
-                    instructions.push_str(memory);
-                    instructions.push('\n');
-                }
+            if let Some(ref text) = instructions {
                 cmd.arg("--system-prompt");
-                cmd.arg(&instructions);
+                cmd.arg(text);
             }
             cmd.arg("--dangerously-skip-permissions");
         }
-        "copilot" => {
-            cmd.arg("--allow-all-tools");
-        }
         _ => {}
     }
+
+    // Append initial prompt. For non-Claude tools with instructions,
+    // prepend a reference to the instructions file so the agent reads
+    // the dispatch workflow before starting its task.
     if let Some(prompt) = initial_prompt {
-        cmd.arg(prompt);
+        if let Some(ref path) = instructions_file {
+            cmd.arg(&format!(
+                "IMPORTANT: First read your full agent instructions at {} — they explain the worktree workflow, status messages, and merge procedure you must follow. Then: {}",
+                path, prompt
+            ));
+        } else {
+            cmd.arg(prompt);
+        }
+    } else if let Some(ref path) = instructions_file {
+        cmd.arg(&format!("Read your agent instructions at {}", path));
     }
     cmd.cwd(cwd.unwrap_or(repo_root));
 
