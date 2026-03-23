@@ -49,7 +49,14 @@ pub async fn run_server(state: SharedState, bind: String, port: u16, psk: String
         tokio::spawn(async move {
             let tls_stream = match tls.accept(stream).await {
                 Ok(s) => s,
-                Err(_) => {
+                Err(e) => {
+                    let st = state.lock().unwrap();
+                    if let Some(tx) = &st.event_tx {
+                        let _ = tx.send(WsEvent::TlsError {
+                            addr: peer_addr.to_string(),
+                            error: e.to_string(),
+                        });
+                    }
                     return;
                 }
             };

@@ -1,6 +1,6 @@
 // Persistent LLM orchestrator (dispatch-h62).
 //
-// Spawns a headless `claude` process using stream-json I/O as the orchestrator.
+// Spawns the configured AI tool process as the orchestrator.
 // Voice transcripts and system events are piped in as user messages. The
 // orchestrator responds with reasoning and structured action JSON blocks,
 // which the console parses and executes.
@@ -43,8 +43,10 @@ pub struct Orchestrator {
     pub state: OrchestratorState,
     /// Queued messages to send once the current turn completes.
     pending: std::collections::VecDeque<String>,
-    /// Session ID from the init message.
+    /// Session ID from the init message (Claude-specific).
     session_id: String,
+    /// Tool key (e.g. "claude-code" or "copilot") -- determines wire protocol.
+    tool_key: String,
 }
 
 // ── System prompt ────────────────────────────────────────────────────────────
@@ -82,102 +84,152 @@ pub fn build_system_prompt(
 
 // ── Spawn ────────────────────────────────────────────────────────────────────
 
-/// Spawn the orchestrator process. Returns None if the spawn fails.
-pub fn spawn(system_prompt: &str, cwd: &str) -> Option<Orchestrator> {
-    let mut cmd = Command::new("claude");
-    cmd.args([
-        "-p",
-        "--output-format", "stream-json",
-        "--input-format", "stream-json",
-        "--verbose",
-        "--system-prompt", system_prompt,
-    ]);
+/// Spawn the orchestrator process. Returns an error message if the spawn fails.
+///
+/// `tool_key` is the config key (e.g. "claude-code" or "copilot") and `tool_cmd`
+/// is the resolved command string (e.g. "claude" or "gh copilot --").
+pub fn spawn(system_prompt: &str, cwd: &str, tool_key: &str, tool_cmd: &str) -> Result<Orchestrator, String> {
+    let parts: Vec<&str> = tool_cmd.split_whitespace().collect();
+    if parts.is_empty() {
+        return Err("tool command is empty".to_string());
+    }
+    let mut cmd = Command::new(parts[0]);
+    if parts.len() > 1 {
+        cmd.args(&parts[1..]);
+    }
+    match tool_key {
+        "claude-code" => {
+            cmd.args([
+                "-p",
+                "--output-format", "stream-json",
+                "--input-format", "stream-json",
+                "--verbose",
+                "--system-prompt", system_prompt,
+            ]);
+        }
+        "copilot" => {
+            cmd.args([
+                "--output-format", "json",
+            ]);
+        }
+        _ => {}
+    }
     cmd.current_dir(cwd);
     cmd.stdin(Stdio::piped());
     cmd.stdout(Stdio::piped());
     cmd.stderr(Stdio::null());
 
-    let mut child = cmd.spawn().ok()?;
-    let stdin = child.stdin.take()?;
-    let stdout = child.stdout.take()?;
+    let mut child = cmd.spawn().map_err(|e| format!("failed to spawn '{tool_cmd}': {e}"))?;
+    let stdin = child.stdin.take().ok_or("failed to open orchestrator stdin")?;
+    let stdout = child.stdout.take().ok_or("failed to open orchestrator stdout")?;
 
     let (tx, rx) = mpsc::channel();
-    let (sid_tx, sid_rx) = mpsc::channel();
 
-    // Reader thread: parse stream-json output line by line.
-    thread::spawn(move || {
-        let reader = BufReader::new(stdout);
-        let mut sent_sid = false;
-        for line in reader.lines() {
-            let line = match line {
-                Ok(l) => l,
-                Err(_) => break,
-            };
-            let trimmed = line.trim();
-            if trimmed.is_empty() {
-                continue;
-            }
+    if tool_key == "claude-code" {
+        let (sid_tx, sid_rx) = mpsc::channel();
 
-            // Parse the JSON line.
-            let parsed: serde_json::Value = match serde_json::from_str(trimmed) {
-                Ok(v) => v,
-                Err(_) => continue,
-            };
-
-            // Capture session_id from the first message that has one.
-            if !sent_sid {
-                if let Some(sid) = parsed.get("session_id").and_then(|v| v.as_str()) {
-                    let _ = sid_tx.send(sid.to_string());
-                    sent_sid = true;
+        // Reader thread: parse stream-json output line by line.
+        thread::spawn(move || {
+            let reader = BufReader::new(stdout);
+            let mut sent_sid = false;
+            for line in reader.lines() {
+                let line = match line {
+                    Ok(l) => l,
+                    Err(_) => break,
+                };
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
                 }
-            }
 
-            let msg_type = parsed.get("type").and_then(|v| v.as_str()).unwrap_or("");
+                // Parse the JSON line.
+                let parsed: serde_json::Value = match serde_json::from_str(trimmed) {
+                    Ok(v) => v,
+                    Err(_) => continue,
+                };
 
-            match msg_type {
-                "assistant" => {
-                    // Extract text from message.content[].text
-                    if let Some(content) = parsed
-                        .get("message")
-                        .and_then(|m| m.get("content"))
-                        .and_then(|c| c.as_array())
-                    {
-                        for block in content {
-                            if block.get("type").and_then(|t| t.as_str()) == Some("text") {
-                                if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
-                                    if !text.is_empty() {
-                                        let _ = tx.send(OrchestratorOutput::Text(text.to_string()));
+                // Capture session_id from the first message that has one.
+                if !sent_sid {
+                    if let Some(sid) = parsed.get("session_id").and_then(|v| v.as_str()) {
+                        let _ = sid_tx.send(sid.to_string());
+                        sent_sid = true;
+                    }
+                }
+
+                let msg_type = parsed.get("type").and_then(|v| v.as_str()).unwrap_or("");
+
+                match msg_type {
+                    "assistant" => {
+                        // Extract text from message.content[].text
+                        if let Some(content) = parsed
+                            .get("message")
+                            .and_then(|m| m.get("content"))
+                            .and_then(|c| c.as_array())
+                        {
+                            for block in content {
+                                if block.get("type").and_then(|t| t.as_str()) == Some("text") {
+                                    if let Some(text) = block.get("text").and_then(|t| t.as_str()) {
+                                        if !text.is_empty() {
+                                            let _ = tx.send(OrchestratorOutput::Text(text.to_string()));
+                                        }
                                     }
                                 }
                             }
                         }
                     }
-                }
-                "result" => {
-                    // Don't emit Text here -- the same content was already sent
-                    // via the "assistant" message. Only signal turn completion.
-                    let _ = tx.send(OrchestratorOutput::TurnComplete);
-                }
-                _ => {
-                    // init, rate_limit_event, etc. — ignore.
+                    "result" => {
+                        // Don't emit Text here -- the same content was already sent
+                        // via the "assistant" message. Only signal turn completion.
+                        let _ = tx.send(OrchestratorOutput::TurnComplete);
+                    }
+                    _ => {
+                        // init, rate_limit_event, etc. — ignore.
+                    }
                 }
             }
-        }
-        let _ = tx.send(OrchestratorOutput::Exited);
-    });
+            let _ = tx.send(OrchestratorOutput::Exited);
+        });
 
-    // Wait briefly for the init message to get the session_id.
-    let session_id = sid_rx.recv_timeout(std::time::Duration::from_secs(10))
-        .unwrap_or_else(|_| "default".to_string());
+        // Wait briefly for the init message to get the session_id.
+        let session_id = sid_rx.recv_timeout(std::time::Duration::from_secs(10))
+            .unwrap_or_else(|_| "default".to_string());
 
-    Some(Orchestrator {
-        child,
-        stdin,
-        rx,
-        state: OrchestratorState::Idle,
-        pending: std::collections::VecDeque::new(),
-        session_id,
-    })
+        Ok(Orchestrator {
+            child,
+            stdin,
+            rx,
+            state: OrchestratorState::Idle,
+            pending: std::collections::VecDeque::new(),
+            session_id,
+            tool_key: tool_key.to_string(),
+        })
+    } else {
+        // Non-Claude tool: simple line-based reader, no session_id handshake.
+        thread::spawn(move || {
+            let reader = BufReader::new(stdout);
+            for line in reader.lines() {
+                let line = match line {
+                    Ok(l) => l,
+                    Err(_) => break,
+                };
+                let trimmed = line.trim();
+                if !trimmed.is_empty() {
+                    let _ = tx.send(OrchestratorOutput::Text(trimmed.to_string()));
+                }
+            }
+            let _ = tx.send(OrchestratorOutput::Exited);
+        });
+
+        Ok(Orchestrator {
+            child,
+            stdin,
+            rx,
+            state: OrchestratorState::Idle,
+            pending: std::collections::VecDeque::new(),
+            session_id: "default".to_string(),
+            tool_key: tool_key.to_string(),
+        })
+    }
 }
 
 // ── Methods ──────────────────────────────────────────────────────────────────
@@ -198,16 +250,20 @@ impl Orchestrator {
 
     /// Send directly (bypasses queue check).
     fn send_raw(&mut self, content: &str) {
-        let msg = serde_json::json!({
-            "type": "user",
-            "message": {
-                "role": "user",
-                "content": content
-            },
-            "session_id": self.session_id,
-            "parent_tool_use_id": null
-        });
-        let line = format!("{}\n", msg);
+        let line = if self.tool_key == "claude-code" {
+            let msg = serde_json::json!({
+                "type": "user",
+                "message": {
+                    "role": "user",
+                    "content": content
+                },
+                "session_id": self.session_id,
+                "parent_tool_use_id": null
+            });
+            format!("{}\n", msg)
+        } else {
+            format!("{}\n", content)
+        };
         if self.stdin.write_all(line.as_bytes()).is_err() || self.stdin.flush().is_err() {
             self.state = OrchestratorState::Dead;
             return;

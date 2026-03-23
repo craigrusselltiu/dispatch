@@ -190,7 +190,9 @@ fn main() -> io::Result<()> {
     let orch_callsigns = callsigns;
     let orch_user_callsign = cfg.identity.user_callsign.clone();
     let orch_console_name = cfg.identity.console_name.clone();
-    let (orch_ready_tx, orch_ready_rx) = mpsc::channel::<orchestrator::Orchestrator>();
+    let orch_tool_key = cfg.default_tool_key().to_string();
+    let orch_tool_cmd = app.tool_cmd(&orch_tool_key).to_string();
+    let (orch_ready_tx, orch_ready_rx) = mpsc::channel::<Result<orchestrator::Orchestrator, String>>();
     {
         let tx = orch_ready_tx.clone();
         let repos = orch_repos.clone();
@@ -198,13 +200,13 @@ fn main() -> io::Result<()> {
         let cs = orch_callsigns.clone();
         let uc = orch_user_callsign.clone();
         let cn = orch_console_name.clone();
+        let tk = orch_tool_key.clone();
+        let tc = orch_tool_cmd.clone();
         thread::spawn(move || {
             let repo_refs: Vec<&str> = repos.iter().map(|s| s.as_str()).collect();
             let tool_defs = tools::tool_definitions();
             let system_prompt = orchestrator::build_system_prompt(&repo_refs, &tool_defs, &cs, &uc, &cn);
-            if let Some(orch) = orchestrator::spawn(&system_prompt, &cwd) {
-                let _ = tx.send(orch);
-            }
+            let _ = tx.send(orchestrator::spawn(&system_prompt, &cwd, &tk, &tc));
         });
     }
     app.push_ticker("ORCHESTRATOR: starting...".to_string());
@@ -322,15 +324,23 @@ fn main() -> io::Result<()> {
 
         // dispatch-guj: pick up background-spawned orchestrator when ready.
         if app.orchestrator.is_none() {
-            if let Ok(orch) = orch_ready_rx.try_recv() {
-                app.orchestrator = Some(orch);
-                app.push_ticker("ORCHESTRATOR: online".to_string());
-                app.push_chat("System", "Orchestrator online.");
-                // Flush any voice messages that arrived before orchestrator was ready.
-                let pending: Vec<String> = app.pending_voice.drain(..).collect();
-                if let Some(orch) = &mut app.orchestrator {
-                    for msg in pending {
-                        orch.send_message(&format!("[MIC] {}", msg));
+            if let Ok(result) = orch_ready_rx.try_recv() {
+                match result {
+                    Ok(orch) => {
+                        app.orchestrator = Some(orch);
+                        app.push_ticker("ORCHESTRATOR: online".to_string());
+                        app.push_chat("System", "Orchestrator online.");
+                        // Flush any voice messages that arrived before orchestrator was ready.
+                        let pending: Vec<String> = app.pending_voice.drain(..).collect();
+                        if let Some(orch) = &mut app.orchestrator {
+                            for msg in pending {
+                                orch.send_message(&format!("[MIC] {}", msg));
+                            }
+                        }
+                    }
+                    Err(e) => {
+                        app.push_ticker(format!("ORCHESTRATOR: failed — {e}"));
+                        app.push_chat("System", &format!("Orchestrator failed to start: {e}"));
                     }
                 }
             }
@@ -351,6 +361,9 @@ fn main() -> io::Result<()> {
                 }
                 ws_server::WsEvent::InvalidPsk { addr } => {
                     app.push_ticker(format!("REJECTED: invalid PSK from {}", addr));
+                }
+                ws_server::WsEvent::TlsError { addr, error } => {
+                    app.push_ticker(format!("TLS FAILED: {} ({})", addr, error));
                 }
                 ws_server::WsEvent::ImageReceived { callsign, data, filename } => {
                     // Save image to .dispatch/images/ in the repo root.
@@ -419,13 +432,13 @@ fn main() -> io::Result<()> {
                     let cs = orch_callsigns.clone();
                     let uc = orch_user_callsign.clone();
                     let cn = orch_console_name.clone();
+                    let tk = orch_tool_key.clone();
+                    let tc = orch_tool_cmd.clone();
                     thread::spawn(move || {
                         let repo_refs: Vec<&str> = repos.iter().map(|s| s.as_str()).collect();
                         let tool_defs = tools::tool_definitions();
                         let system_prompt = orchestrator::build_system_prompt(&repo_refs, &tool_defs, &cs, &uc, &cn);
-                        if let Some(orch) = orchestrator::spawn(&system_prompt, &cwd) {
-                            let _ = tx.send(orch);
-                        }
+                        let _ = tx.send(orchestrator::spawn(&system_prompt, &cwd, &tk, &tc));
                     });
                 }
             }
@@ -808,13 +821,13 @@ fn main() -> io::Result<()> {
                                             let cs = orch_callsigns.clone();
                                             let uc = orch_user_callsign.clone();
                                             let cn = orch_console_name.clone();
+                                            let tk = orch_tool_key.clone();
+                                            let tc = orch_tool_cmd.clone();
                                             thread::spawn(move || {
                                                 let repo_refs: Vec<&str> = repos.iter().map(|s| s.as_str()).collect();
                                                 let tool_defs = tools::tool_definitions();
                                                 let system_prompt = orchestrator::build_system_prompt(&repo_refs, &tool_defs, &cs, &uc, &cn);
-                                                if let Some(orch) = orchestrator::spawn(&system_prompt, &cwd) {
-                                                    let _ = tx.send(orch);
-                                                }
+                                                let _ = tx.send(orchestrator::spawn(&system_prompt, &cwd, &tk, &tc));
                                             });
                                         }
                                     }

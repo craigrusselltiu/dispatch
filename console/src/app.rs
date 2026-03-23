@@ -131,11 +131,11 @@ impl App {
         }
     }
 
-    pub fn tool_cmd(&self, tool_key: &str) -> &str {
+    pub fn tool_cmd<'a>(&'a self, tool_key: &'a str) -> &'a str {
         self.tools
             .get(tool_key)
             .map(|s| s.as_str())
-            .unwrap_or("claude")
+            .unwrap_or(tool_key)
     }
 
     /// Whether we're in multi-repo mode (dispatch-sa1).

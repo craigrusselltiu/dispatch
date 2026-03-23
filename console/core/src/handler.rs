@@ -17,6 +17,8 @@ pub enum WsEvent {
     VoiceTranscript { text: String },
     /// A client connected with an invalid PSK.
     InvalidPsk { addr: String },
+    /// TLS handshake failed for an incoming connection.
+    TlsError { addr: String, error: String },
     /// Image sent from radio, targeted at a specific agent by callsign.
     ImageReceived { callsign: String, data: String, filename: String },
     /// Interrupt the orchestrator (cancel current response).
@@ -58,7 +60,7 @@ pub struct ConsoleState {
     pub user_callsign: String,
     /// Display name for the console/orchestrator (default: "Console").
     pub console_name: String,
-    /// Default tool key for dispatching agents (e.g. "claude-code" or "copilot").
+    /// Tool key for dispatching agents (e.g. "claude-code" or "copilot").
     pub default_tool: String,
 }
 
@@ -74,7 +76,7 @@ impl ConsoleState {
             event_tx: None,
             user_callsign: "Dispatch".to_string(),
             console_name: "Console".to_string(),
-            default_tool: "claude-code".to_string(),
+            default_tool: String::new(),
         }
     }
 

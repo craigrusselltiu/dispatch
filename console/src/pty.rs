@@ -87,7 +87,7 @@ pub fn dispatch_slot(
 
     let parts: Vec<&str> = tool_cmd.split_whitespace().collect();
     let mut cmd = if parts.is_empty() {
-        CommandBuilder::new("claude")
+        CommandBuilder::new(tool_key)
     } else {
         let mut c = CommandBuilder::new(parts[0]);
         for arg in &parts[1..] {
@@ -105,22 +105,27 @@ pub fn dispatch_slot(
     // instead of echoing to the terminal. This eliminates terminal noise issues.
     cmd.env("DISPATCH_MSG_FILE", &msg_file);
 
-    // Claude Code-specific flags: system prompt injection and permission bypass.
-    // Other tools (e.g. copilot) don't support these flags.
-    if tool_key == "claude-code" {
-        let agents_md_path = format!("{}/docs/AGENTS.md", repo_root);
-        if let Ok(mut instructions) = std::fs::read_to_string(&agents_md_path) {
-            let memory = read_memory_file(repo_root);
-            let memory = memory.trim();
-            if !memory.is_empty() {
-                instructions.push_str("\n\n---\n\n## Shared Memory (from prior agents)\n\n");
-                instructions.push_str(memory);
-                instructions.push('\n');
+    // Tool-specific flags for agent dispatch.
+    match tool_key {
+        "claude-code" => {
+            let agents_md_path = format!("{}/docs/AGENTS.md", repo_root);
+            if let Ok(mut instructions) = std::fs::read_to_string(&agents_md_path) {
+                let memory = read_memory_file(repo_root);
+                let memory = memory.trim();
+                if !memory.is_empty() {
+                    instructions.push_str("\n\n---\n\n## Shared Memory (from prior agents)\n\n");
+                    instructions.push_str(memory);
+                    instructions.push('\n');
+                }
+                cmd.arg("--system-prompt");
+                cmd.arg(&instructions);
             }
-            cmd.arg("--system-prompt");
-            cmd.arg(&instructions);
+            cmd.arg("--dangerously-skip-permissions");
         }
-        cmd.arg("--dangerously-skip-permissions");
+        "copilot" => {
+            cmd.arg("--allow-all-tools");
+        }
+        _ => {}
     }
     if let Some(prompt) = initial_prompt {
         cmd.arg(prompt);

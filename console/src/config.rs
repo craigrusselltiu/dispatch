@@ -68,11 +68,11 @@ fn default_identity() -> IdentityConfig {
 }
 
 impl Config {
-    /// Returns the configured default tool key (e.g. "claude-code" or "copilot").
+    /// Returns the configured AI agent tool key (e.g. "claude-code" or "copilot").
     /// Falls back to "claude-code" if not set.
     pub fn default_tool_key(&self) -> &str {
         self.tools
-            .get("default")
+            .get("ai-agent")
             .map(|s| s.as_str())
             .unwrap_or("claude-code")
     }
@@ -101,9 +101,9 @@ impl Default for Config {
     fn default() -> Self {
         let psk = generate_psk();
         let mut tools = HashMap::new();
-        tools.insert("default".to_string(), "claude-code".to_string());
+        tools.insert("ai-agent".to_string(), "claude-code".to_string());
         tools.insert("claude-code".to_string(), "claude".to_string());
-        tools.insert("copilot".to_string(), "gh copilot suggest".to_string());
+        tools.insert("copilot".to_string(), "gh copilot --".to_string());
 
         Config {
             server: ServerConfig {
@@ -230,8 +230,8 @@ fn to_toml_with_comments(cfg: &Config) -> String {
     let mut tools_lines = String::new();
     // Default tool selection first.
     let default_tool = cfg.default_tool_key();
-    tools_lines.push_str(&format!("# Which tool to use by default when dispatching agents: \"claude-code\" or \"copilot\".\n"));
-    tools_lines.push_str(&format!("default = \"{default_tool}\"\n"));
+    tools_lines.push_str("# Which tool to use when dispatching agents: \"claude-code\" or \"copilot\".\n");
+    tools_lines.push_str(&format!("ai-agent = \"{default_tool}\"\n"));
     // Ensure canonical ordering for tool commands.
     for key in ["claude-code", "copilot"] {
         if let Some(val) = cfg.tools.get(key) {
@@ -239,7 +239,7 @@ fn to_toml_with_comments(cfg: &Config) -> String {
         }
     }
     for (k, v) in &cfg.tools {
-        if k != "claude-code" && k != "copilot" && k != "default" {
+        if k != "claude-code" && k != "copilot" && k != "ai-agent" {
             tools_lines.push_str(&format!("{k} = \"{v}\"\n"));
         }
     }
