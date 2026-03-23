@@ -34,7 +34,7 @@ You may include multiple action blocks in one response. Available actions:
 
 | Action | Parameters | Description |
 |--------|-----------|-------------|
-| `dispatch` | `repo`, `prompt`, `callsign` (optional), `tool` (optional) | Dispatch a **new** agent into an empty slot. Only use when the callsign does not already occupy a slot. If the agent exists in any slot (even idle/post-merge), use `message_agent` instead. The `tool` parameter selects which AI agent to run: `"claude"` (default) or `"copilot"`. Copilot runs in YOLO mode (auto-accepts all permissions). |
+| `dispatch` | `repo`, `prompt`, `callsign` (optional), `tool` (optional) | Dispatch a **new** agent into an empty slot. Only use when the callsign does not already occupy a slot. If the agent exists in any slot (even idle/post-merge), use `message_agent` instead. Omit `tool` to use the configured AI agent (shown above). Only specify `tool` (`"claude"` or `"copilot"`) if Dispatch explicitly requests a specific one. Copilot runs in YOLO mode (auto-accepts all permissions). |
 | `terminate` | `agent` | Kill an agent by callsign (e.g. "Alpha") or slot number (e.g. "1"). **FORBIDDEN unless Dispatch explicitly requests it.** |
 | `merge` | `agent` | Acknowledge that an agent has merged its branch and pushed to remote. |
 | `list_agents` | _(none)_ | List all agent slots with their status. |

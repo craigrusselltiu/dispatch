@@ -57,6 +57,7 @@ pub fn build_system_prompt(
     callsigns: &[String],
     user_callsign: &str,
     console_name: &str,
+    default_tool: &str,
 ) -> String {
     let repo_name = repos.first()
         .and_then(|p| std::path::Path::new(p).file_name())
@@ -75,16 +76,17 @@ pub fn build_system_prompt(
 
     let callsign_list = callsigns.join(", ");
     format!(
-        "Repository: {}\n\nThe user's callsign is: {}\nYour name (the orchestrator) is: {}\n\nAvailable agent callsigns ({} slots): {}\nCallsigns are dynamically assigned to the next available slot.\n\n{}",
-        repo_name, user_callsign, console_name, callsigns.len(), callsign_list, md_content
+        "Repository: {}\n\nThe user's callsign is: {}\nYour name (the orchestrator) is: {}\n\nAvailable agent callsigns ({} slots): {}\nCallsigns are dynamically assigned to the next available slot.\n\nConfigured AI agent: {}\nAll dispatched agents use this tool. Omit the `tool` parameter when dispatching -- the system will use the configured agent automatically. Only specify `tool` if Dispatch explicitly requests a different one.\n\n{}",
+        repo_name, user_callsign, console_name, callsigns.len(), callsign_list, default_tool, md_content
     )
 }
 
 // ── Spawn ────────────────────────────────────────────────────────────────────
 
 /// Spawn the orchestrator process. Returns an error string if the spawn fails.
-pub fn spawn(system_prompt: &str, cwd: &str) -> Result<Orchestrator, String> {
-    let mut cmd = Command::new("claude");
+/// `claude_cmd` is the configured command for Claude (from the [tools] config).
+pub fn spawn(system_prompt: &str, cwd: &str, claude_cmd: &str) -> Result<Orchestrator, String> {
+    let mut cmd = Command::new(claude_cmd);
     cmd.args([
         "-p",
         "--output-format", "stream-json",
@@ -98,7 +100,7 @@ pub fn spawn(system_prompt: &str, cwd: &str) -> Result<Orchestrator, String> {
     cmd.stderr(Stdio::null());
 
     let mut child = cmd.spawn().map_err(|e| {
-        format!("failed to spawn claude: {e} -- is it installed and on PATH?")
+        format!("failed to spawn {}: {e} -- is it installed and on PATH?", claude_cmd)
     })?;
     let stdin = child.stdin.take()
         .ok_or_else(|| "failed to open orchestrator stdin".to_string())?;
@@ -396,7 +398,7 @@ mod tests {
         let repos = vec!["/home/user/myrepo"];
         let tools = tools::tool_definitions();
         let callsigns = vec!["Alpha".to_string(), "Bravo".to_string()];
-        let prompt = build_system_prompt(&repos, &tools, &callsigns, "Dispatch", "Console");
+        let prompt = build_system_prompt(&repos, &tools, &callsigns, "Dispatch", "Console", "claude");
         // Should always contain repo name as context prefix.
         assert!(prompt.contains("Repository: myrepo"));
         // Should list configured callsigns.
@@ -404,5 +406,16 @@ mod tests {
         // Should include identity.
         assert!(prompt.contains("Dispatch"));
         assert!(prompt.contains("Console"));
+        // Should include configured AI agent.
+        assert!(prompt.contains("Configured AI agent: claude"));
+    }
+
+    #[test]
+    fn system_prompt_includes_copilot_config() {
+        let repos = vec!["/home/user/myrepo"];
+        let tools = tools::tool_definitions();
+        let callsigns = vec!["Alpha".to_string()];
+        let prompt = build_system_prompt(&repos, &tools, &callsigns, "Dispatch", "Console", "copilot");
+        assert!(prompt.contains("Configured AI agent: copilot"));
     }
 }

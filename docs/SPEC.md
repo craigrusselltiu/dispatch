@@ -186,7 +186,7 @@ The console parses the `"action"` field to determine which tool to execute. Para
 
 | Action | Parameters | Description |
 |--------|-----------|-------------|
-| `dispatch` | `repo`, `prompt`, `callsign` (optional), `tool` (optional) | Dispatch an agent with a prompt. The agent creates its own worktree. Returns slot and callsign. The `tool` parameter selects which AI agent to use: `"claude"` (default) or `"copilot"`. |
+| `dispatch` | `repo`, `prompt`, `callsign` (optional), `tool` (optional) | Dispatch an agent with a prompt. The agent creates its own worktree. Returns slot and callsign. Omit `tool` to use the configured AI agent from `[tools] ai-agent`. Only specify `tool` (`"claude"` or `"copilot"`) to override for a specific dispatch. |
 | `terminate` | `agent` | Kill an agent by callsign or slot number. Frees the slot. |
 | `merge` | `task_id` | Acknowledge that an agent has merged its branch. |
 | `list_agents` | _(none)_ | List all active agent slots with callsign, tool, working/idle status, and repo. |
