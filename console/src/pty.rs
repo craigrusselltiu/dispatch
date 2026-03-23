@@ -105,9 +105,9 @@ pub fn dispatch_slot(
     // instead of echoing to the terminal. This eliminates terminal noise issues.
     cmd.env("DISPATCH_MSG_FILE", &msg_file);
 
-    // Claude Code-specific flags: system prompt injection and permission bypass.
-    // Other tools (e.g. copilot) don't support these flags.
+    // Tool-specific flags for autonomous agent operation.
     if tool_key == "claude-code" {
+        // Claude Code: system prompt injection and permission bypass.
         let agents_md_path = format!("{}/docs/AGENTS.md", repo_root);
         if let Ok(mut instructions) = std::fs::read_to_string(&agents_md_path) {
             let memory = read_memory_file(repo_root);
@@ -121,6 +121,10 @@ pub fn dispatch_slot(
             cmd.arg(&instructions);
         }
         cmd.arg("--dangerously-skip-permissions");
+    } else if tool_key == "copilot" {
+        // GitHub Copilot CLI: YOLO mode auto-accepts all tool/path/URL
+        // permissions so the agent works autonomously without prompts.
+        cmd.arg("--yolo");
     }
     if let Some(prompt) = initial_prompt {
         cmd.arg(prompt);

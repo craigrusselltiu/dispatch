@@ -103,7 +103,7 @@ impl Default for Config {
         let mut tools = HashMap::new();
         tools.insert("default".to_string(), "claude-code".to_string());
         tools.insert("claude-code".to_string(), "claude".to_string());
-        tools.insert("copilot".to_string(), "gh copilot suggest".to_string());
+        tools.insert("copilot".to_string(), "copilot".to_string());
 
         Config {
             server: ServerConfig {

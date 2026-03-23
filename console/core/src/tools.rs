@@ -30,6 +30,10 @@ pub enum ToolCall {
         /// Optional NATO callsign (e.g. "Delta") to dispatch a specific agent.
         #[serde(default)]
         callsign: Option<String>,
+        /// Optional tool key (e.g. "claude-code" or "copilot"). Falls back to
+        /// the configured default tool if not specified.
+        #[serde(default)]
+        tool: Option<String>,
     },
     /// Terminate a running agent by callsign or slot number.
     Terminate {
@@ -138,6 +142,10 @@ pub fn tool_definitions() -> serde_json::Value {
                     "callsign": {
                         "type": "string",
                         "description": "Optional NATO callsign to assign (e.g. \"Delta\"). When provided, the agent is dispatched with this callsign to the next available slot."
+                    },
+                    "tool": {
+                        "type": "string",
+                        "description": "Optional tool to use: \"claude-code\" (default) or \"copilot\". When omitted, uses the configured default tool."
                     }
                 },
                 "required": ["repo", "prompt"]
@@ -280,10 +288,11 @@ mod tests {
         let text = r#"<tool_call>{"name": "dispatch", "input": {"repo": "myrepo", "prompt": "fix the bug"}}</tool_call>"#;
         let call = parse_tool_call(text).unwrap();
         match call {
-            ToolCall::Dispatch { repo, prompt, callsign } => {
+            ToolCall::Dispatch { repo, prompt, callsign, tool } => {
                 assert_eq!(repo, "myrepo");
                 assert_eq!(prompt, "fix the bug");
                 assert!(callsign.is_none());
+                assert!(tool.is_none());
             }
             _ => panic!("expected Dispatch"),
         }
@@ -294,10 +303,26 @@ mod tests {
         let text = r#"<tool_call>{"name": "dispatch", "input": {"repo": "myrepo", "prompt": "fix the bug", "callsign": "Delta"}}</tool_call>"#;
         let call = parse_tool_call(text).unwrap();
         match call {
-            ToolCall::Dispatch { repo, prompt, callsign } => {
+            ToolCall::Dispatch { repo, prompt, callsign, tool } => {
                 assert_eq!(repo, "myrepo");
                 assert_eq!(prompt, "fix the bug");
                 assert_eq!(callsign.as_deref(), Some("Delta"));
+                assert!(tool.is_none());
+            }
+            _ => panic!("expected Dispatch"),
+        }
+    }
+
+    #[test]
+    fn parse_dispatch_call_with_tool() {
+        let text = r#"<tool_call>{"name": "dispatch", "input": {"repo": "myrepo", "prompt": "fix the bug", "tool": "copilot"}}</tool_call>"#;
+        let call = parse_tool_call(text).unwrap();
+        match call {
+            ToolCall::Dispatch { repo, prompt, callsign, tool } => {
+                assert_eq!(repo, "myrepo");
+                assert_eq!(prompt, "fix the bug");
+                assert!(callsign.is_none());
+                assert_eq!(tool.as_deref(), Some("copilot"));
             }
             _ => panic!("expected Dispatch"),
         }

@@ -24,4 +24,4 @@ console_name = "Console"
 # Which tool to use by default when dispatching agents: "claude-code" or "copilot".
 default = "claude-code"
 claude-code = "claude"
-copilot = "gh copilot suggest"
+copilot = "copilot"

@@ -4,6 +4,17 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## v0.4.0
+
+### Added
+
+- GitHub Copilot CLI support as an alternative AI agent alongside Claude Code. The orchestrator can dispatch agents with `"tool": "copilot"` to use Copilot instead of Claude. Copilot agents launch in YOLO mode (`--yolo` flag) for fully autonomous operation without permission prompts.
+- The `dispatch` action now accepts an optional `tool` parameter (`"claude-code"` or `"copilot"`) to select which AI agent to use per dispatch. Defaults to the configured default tool.
+
+### Changed
+
+- Updated default Copilot tool command from `gh copilot suggest` (deprecated) to `copilot` (GitHub Copilot CLI).
+
 ## v0.3.9
 
 ### Changed
