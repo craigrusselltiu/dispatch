@@ -68,6 +68,15 @@ fn default_identity() -> IdentityConfig {
 }
 
 impl Config {
+    /// Returns the configured default tool key (e.g. "claude-code" or "copilot").
+    /// Falls back to "claude-code" if not set.
+    pub fn default_tool_key(&self) -> &str {
+        self.tools
+            .get("default")
+            .map(|s| s.as_str())
+            .unwrap_or("claude-code")
+    }
+
     /// Effective callsign list. Uses [agents].callsigns if present,
     /// otherwise generates NATO names from terminal.max_agents for
     /// backward compatibility.
@@ -92,6 +101,7 @@ impl Default for Config {
     fn default() -> Self {
         let psk = generate_psk();
         let mut tools = HashMap::new();
+        tools.insert("default".to_string(), "claude-code".to_string());
         tools.insert("claude-code".to_string(), "claude".to_string());
         tools.insert("copilot".to_string(), "gh copilot suggest".to_string());
 
@@ -218,14 +228,18 @@ pub fn load_or_create_tls() -> TlsIdentity {
 fn to_toml_with_comments(cfg: &Config) -> String {
     // Build tools table manually for consistent ordering.
     let mut tools_lines = String::new();
-    // Ensure canonical ordering.
+    // Default tool selection first.
+    let default_tool = cfg.default_tool_key();
+    tools_lines.push_str(&format!("# Which tool to use by default when dispatching agents: \"claude-code\" or \"copilot\".\n"));
+    tools_lines.push_str(&format!("default = \"{default_tool}\"\n"));
+    // Ensure canonical ordering for tool commands.
     for key in ["claude-code", "copilot"] {
         if let Some(val) = cfg.tools.get(key) {
             tools_lines.push_str(&format!("{key} = \"{val}\"\n"));
         }
     }
     for (k, v) in &cfg.tools {
-        if k != "claude-code" && k != "copilot" {
+        if k != "claude-code" && k != "copilot" && k != "default" {
             tools_lines.push_str(&format!("{k} = \"{v}\"\n"));
         }
     }

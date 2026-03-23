@@ -21,5 +21,7 @@ user_callsign = "Dispatch"
 console_name = "Console"
 
 [tools]
+# Which tool to use by default when dispatching agents: "claude-code" or "copilot".
+default = "claude-code"
 claude-code = "claude"
 copilot = "gh copilot suggest"

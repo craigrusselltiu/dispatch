@@ -21,6 +21,7 @@ impl App {
         pane_rows: u16,
         pane_cols: u16,
         tools: std::collections::HashMap<String, String>,
+        default_tool: String,
         workspace: Workspace,
         scrollback_lines: u32,
         chat_tx: tokio::sync::broadcast::Sender<String>,
@@ -46,6 +47,7 @@ impl App {
             pane_rows,
             pane_cols,
             tools,
+            default_tool,
             ticker_items: Vec::new(),
             ticker_frame_counter: 0,
             workspace,
@@ -317,9 +319,10 @@ impl App {
 
                 // Spawn PTY if slot is empty. Agent creates its own worktree.
                 if self.slots[slot_idx].is_none() {
-                    let cmd = self.tool_cmd("claude-code").to_string();
+                    let tool_key = self.default_tool.clone();
+                    let cmd = self.tool_cmd(&tool_key).to_string();
                     match dispatch_slot(
-                        slot_idx, "claude-code", &cmd, self.pane_rows, self.pane_cols,
+                        slot_idx, &tool_key, &cmd, self.pane_rows, self.pane_cols,
                         None, self.scrollback_lines,
                         repo_name_from_path(&target_repo), &target_repo,
                         Some(&full_prompt),
@@ -348,7 +351,7 @@ impl App {
                 };
 
                 self.push_orch(OrchestratorEventKind::Dispatched {
-                    agent: callsign.clone(), slot: slot_idx + 1, tool: "claude-code".to_string(),
+                    agent: callsign.clone(), slot: slot_idx + 1, tool: self.default_tool.clone(),
                 });
                 self.push_ticker(format!(
                     "DISPATCH: {} (slot {})", callsign, slot_idx + 1
@@ -360,7 +363,7 @@ impl App {
                     let mut st = self.ws_state.lock().unwrap();
                     st.slots[slot_idx] = Some(ws_server::AgentSlot {
                         callsign: callsign.clone(),
-                        tool: "claude-code".to_string(),
+                        tool: self.default_tool.clone(),
                         status: ws_server::AgentStatus::Busy,
                         task: None,
                         repo: Some(repo_name_from_path(&target_repo).to_string()),
