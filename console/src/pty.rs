@@ -62,6 +62,29 @@ fn ensure_messages_dir(repo_root: &str) {
     let _ = std::fs::create_dir_all(&dir);
 }
 
+/// Type text into copilot's interactive PTY one character at a time, then
+/// press Enter (`\r`). Writing in bulk causes copilot's TUI to enter paste
+/// mode where `\r` is treated as a literal newline instead of submitting.
+/// By sending each character individually with a small delay we simulate
+/// real keyboard typing and keep copilot in single-char input mode.
+pub fn type_to_copilot(w: &Arc<Mutex<Box<dyn std::io::Write + Send>>>, text: &str) {
+    use std::io::Write;
+    for ch in text.chars() {
+        let mut buf = [0u8; 4];
+        let bytes = ch.encode_utf8(&mut buf);
+        let mut guard = w.lock().unwrap();
+        let _ = guard.write_all(bytes.as_bytes());
+        let _ = guard.flush();
+        drop(guard);
+        thread::sleep(std::time::Duration::from_millis(2));
+    }
+    // Brief pause then send Enter to submit.
+    thread::sleep(std::time::Duration::from_millis(50));
+    let mut guard = w.lock().unwrap();
+    let _ = guard.write_all(b"\r");
+    let _ = guard.flush();
+}
+
 /// Prepare the agent's message file: delete any stale file and return the path.
 /// Called before spawning so the new agent starts with a clean file.
 pub fn prepare_msg_file(repo_root: &str, callsign: &str) -> String {
@@ -142,7 +165,9 @@ pub fn dispatch_slot(
     } else if tool_key == "copilot" {
         // GitHub Copilot CLI: YOLO mode auto-accepts all tool/path/URL
         // permissions so the agent works autonomously without prompts.
+        // --no-ask-user prevents the agent from pausing to ask questions.
         cmd.arg("--yolo");
+        cmd.arg("--no-ask-user");
 
         // Copilot reads AGENTS.md from the repo root (not docs/).
         // Ensure it exists by symlinking from docs/AGENTS.md if needed.
@@ -231,10 +256,11 @@ pub fn dispatch_slot(
                         break;
                     }
                 }
-                let msg = format!("{}\n", prompt);
-                let mut guard = w.lock().unwrap();
-                let _ = guard.write_all(msg.as_bytes());
-                let _ = guard.flush();
+                // Type each character individually to the PTY to simulate real
+                // keyboard input. Bulk writes cause copilot's TUI to treat input
+                // as a paste event where \r becomes a literal newline instead of
+                // the submit action.
+                type_to_copilot(&w, &prompt);
             });
         }
     }
@@ -331,6 +357,23 @@ pub fn poll_agent_messages(slots: &mut [Option<SlotState>]) -> Vec<(usize, Strin
         }
     }
     messages
+}
+
+/// Same as `type_to_copilot` but operates on a bare `Write` trait object.
+/// Used from `app.rs` where we have `&mut Box<dyn Write + Send>` directly.
+pub fn type_to_copilot_writer(w: &mut Box<dyn std::io::Write + Send>, text: &str) {
+    use std::io::Write;
+    for ch in text.chars() {
+        let mut buf = [0u8; 4];
+        let bytes = ch.encode_utf8(&mut buf);
+        let _ = w.write_all(bytes.as_bytes());
+        let _ = w.flush();
+        thread::sleep(std::time::Duration::from_millis(2));
+    }
+    // Brief pause then send Enter to submit.
+    thread::sleep(std::time::Duration::from_millis(50));
+    let _ = w.write_all(b"\r");
+    let _ = w.flush();
 }
 
 pub fn key_to_pty_bytes(key: &KeyEvent) -> Vec<u8> {
