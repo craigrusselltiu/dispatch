@@ -1,247 +1,400 @@
-# Performance Review: Dispatch Console
+# Performance Review: Dispatch
 
-**Date:** 2026-03-20
-**Reviewer:** Bravo (automated analysis)
+**Date:** 2026-03-24
+**Reviewer:** Alpha (automated analysis)
+**Scope:** Console (Rust), Core library, Radio (Android/Kotlin), Dependencies
 
 ## Executive Summary
 
-The dispatch console is a well-structured Rust TUI (~1500 LOC) with clean separation between PTY management, UI rendering, orchestrator logic, and WebSocket serving. The codebase follows the stated design philosophy of simplicity. However, several patterns cause unnecessary allocations, redundant work per frame, and mutex contention that affect responsiveness under load (multiple active agents producing output).
+Full-system performance audit covering both the Rust console (~2000 LOC across 2 crates) and the Android radio app (~2500 LOC Kotlin). The console is well-structured with clean separation of concerns; the radio app is a lean single-activity design. Both components follow the project's simplicity philosophy.
 
-The most impactful issues are: unconditional full redraws at 60fps, allocation-heavy VT100 screen conversion every frame, and missing dirty-tracking to skip idle frames.
+**Console:** The highest-impact issues remain the unconditional 60fps redraw loop and allocation-heavy VT100 screen conversion. New findings since the previous review include per-frame file I/O for agent message polling, blocking `thread::sleep()` calls in Copilot input simulation, and O(n^2) callsign lookups in the core library.
+
+**Radio:** Several resource lifecycle issues (SpeechRecognizer leaks, infinite animator battery drain) and main-thread blocking patterns (image I/O, JSON parsing) that affect battery life and UI responsiveness.
+
+**Dependencies:** Feature flags and build profiles are well-optimized. Main opportunities are removing chrono in favor of the `time` crate already in the tree, and consolidating duplicate dependency versions (bitflags v1/v2, socket2, windows-sys).
 
 ## Priority Summary
+
+### Console
 
 | Priority | Issue | Location | Fix Effort |
 |----------|-------|----------|------------|
 | HIGH | Add dirty-tracking to skip idle redraws | main.rs | Medium |
 | HIGH | Reduce allocations in screen_to_lines() | ui.rs | Low |
+| HIGH | Per-frame file I/O in poll_agent_messages() | pty.rs | Low |
 | MEDIUM | Reduce mutex hold time for VT100 screens | pty.rs, ui.rs | Medium |
+| MEDIUM | Blocking thread::sleep() in type_to_copilot() | pty.rs | Low |
 | MEDIUM | Fix resize_all_slots scrollback loss | pty.rs | Low |
 | MEDIUM | Cache per-frame strings (clock, ticker) | ui.rs, app.rs | Low |
+| MEDIUM | O(n^2) callsign lookup with repeated to_uppercase() | handler.rs | Low |
+| MEDIUM | Unbounded loop in rpc_read_response() | orchestrator.rs | Low |
 | LOW | Fix truncate() UTF-8 safety | util.rs | Trivial |
 | LOW | Improve strip_action_blocks() to single-pass | util.rs | Low |
 | LOW | Skip pane rendering under overlays | main.rs | Low |
 | LOW | Avoid Vec allocation in key_to_pty_bytes() | pty.rs | Low |
 | LOW | Avoid deep clone in render_orchestrator() | ui.rs | Low |
+| LOW | Unnecessary string clones in tool execution | app.rs | Low |
 | NEGLIGIBLE | Only return occupied slots from all_slot_infos() | handler.rs | Low |
 
+### Radio (Android)
+
+| Priority | Issue | Location | Fix Effort |
+|----------|-------|----------|------------|
+| HIGH | SpeechRecognizer listener leak on destroy | PushToTalkManager.kt, ContinuousListenManager.kt | Trivial |
+| HIGH | Main-thread image I/O blocking | MainActivity.kt | Low |
+| HIGH | WebSocket reconnect battery drain (no give-up) | RadioWebSocketClient.kt | Low |
+| MEDIUM | Infinite status blink animator during background | MainActivity.kt | Trivial |
+| MEDIUM | Main-thread JSON parsing for agent state | MainActivity.kt | Low |
+| MEDIUM | AudioLevelView redraws at callback rate (no throttle) | AudioLevelView.kt | Trivial |
+| LOW | AgentStatusOverlay context reference leak risk | AgentStatusOverlay.kt | Low |
+| LOW | Notification object rebuilt on every status change | RadioService.kt | Low |
+| LOW | Chat view removal causes LinearLayout invalidation | MainActivity.kt | Low |
+| NEGLIGIBLE | SharedPreferences individual writes (not batched) | RadioSettings.kt | Trivial |
+
+### Dependencies
+
+| Priority | Issue | Fix Effort |
+|----------|-------|------------|
+| MEDIUM | chrono heavyweight; time crate already in tree | Medium |
+| LOW | bitflags v1/v2 duplication (nix v0.25 uses v1) | Low |
+| LOW | socket2 v0.5/v0.6 duplication (mdns-sd pins v0.5) | Low |
+| NEGLIGIBLE | windows-sys 4 versions (ecosystem-wide) | N/A |
+
 ---
 
-## High Priority
+## Console: High Priority
 
-### Render Loop: Unconditional 60fps Full Redraw
+### 1. Render Loop: Unconditional 60fps Full Redraw
 
-**Files:** `console/src/main.rs` lines 334-373, `console/src/ui.rs` lines 310-353
+**Files:** `console/src/main.rs`, `console/src/ui.rs`
 
-**Issue:** The main loop calls `terminal.draw()` every iteration (~16ms / 60fps) regardless of whether anything changed. Every frame:
-- Computes layout splits (4 `Layout::split()` calls)
-- Locks all 4 visible VT100 screen mutexes
-- Converts all 4 screens cell-by-cell to ratatui Lines
-- Builds header, footer, ticker, and overlay widgets
-- Ratatui diffs against the previous frame and flushes to stdout
+The main loop calls `terminal.draw()` every iteration (~16ms / 60fps) regardless of whether anything changed. Every frame computes layout splits, locks all visible VT100 screen mutexes, converts all screens cell-by-cell to ratatui Lines, and builds header/footer/ticker/overlay widgets.
 
-When agents are idle and no input arrives, this is pure waste -- the output is identical frame to frame.
+When agents are idle and no input arrives, this is pure waste.
 
-**Recommendation:** Add a dirty flag. Set it when: PTY output arrives, user input occurs, ticker advances, resize happens, or overlay changes. Skip `terminal.draw()` when clean. This alone could cut CPU usage 50-90% during idle periods. A simpler alternative: increase the poll timeout to 100ms when idle (10fps) and drop to 16ms only when PTY output is flowing.
-
-**Impact:** Affects baseline CPU usage at all times.
+**Recommendation:** Add a dirty flag. Set it when PTY output arrives, user input occurs, ticker advances, resize happens, or overlay changes. Skip `terminal.draw()` when clean. This alone could cut CPU usage 50-90% during idle periods. A simpler alternative: increase the poll timeout to 100ms when idle (10fps) and drop to 16ms only when PTY output is flowing.
 
 ---
 
-### screen_to_lines() Allocation Storm
+### 2. screen_to_lines() Allocation Storm
 
-**File:** `console/src/ui.rs` lines 25-71
+**File:** `console/src/ui.rs`
 
-**Issue:** This function is called for each visible pane every frame. For a typical 80x40 pane, it:
-- Iterates 3200 cells (80 cols x 40 rows)
-- Calls `cell.contents()` which returns a `String` allocation per cell (line 51)
-- Calls `.to_string()` on empty cell contents: `" ".to_string()` (line 52) -- 3200 String allocations per pane in the worst case
-- Clones `current_text` when style changes (line 58): `Span::styled(current_text.clone(), ...)`
-- Builds a `Vec<Span>` per row, then a `Vec<Line>` for the whole screen
-
-With 4 active panes, this is ~12,800 cell accesses and thousands of String/Span allocations per frame, 60 times per second.
+Called for each visible pane every frame. For a typical 80x40 pane, iterates 3200 cells, allocates a `String` per cell via `cell.contents()`, clones `current_text` on style changes, and builds `Vec<Span>` per row then `Vec<Line>` for the whole screen. With 4 active panes at 60fps, this is ~12,800 cell accesses and thousands of String/Span allocations per frame.
 
 **Recommendations:**
-1. Replace `current_text.clone()` on line 58 with `std::mem::take(&mut current_text)` to avoid the clone -- the old value is cleared immediately after anyway.
-2. Pre-allocate the `spans` vector with `Vec::with_capacity(screen.size().1 as usize)` since worst case is one span per column.
-3. Consider caching the converted lines and only reconverting when the screen mutex shows new data has arrived (via a generation counter or dirty flag on the PTY reader side).
-
-**Impact:** This is the hottest path in the application.
+1. Replace `current_text.clone()` with `std::mem::take(&mut current_text)` to avoid the clone.
+2. Pre-allocate the `spans` vector with `Vec::with_capacity(cols)`.
+3. Cache converted lines and only reconvert when the screen has new data (generation counter or dirty flag on the PTY reader side).
 
 ---
 
-## Medium Priority
+### 3. Per-Frame File I/O in poll_agent_messages() [NEW]
 
-### Mutex Contention Between PTY Reader and Render Thread
+**File:** `console/src/pty.rs`
 
-**Files:** `console/src/pty.rs` line 114, `console/src/ui.rs` lines 322-326
+`poll_agent_messages()` is called from the main loop every frame. For each occupied slot, it calls `std::fs::metadata()` (stat syscall) and `std::fs::File::open()` (open syscall). With 8 active agents at 60fps, this is 480 stat calls and up to 480 open calls per second.
 
-**Issue:** The PTY reader thread (pty.rs:114) locks the screen mutex and calls `parser.process(&buf[..n])` while holding it. The render thread (ui.rs:322) locks the same mutex to read the screen. If a large chunk of PTY output arrives (e.g., a long `git log`), `process()` can take significant time, during which the render thread blocks, causing visible frame drops.
+**Recommendation:** Reduce poll frequency to every 3rd frame (~20fps / 50ms intervals) which is still responsive for human-readable messages. Alternatively, move polling to a background thread with a configurable interval.
 
-Conversely, `screen_to_lines()` holds the lock for the full cell-by-cell iteration (potentially milliseconds for large screens), during which incoming PTY data is buffered in the OS pipe but not processed.
-
-**Recommendation:** Consider a double-buffer approach: the PTY reader processes into a "back" parser, then swaps a snapshot/flag under a brief lock. Alternatively, make the reader thread produce pre-rendered Lines and swap them atomically. The simplest mitigation is to reduce lock hold time in `screen_to_lines` by copying raw screen data under lock and rendering outside it.
-
-Note: the current `set_scrollback()`/`set_scrollback(0)` sandwich in ui.rs lines 323-326 means the lock is held for even longer than just reading cells -- it also mutates scrollback state.
-
-**Impact:** Noticeable during burst output but acceptable for typical AI agent workloads.
-
----
-
-### resize_all_slots Discards Scrollback
-
-**File:** `console/src/pty.rs` lines 175-181
-
-**Issue:** On terminal resize, all VT100 parsers are replaced with new ones:
 ```rust
-*parser = vt100::Parser::new(new_size.rows, new_size.cols, 0);
+// In main loop: only poll every 3rd frame
+if frame_counter % 3 == 0 {
+    pty::poll_agent_messages(&mut app);
+}
 ```
-The `0` scrollback parameter means all terminal history is lost on resize. The original scrollback size (`scrollback_lines`) is not passed through.
-
-**Recommendation:** Store the scrollback capacity in `SlotState` and use it when recreating parsers. Or better, check if vt100 supports in-place resize (it likely does via `set_size()`).
-
-**Impact:** Resize events lose all terminal output, which is disorienting for users.
 
 ---
 
-### Per-Frame String Allocations in Header/Footer/Ticker
+## Console: Medium Priority
 
-**Files:** `console/src/ui.rs` lines 83-169 (header), 472-518 (footer), `console/src/app.rs` lines 206-222 (ticker_display)
+### 4. Mutex Contention Between PTY Reader and Render Thread
 
-**Issue:** Every frame allocates:
-- `chrono::Local::now().format("%H:%M").to_string()` -- the clock (ui.rs:107)
-- Multiple `format!()` calls for PSK display, agent count, page numbers, workspace indicator
-- `ticker_display()` creates a `Vec<char>` from the current message, a `vec![' '; width]` buffer, and collects into a new `String` (app.rs:210-222)
-- `pane_info_strip()` creates format strings for slot number, tool name, runtime, dispatch time every frame per pane (ui.rs:171-240)
-- `format_runtime()` called per active pane per frame
+**Files:** `console/src/pty.rs`, `console/src/ui.rs`
+
+The PTY reader thread locks the screen mutex and calls `parser.process()` while holding it. The render thread locks the same mutex for the full cell-by-cell iteration in `screen_to_lines()`. The `set_scrollback()`/`set_scrollback(0)` sandwich in the render path extends the lock duration further.
+
+**Recommendation:** Copy raw screen data under lock and render outside it, or use a double-buffer approach where the PTY reader swaps a snapshot under a brief lock.
+
+---
+
+### 5. Blocking thread::sleep() in type_to_copilot() [NEW]
+
+**File:** `console/src/pty.rs`
+
+The Copilot input simulation sleeps 2ms per character with `thread::sleep(Duration::from_millis(2))`, blocking the OS thread. For a 200-character prompt, this blocks for 400ms. Additional 50ms sleeps appear in message-sending paths.
+
+**Recommendation:** For short delays (<5ms), consider yielding or spinning. For longer delays, move to an async context or accept the blocking since these run on dedicated threads, not the main thread. The main concern is thread pool exhaustion if many agents type simultaneously.
+
+---
+
+### 6. resize_all_slots Discards Scrollback
+
+**File:** `console/src/pty.rs`
+
+On terminal resize, VT100 parsers are replaced with `vt100::Parser::new(rows, cols, 0)` -- the `0` scrollback parameter discards all terminal history. The configured scrollback capacity is not preserved.
+
+**Recommendation:** Store the scrollback capacity and use it when recreating parsers, or use `set_size()` if the vt100 crate supports in-place resize.
+
+---
+
+### 7. Per-Frame String Allocations in Header/Footer/Ticker
+
+**Files:** `console/src/ui.rs`, `console/src/app.rs`
+
+Every frame allocates: the clock string via `chrono::Local::now().format().to_string()`, multiple `format!()` calls for PSK/agent count/page numbers, a `Vec<char>` + buffer + new `String` in `ticker_display()`, and format strings for each pane info strip.
 
 **Recommendations:**
-1. Cache the clock string and only update it once per second (compare `Instant::now()` to last update).
-2. For `ticker_display()`, reuse a `String` buffer on `App` rather than allocating fresh each frame.
-3. For pane info strips, cache the static portions (slot number, tool name, dispatch wall string) and only reformat the runtime each frame.
-
-**Impact:** Individually small but they compound across 4 panes at 60fps.
+1. Cache the clock string and update once per second.
+2. Reuse a `String` buffer on `App` for `ticker_display()`.
+3. Cache static portions of pane info strips (slot number, tool name, dispatch wall string).
 
 ---
 
-## Low Priority
+### 8. O(n^2) Callsign Lookup with Repeated to_uppercase() [NEW]
 
-### truncate() Uses Byte Indexing on Multi-Byte Strings
+**File:** `console/core/src/handler.rs`
 
-**File:** `console/src/util.rs` lines 37-45
+`next_callsign()` rebuilds a `HashSet<String>` on every dispatch call, calling `.to_uppercase()` on every occupied slot's callsign, then calls `.to_uppercase()` again per candidate in the search loop. `find_slot_by_callsign()` similarly calls `.to_uppercase()` per slot during linear search.
 
-**Issue:** `truncate()` compares `s.len()` (byte length) against `max` but then slices with `&s[..max - 3]` which is byte-indexed. If the string contains multi-byte UTF-8 characters, this could slice in the middle of a character and panic.
+With 26 slots this is small in absolute terms, but it is algorithmically wasteful and allocates on every dispatch/send/terminate path.
 
-```rust
-pub fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {       // byte comparison
-        s.to_string()
-    } else if max > 3 {
-        format!("{}...", &s[..max - 3])  // byte slice -- could panic on UTF-8!
+**Recommendation:** Store callsigns in a canonical (lowercase or uppercase) form at creation time. Use a simple linear scan without case conversion -- with max 26 slots, a HashSet is unnecessary overhead.
+
+---
+
+### 9. Unbounded Loop in rpc_read_response() [NEW]
+
+**File:** `console/core/src/orchestrator.rs`
+
+The RPC response reader loops indefinitely waiting for a matching response ID. There is no iteration limit or timeout. If the orchestrator subprocess misbehaves or produces unexpected output, this blocks the reader thread forever.
+
+**Recommendation:** Add an iteration limit (e.g., 10,000 lines) and/or a timeout to prevent indefinite blocking.
+
+---
+
+## Console: Low Priority
+
+### 10. truncate() UTF-8 Safety Bug
+
+**File:** `console/src/util.rs`
+
+`truncate()` compares byte length against `max` but slices with byte indexing (`&s[..max - 3]`). Multi-byte UTF-8 characters could cause a panic if the slice falls mid-character.
+
+**Recommendation:** Use `.chars().take(max - 3)` or find the nearest char boundary.
+
+---
+
+### 11. strip_action_blocks() Quadratic String Mutation
+
+**File:** `console/src/util.rs`
+
+Three separate `while` loops each do linear searches and in-place `replace_range()` mutations. Each `replace_range()` is O(n) because it shifts trailing bytes. With m action blocks in an n-length string, total work is O(n*m).
+
+**Recommendation:** Build output by copying non-block segments into a new String in a single pass.
+
+---
+
+### 12. Redundant Work When Overlays Are Visible
+
+**File:** `console/src/main.rs`
+
+When a full-screen overlay is displayed, all 4 VT100 screens are still locked, converted to Lines, and rendered underneath before the overlay is drawn on top.
+
+**Recommendation:** Skip pane rendering when a full-screen overlay is active.
+
+---
+
+### 13. key_to_pty_bytes() Allocates a Vec Per Keystroke
+
+**File:** `console/src/pty.rs`
+
+Every key press in input mode allocates a `Vec<u8>` for escape sequences (3-6 bytes).
+
+**Recommendation:** Return `Cow<'static, [u8]>` for static sequences or write directly to the PTY writer.
+
+---
+
+### 14. render_orchestrator() Clones Visible Lines
+
+**File:** `console/src/ui.rs`
+
+`lines[start..end].to_vec()` deep-clones all visible Lines for the orchestrator view every frame. `Line` contains `Vec<Span>` which contains `String`.
+
+**Recommendation:** Use a slice reference directly or drain the subrange.
+
+---
+
+### 15. Unnecessary String Clones in Tool Execution [NEW]
+
+**File:** `console/src/app.rs`
+
+Multiple `.clone()` calls on callsign strings and `user_callsign` in the tool execution path (e.g., `&app.user_callsign.clone()`). These are unnecessary when a reference would suffice.
+
+**Recommendation:** Use `&app.user_callsign` directly instead of cloning.
+
+---
+
+## Console: Negligible
+
+### 16. all_slot_infos() Always Returns Full Slot Array
+
+**File:** `console/core/src/handler.rs`
+
+Creates `SlotInfo` structs for all configured slots (up to 26) on every `list_agents` call, including empty ones. This is a WebSocket response path, not the render loop.
+
+---
+
+## Radio: High Priority
+
+### 17. SpeechRecognizer Listener Leak on Destroy [NEW]
+
+**Files:** `PushToTalkManager.kt`, `ContinuousListenManager.kt`
+
+Both managers set a recognition listener on the `SpeechRecognizer` but never clear it before calling `destroy()`. If the recognizer is destroyed without clearing the listener, the listener holds references to callbacks, preventing garbage collection. This accumulates with repeated PTT activations and continuous-listen toggles.
+
+**Recommendation:** Call `recognizer?.setRecognitionListener(null)` and `recognizer?.stopListening()` before `recognizer?.destroy()` in both managers' `destroy()` methods.
+
+---
+
+### 18. Main-Thread Image I/O Blocking [NEW]
+
+**File:** `MainActivity.kt`
+
+`contentResolver.openInputStream(uri)?.use { it.readBytes() }` reads an entire image file into memory on the main thread. A 5MB image blocks the main thread for 50-500ms, causing dropped frames and ANR risk.
+
+**Recommendation:** Move image reading to a coroutine on `Dispatchers.IO`:
+```kotlin
+lifecycleScope.launch(Dispatchers.IO) {
+    val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() }
+    withContext(Dispatchers.Main) { /* send via WebSocket */ }
+}
+```
+
+---
+
+### 19. WebSocket Reconnect Has No Give-Up Threshold [NEW]
+
+**File:** `RadioWebSocketClient.kt`
+
+When the console is unreachable, the client retries indefinitely with exponential backoff capped at 30 seconds. Combined with 15-second ping intervals when connected, this causes continuous network radio activation and CPU wake-ups, draining battery.
+
+**Recommendation:** Add a maximum reconnect attempt count (e.g., 20 attempts = ~30 minutes). After exhausting attempts, stop retrying and notify the user. Reset the counter on successful connection.
+
+---
+
+## Radio: Medium Priority
+
+### 20. Infinite Status Blink Animator [NEW]
+
+**File:** `MainActivity.kt`
+
+The connection status dot animator uses `repeatCount = ValueAnimator.INFINITE` and runs at ~60fps. It continues even when the app is paused or the screen is off.
+
+**Recommendation:** Cancel the animator in `onPause()` and restart it in `onResume()`.
+
+---
+
+### 21. Main-Thread JSON Parsing [NEW]
+
+**File:** `MainActivity.kt`
+
+`gson.fromJson()` is called on the main thread for every WebSocket message. The entire agents list is rebuilt on every `"agents"` message. During active communication, this causes measurable main-thread stalls.
+
+**Recommendation:** Parse JSON on a background thread and post only the parsed results to the main thread for UI updates.
+
+---
+
+### 22. AudioLevelView Redraws at Full Callback Rate [NEW]
+
+**File:** `AudioLevelView.kt`
+
+The audio level bar calls `invalidate()` on every RMS callback during PTT or continuous listening, potentially 60+ times per second. Drawing 20 segments per frame at this rate impacts battery.
+
+**Recommendation:** Throttle `invalidate()` to ~15fps by checking elapsed time since last update:
+```kotlin
+var level: Float = 0f
+    set(value) {
+        val now = System.currentTimeMillis()
+        if (now - lastUpdateMs >= 66) {  // ~15fps
+            field = value.coerceIn(0f, 1f)
+            lastUpdateMs = now
+            invalidate()
+        }
     }
 ```
 
-**Recommendation:** Use `.chars().take(max - 3)` or find the nearest char boundary with `s.floor_char_boundary(max - 3)` (nightly) or manual boundary detection.
+---
 
-**Impact:** Low for typical ASCII callsigns/paths, but a latent correctness bug.
+## Radio: Low Priority
+
+### 23. AgentStatusOverlay Context Reference
+
+**File:** `AgentStatusOverlay.kt`
+
+The `context` parameter is held as a member field. If the overlay instance outlives the activity (e.g., due to an exception before cleanup in `VolumeUpHandler.onKeyUp()`), the activity context leaks.
+
+**Recommendation:** Pass context only when creating the dialog, or use a `WeakReference`.
 
 ---
 
-### strip_action_blocks() Quadratic String Mutation
+### 24. Notification Rebuilt on Every Status Change
 
-**File:** `console/src/util.rs` lines 49-69
+**File:** `RadioService.kt`
 
-**Issue:** The function mutates a `String` in-place with `replace_range()` inside a `while` loop. Each `replace_range` is O(n) because it shifts the trailing bytes. With m action blocks in an n-length string, this is O(n*m). Additionally, `result.find("</tool_call>")` on line 62 searches from the beginning each time, not from the current position.
+`updateNotification()` creates a new `Notification.Builder` with all properties on every connection status change.
 
-**Recommendation:** Build the output by copying non-block segments into a new String in a single pass, similar to how `parse_all_tool_calls` works. For typical orchestrator output (1-2 tool calls in a few KB of text), this is not a practical problem, but it's worth noting for correctness.
-
-**Impact:** Orchestrator messages are small.
+**Recommendation:** Cache the builder and only update the content text.
 
 ---
 
-### key_to_pty_bytes() Allocates a Vec Per Keystroke
+### 25. Chat View Removal Triggers Layout Invalidation
 
-**File:** `console/src/pty.rs` lines 183-229
+**File:** `MainActivity.kt`
 
-**Issue:** Every key press in input mode allocates a `Vec<u8>`. Most escape sequences are 3-6 bytes (e.g., `b"\x1b[A".to_vec()`). Single characters allocate a 4-byte buffer, encode into it, then `.to_vec()` the slice.
+When the 100-message cap is reached, `llChat.removeViewAt(0)` invalidates the entire LinearLayout. Under rapid message arrival, this compounds.
 
-**Recommendation:** Return a fixed-size array or `ArrayVec<u8, 8>` (from the `arrayvec` crate) to avoid heap allocation. Alternatively, return `Cow<'static, [u8]>` so the static sequences like `b"\x1b[A"` are zero-copy.
-
-A simpler approach without adding dependencies: write directly to the PTY writer instead of returning bytes, avoiding the intermediate allocation entirely.
-
-**Impact:** Keystroke frequency is human-limited.
+**Recommendation:** Replace the LinearLayout+ScrollView with a RecyclerView and ListAdapter for efficient view recycling.
 
 ---
 
-### Redundant Work When Overlays Are Visible
+## Dependencies
 
-**File:** `console/src/main.rs` lines 334-372
+### 26. chrono Is Heavyweight for Simple Timestamp Needs [NEW]
 
-**Issue:** When an overlay is displayed (Help, ConfirmQuit, etc.), the full pane grid is still rendered underneath before the overlay is drawn on top. All 4 VT100 screens are locked, converted to Lines, and rendered into the buffer, only to be partially obscured by the overlay.
+chrono pulls in `iana-time-zone`, platform-specific complexity, and WASM bindings not needed for a TUI app. The `time` crate is already in the dependency tree (pulled by other crates) and would serve the same purpose with less bloat.
 
-**Recommendation:** Skip pane rendering when a full-screen overlay is active. For partial overlays (centered dialogs), this is less important since ratatui's diff algorithm minimizes actual terminal writes, but the allocation work in `screen_to_lines` still happens.
-
-**Impact:** Overlays are infrequent.
+**Recommendation:** Replace chrono with `time` crate or `std::time` for the ~2-3 call sites that format timestamps. Estimated savings: ~8-10 seconds compile time, ~5MB binary size.
 
 ---
 
-### render_orchestrator() Clones Visible Lines
+### 27. Duplicate Dependency Versions [NEW]
 
-**File:** `console/src/ui.rs` lines 450
-
-**Issue:** `lines[start..end].to_vec()` clones all the visible Lines for the orchestrator view every frame. Since `Line` contains `Vec<Span>` which contains `String`, this is a deep clone.
-
-**Recommendation:** Use a slice reference directly. `Paragraph::new()` accepts `Text::from(lines)` but the lifetime of the slice must outlive the frame. Since `lines` is a local, the simplest fix is to drain/take the subrange rather than clone, or restructure to avoid the intermediate full `lines` vec.
-
-**Impact:** Only when orchestrator view is active.
+- **bitflags:** v1.3.2 (via nix v0.25, polling, portable-pty) and v2.11.0 (via crossterm, ratatui). Updating nix to v0.27+ would consolidate to v2 only.
+- **socket2:** v0.5.10 (via mdns-sd) and v0.6.3 (via tokio). Check if mdns-sd has a newer release using socket2 v0.6.
+- **windows-sys:** Four versions (0.48, 0.52, 0.59, 0.61) due to ecosystem fragmentation. Acceptable; will resolve as upstream crates update.
 
 ---
 
-## Negligible
+## Positive Patterns
 
-### all_slot_infos() Always Returns 26 Items
+These aspects of the codebase are well-optimized:
 
-**File:** `console/core/src/handler.rs` lines 90-92
-
-**Issue:** `all_slot_infos()` creates 26 `SlotInfo` structs every time `list_agents` is called, including 22+ empty ones in typical usage. Each `SlotInfo` contains `Option<String>` fields that allocate for occupied slots.
-
-**Recommendation:** Only return occupied slots, or use a fixed-size array to avoid heap allocation. This is a WebSocket response path, not the render loop, so impact is minimal.
-
----
-
-## Observations (No Issues Found)
-
-### Startup Latency
-
-**File:** `console/src/main.rs` lines 72-176
-
-The startup sequence is well-optimized:
-- Config loaded synchronously (fast, file I/O)
-- TLS cert loaded/generated (fast, cached on disk)
-- WebSocket server spawned on a background thread (non-blocking)
-- mDNS advertisement is fire-and-forget
-- Orchestrator spawned eagerly on a background thread (good -- eliminates first-message lag)
-- `git rev-parse --show-toplevel` is the only subprocess in the critical path
-
-**Note:** The orchestrator waits up to 10 seconds for a session_id (orchestrator.rs:160). If Claude is slow to start, this blocks the background thread for 10s. The main TUI is responsive during this time, but voice messages are queued. This is acceptable.
-
-### Memory Usage
-
-Memory usage is well-bounded:
-- `orch_log` capped at 500 entries (app.rs:67)
-- `ticker_queue` is unbounded `VecDeque<String>` -- could grow large if messages arrive faster than they scroll, but this is unlikely in practice
-- VT100 parsers with configurable scrollback (default 1000 lines, capped at 10,000 in pty.rs:81)
-- 26 slot array is fixed-size, not heap-allocated
-- PTY reader uses a 4KB read buffer and 512-byte line buffer (pty.rs:89-90) -- efficient
-
-The main memory consumers are the 4-26 vt100 parsers (each holding scrollback) and the orchestrator log. Both are bounded. No memory leak patterns detected.
+- **Async WebSocket server** with proper `tokio::select!` multiplexing and graceful slow-client handling
+- **PTY readers on dedicated threads** with atomic exit flags -- no UI blocking
+- **Orchestrator spawned eagerly** in background -- warm by first message
+- **VecDeque for orch_log and pending queue** -- O(1) push/pop (previously fixed from Vec)
+- **Bounded memory usage** -- orch_log capped at 500, scrollback capped at 10,000, PTY reader uses 4KB buffer
+- **File-based agent messaging** instead of fragile PTY output parsing
+- **Well-tuned Cargo feature flags** -- tokio, rustls, rcgen all use minimal feature sets
+- **Good build profiles** -- dev uses incremental + line-tables-only debug; release uses thin LTO + strip
+- **Core crate isolation** -- dispatch-core has only serde dependencies, keeping logic testable and lightweight
 
 ---
 
-## Resolved
+## Resolved (from prior review)
 
 ### O(n) Vec::remove(0) on orch_log and orchestrator pending queue
 
-**Files:** `console/src/app.rs` line 68, `console/core/src/orchestrator.rs` line 218
-
-`orch_log` was a `Vec<OrchestratorEvent>` capped at 500 entries using `self.orch_log.remove(0)` which shifted all ~500 elements left (O(n) per removal). Similarly, `self.pending.remove(0)` in the orchestrator was an avoidable O(n). Both were changed to use `VecDeque` with `pop_front()`.
+Both were changed from `Vec` with `remove(0)` (O(n) shift) to `VecDeque` with `pop_front()` (O(1)).
