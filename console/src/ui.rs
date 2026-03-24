@@ -217,10 +217,10 @@ fn pane_info_strip(global_idx: usize, local_idx: usize, app: &App) -> Text<'stat
                     format!("[{}] {}", slot_num, agent.display_name()),
                     name_style,
                 ),
-                Span::styled(" ", Style::default()),
+                Span::styled("  ", Style::default()),
                 Span::styled(activity_label, activity_style),
                 Span::styled(
-                    format!("  {} @{} {}", agent.repo_name, agent.dispatch_wall_str, runtime),
+                    format!("  @{} {} | {}", agent.dispatch_wall_str, runtime, agent.repo_name),
                     Style::default().fg(Color::DarkGray),
                 ),
             ]);
