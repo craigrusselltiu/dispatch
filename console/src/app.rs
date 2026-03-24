@@ -165,6 +165,29 @@ impl App {
         }
     }
 
+    /// Resolve a repo name or path to a full repo root path. Matches against
+    /// the short directory name (case-insensitive) first, then tries a path
+    /// suffix match. Falls back to default_repo_root() if no match is found.
+    pub fn resolve_repo(&self, name: &str) -> String {
+        if name.is_empty() {
+            return self.default_repo_root().to_string();
+        }
+        let repos = self.repo_list();
+        // Exact match on short directory name (case-insensitive).
+        if let Some(path) = repos.iter().find(|p| {
+            repo_name_from_path(p).eq_ignore_ascii_case(name)
+        }) {
+            return path.to_string();
+        }
+        // Path suffix match (e.g. "GitHub/testament" matches ".../GitHub/testament").
+        if let Some(path) = repos.iter().find(|p| {
+            p.to_lowercase().ends_with(&name.to_lowercase())
+        }) {
+            return path.to_string();
+        }
+        self.default_repo_root().to_string()
+    }
+
     /// Next unused callsign from the configured list (dynamic assignment).
     pub fn next_callsign(&self) -> Option<String> {
         let used: std::collections::HashSet<String> = self.slots.iter()
@@ -276,7 +299,7 @@ impl App {
     /// Execute a tool call from the orchestrator agent. Returns the result.
     pub fn execute_tool(&mut self, call: &tools::ToolCall) -> tools::ToolResult {
         match call {
-            tools::ToolCall::Dispatch { repo: _, prompt, callsign: requested_callsign, tool: requested_tool } => {
+            tools::ToolCall::Dispatch { repo, prompt, callsign: requested_callsign, tool: requested_tool } => {
                 // Dynamic callsign assignment: agents go into the next
                 // available slot rather than a fixed slot per callsign.
                 let (slot_idx, callsign_for_prompt) = if let Some(cs) = requested_callsign.as_deref() {
@@ -344,7 +367,7 @@ impl App {
                     },
                 };
 
-                let target_repo = self.default_repo_root().to_string();
+                let target_repo = self.resolve_repo(repo);
 
                 let full_prompt = format!("Your callsign is {}. {}", callsign_for_prompt, prompt);
 
