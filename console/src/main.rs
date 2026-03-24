@@ -585,6 +585,9 @@ fn main() -> io::Result<()> {
             }
         }
 
+        // Sync orchestrator lifecycle status to radio clients whenever it changes.
+        app.sync_orchestrator_status();
+
         terminal.draw(|f| {
             let full = f.area();
             let chunks = Layout::default()

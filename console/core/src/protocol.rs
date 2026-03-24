@@ -58,6 +58,9 @@ pub enum OutboundMsg {
         /// Configured display name for the console/orchestrator (default: "Console").
         #[serde(skip_serializing_if = "Option::is_none")]
         console_name: Option<String>,
+        /// Orchestrator lifecycle status: "idle", "thinking", "dead", "failed", "starting".
+        #[serde(skip_serializing_if = "Option::is_none")]
+        orchestrator_status: Option<String>,
         #[serde(skip_serializing_if = "Option::is_none")]
         seq: Option<u64>,
     },
