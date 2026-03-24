@@ -804,6 +804,7 @@ Minimal, high-contrast, dark theme. Uppercase labels, monospaced accents.
 
 ### Settings
 
+- **Connection profiles**: save and load named connection profiles (host, port, PSK). Switch between different consoles without re-entering credentials. Profiles are stored in SharedPreferences and persist across app restarts. Profile names are sanitized to lowercase alphanumeric and hyphens. The active profile name is displayed in the settings screen; it clears automatically if connection fields are manually changed.
 - **Console discovery**: mDNS scan to auto-fill address and port.
 - **Console address**: IP and port (auto-filled by discovery or manual entry).
 - **Pre-shared key**: manual entry.

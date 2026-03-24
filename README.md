@@ -71,7 +71,7 @@ Agent callsigns are configured in the `[agents]` section. The user and console d
 
 ### Radio (Android)
 
-Open the `radio/` directory in Android Studio, sync Gradle, and deploy to your phone over USB or Wi-Fi debugging. Once installed, open the app's settings and connect to the console by tapping **DISCOVER CONSOLE** (mDNS) or entering the IP, port, and PSK manually (press `x` in the console to display connection details).
+Open the `radio/` directory in Android Studio, sync Gradle, and deploy to your phone over USB or Wi-Fi debugging. Once installed, open the app's settings and connect to the console by tapping **DISCOVER CONSOLE** (mDNS) or entering the IP, port, and PSK manually (press `x` in the console to display connection details). Save connection details as named profiles to switch between different consoles without re-entering credentials.
 
 ## Usage
 
