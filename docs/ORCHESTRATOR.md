@@ -40,6 +40,7 @@ You may include multiple action blocks in one response. Available actions:
 | `list_agents` | _(none)_ | List all agent slots with their status. |
 | `list_repos` | _(none)_ | List available repositories. |
 | `message_agent` | `agent`, `text` | Send text directly to an agent's terminal. |
+| `strike_team` | `spec_file` (required), `repo` (required), `name` (optional) | Launch a Strike Team: break a spec into tasks with dependencies, then dispatch agents in parallel waves until all tasks are complete. Only one strike team can be active at a time. |
 
 ## Decision Rules
 

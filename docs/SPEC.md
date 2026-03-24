@@ -192,6 +192,7 @@ The console parses the `"action"` field to determine which tool to execute. Para
 | `list_agents` | _(none)_ | List all active agent slots with callsign, tool, working/idle status, and repo. |
 | `list_repos` | _(none)_ | List available repositories that agents can work in. |
 | `message_agent` | `agent`, `text` | Send text to an agent's terminal (PTY). Use for follow-up instructions or answering agent questions. |
+| `strike_team` | `spec_file` (required), `repo` (required), `name` (optional) | Launch a Strike Team: break a spec into tasks with dependencies, then dispatch agents in parallel waves until all tasks are complete. See [Strike Team](#strike-team). |
 
 The `agent` parameter accepts either a callsign (e.g. "Alpha") or a slot number (e.g. "1"), case-insensitive.
 
@@ -241,6 +242,107 @@ All voice prompts from the radio and keyboard input submitted in input mode are 
 ```
 
 **Keyboard input tracking:** in input mode, the console maintains a shadow buffer of typed characters. When Enter is pressed, the accumulated text is saved to the history log. The shadow buffer is cleared on mode exit (Escape).
+
+---
+
+## Strike Team
+
+A coordinated multi-agent execution mode that takes a spec or feature design document, breaks it into tasks with dependencies, then dispatches agents in parallel waves -- maximizing throughput while respecting task ordering.
+
+### Lifecycle
+
+```
+Idle --> Planning --> Executing --> Complete
+                 \-> Failed (planner error)
+```
+
+### How It Works
+
+1. The orchestrator issues a `strike_team(spec_file, name, repo)` action.
+2. The console dispatches a **planner agent** that reads the spec file and creates a task file (`.dispatch/tasks-<name>.md`) with dependency information.
+3. Once the planner finishes, the console parses the task file and transitions to the Executing phase.
+4. The console scans for **ready** tasks (status `pending` with all dependencies `done`) and dispatches agents in parallel for each ready task that has an available slot.
+5. When an agent finishes, it merges to main and is terminated to free the slot.
+6. The console pulls the latest main, checks for newly unblocked tasks, and dispatches the next wave.
+7. Repeats until all tasks are `done` or `failed`.
+
+### Task File Format
+
+Location: `.dispatch/tasks-<name>.md`
+
+```markdown
+# Strike Team: auth-system
+spec: docs/auth-spec.md
+
+## T1: Implement user model
+status: pending
+dependencies: none
+prompt: Create a User struct in src/models/user.rs with fields id, email, name, created_at. Add serde derives.
+
+## T2: Add user API endpoints
+status: pending
+dependencies: T1
+prompt: Create REST endpoints for CRUD operations on users in src/routes/users.rs.
+
+## T3: Add authentication middleware
+status: pending
+dependencies: T1
+prompt: Implement JWT authentication middleware in src/middleware/auth.rs.
+
+## T4: Wire auth into endpoints
+status: pending
+dependencies: T2, T3
+prompt: Apply auth middleware to user endpoints. Add integration tests.
+```
+
+**Fields per task:**
+
+| Field | Values | Description |
+|-------|--------|-------------|
+| `status` | `pending`, `active`, `done`, `failed` | Current state |
+| `dependencies` | `none` or comma-separated IDs (`T1, T3`) | Dependency list |
+| `prompt` | Single line of text | Self-contained agent instruction |
+| `agent` | Callsign (e.g., `Alpha`) | Written by console when assigned |
+
+**Readiness rule:** a task is ready when its status is `pending` and all dependencies have status `done`.
+
+**Parsing:** line-by-line string matching. `## T<N>:` starts a task, `key: value` lines set fields. No markdown parsing library needed.
+
+### Execution Loop
+
+Runs inside the existing 16ms main loop tick -- no new threads or async.
+
+1. `git pull --ff-only` in repo root (pick up prior merges from completed agents).
+2. Scan tasks: find all where status=`pending` and all deps are `done`.
+3. For each ready task with an available slot: dispatch a fresh agent with the task's prompt.
+4. Update task file: status=`active`, agent=`<callsign>`.
+5. When an agent goes idle (existing 10s idle detection):
+   - Mark task `done` in the task file.
+   - Terminate the agent (free the slot for next wave).
+   - Re-run from step 1.
+6. When an agent process exits unexpectedly: mark task `failed`, continue.
+7. When all tasks are `done` or `failed`: transition to Complete.
+
+Each task agent follows the normal dispatch workflow: creates a worktree from latest main, works on its task, merges to main, pushes, cleans up, and goes idle. On idle detection, the console terminates the agent to free the slot for the next wave.
+
+### UI Indicators
+
+- **Header bar**: `STRIKE TEAM 3/7` (done/total) appended when active.
+- **Pane info strip**: task ID next to callsign, e.g., `Alpha [T3]`.
+- **Ticker messages** at lifecycle events:
+  - `STRIKE TEAM: planning <name>...`
+  - `STRIKE TEAM: plan ready, 7 tasks`
+  - `STRIKE TEAM: T3 -> Alpha`
+  - `STRIKE TEAM: T3 done (Alpha)`
+  - `STRIKE TEAM: complete (7/7)`
+
+### Edge Cases
+
+- **Max slots full**: ready tasks wait. As agents finish and slots free up, the next wave dispatches.
+- **Agent failure**: task marked `failed`. Its dependents stay `pending` forever (blocked by the failed dependency). Sibling tasks continue normally.
+- **Merge conflicts**: agents handle conflicts per their normal workflow. If unresolvable, the agent reports failure.
+- **Cancellation**: no special mechanism. User terminates agents manually. Console stops dispatching if strike team state is cleared.
+- **One at a time**: only one strike team can be active at once. A second `strike_team` call returns an error.
 
 ---
 
