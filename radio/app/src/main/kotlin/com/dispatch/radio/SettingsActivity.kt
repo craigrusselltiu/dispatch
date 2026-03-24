@@ -1,15 +1,19 @@
 package com.dispatch.radio
 
+import android.app.AlertDialog
+import android.graphics.Typeface
 import android.os.Bundle
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
+import android.widget.LinearLayout
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 
 /**
  * Settings screen (dispatch-88k.7).
  *
+ * - Connection profile saving and switching
  * - mDNS console discovery (dispatch-ct2.1)
  * - Console IP + port
  * - Pre-shared key (manual entry)
@@ -33,6 +37,10 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var btnReset: Button
     private lateinit var btnDiscover: Button
     private lateinit var tvDiscoverStatus: TextView
+    private lateinit var tvActiveProfile: TextView
+    private lateinit var btnSaveProfile: Button
+    private lateinit var btnLoadProfile: Button
+    private lateinit var llProfiles: LinearLayout
 
     /** Values loaded from settings, used to detect manual edits. */
     private var loadedHost = ""
@@ -56,12 +64,19 @@ class SettingsActivity : AppCompatActivity() {
         btnReset = findViewById(R.id.btn_reset)
         btnDiscover = findViewById(R.id.btn_discover)
         tvDiscoverStatus = findViewById(R.id.tv_discover_status)
+        tvActiveProfile = findViewById(R.id.tv_active_profile)
+        btnSaveProfile = findViewById(R.id.btn_save_profile)
+        btnLoadProfile = findViewById(R.id.btn_load_profile)
+        llProfiles = findViewById(R.id.ll_profiles)
 
         loadSettings()
+        refreshProfileList()
 
         btnSave.setOnClickListener { saveSettings() }
         btnReset.setOnClickListener { resetToDefaults() }
         btnDiscover.setOnClickListener { onDiscoverClicked() }
+        btnSaveProfile.setOnClickListener { onSaveProfileClicked() }
+        btnLoadProfile.setOnClickListener { onLoadProfileClicked() }
     }
 
     private fun onDiscoverClicked() {
@@ -99,6 +114,119 @@ class SettingsActivity : AppCompatActivity() {
         }, 5000)
     }
 
+    // ── Connection Profiles ──────────────────────────────────────────────
+
+    private fun onSaveProfileClicked() {
+        val input = EditText(this).apply {
+            hint = "profile name"
+            inputType = android.text.InputType.TYPE_CLASS_TEXT
+            setTextColor(getColor(R.color.white))
+            setHintTextColor(getColor(R.color.dim_grey))
+            typeface = Typeface.MONOSPACE
+            background = getDrawable(R.drawable.input_background)
+            setPadding(24, 24, 24, 24)
+            // Pre-fill with active profile name if one is set
+            settings.activeProfile?.let { setText(it) }
+        }
+
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
+            .setTitle("Save connection profile")
+            .setView(input)
+            .setPositiveButton("SAVE") { _, _ ->
+                val name = input.text.toString().trim().lowercase()
+                    .replace(Regex("[^a-z0-9-]"), "-")
+                    .replace(Regex("-+"), "-")
+                    .trim('-')
+                if (name.isEmpty()) return@setPositiveButton
+
+                val host = etHost.text.toString().trim().ifEmpty { "192.168.1.1" }
+                val port = etPort.text.toString().trim().toIntOrNull() ?: 9800
+                val psk = etPsk.text.toString().trim()
+
+                settings.saveProfile(
+                    RadioSettings.ConnectionProfile(name, host, port, psk)
+                )
+                settings.activeProfile = name
+                refreshProfileList()
+            }
+            .setNegativeButton("CANCEL", null)
+            .show()
+    }
+
+    private fun onLoadProfileClicked() {
+        val profiles = settings.listProfiles()
+        if (profiles.isEmpty()) {
+            tvActiveProfile.text = "NO SAVED PROFILES"
+            tvActiveProfile.setTextColor(getColor(R.color.dim_grey))
+            return
+        }
+
+        val names = profiles.map { it.name }.toTypedArray()
+        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
+            .setTitle("Load connection profile")
+            .setItems(names) { _, which ->
+                val profile = profiles[which]
+                etHost.setText(profile.host)
+                etPort.setText(profile.port.toString())
+                etPsk.setText(profile.psk)
+                settings.activeProfile = profile.name
+                loadedHost = profile.host
+                loadedPort = profile.port.toString()
+                refreshProfileList()
+            }
+            .setNegativeButton("CANCEL", null)
+            .show()
+    }
+
+    private fun refreshProfileList() {
+        val active = settings.activeProfile
+        if (active != null) {
+            tvActiveProfile.text = "ACTIVE: $active"
+            tvActiveProfile.setTextColor(getColor(R.color.green))
+        } else {
+            tvActiveProfile.text = "NO ACTIVE PROFILE"
+            tvActiveProfile.setTextColor(getColor(R.color.dim_grey))
+        }
+
+        llProfiles.removeAllViews()
+        val profiles = settings.listProfiles()
+        for (profile in profiles) {
+            val row = LinearLayout(this).apply {
+                orientation = LinearLayout.HORIZONTAL
+                setPadding(0, 4, 0, 4)
+            }
+
+            val label = TextView(this).apply {
+                text = "${profile.name}  ${profile.host}:${profile.port}"
+                textSize = 11f
+                typeface = Typeface.MONOSPACE
+                setTextColor(
+                    if (profile.name == active) getColor(R.color.green)
+                    else getColor(R.color.white)
+                )
+                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
+            }
+
+            val btnDelete = TextView(this).apply {
+                text = "DEL"
+                textSize = 11f
+                typeface = Typeface.MONOSPACE
+                setTextColor(getColor(R.color.red))
+                setPadding(16, 0, 0, 0)
+                setOnClickListener {
+                    settings.deleteProfile(profile.name)
+                    refreshProfileList()
+                }
+            }
+
+            row.addView(label)
+            row.addView(btnDelete)
+            llProfiles.addView(row)
+        }
+    }
+
+    // ── Settings load/save ───────────────────────────────────────────────
+
     private fun loadSettings() {
         etHost.setText(settings.consoleHost)
         etPort.setText(settings.consolePort.toString())
@@ -114,6 +242,7 @@ class SettingsActivity : AppCompatActivity() {
     private fun resetToDefaults() {
         settings.resetToDefaults()
         loadSettings()
+        refreshProfileList()
     }
 
     override fun onDestroy() {
@@ -126,13 +255,27 @@ class SettingsActivity : AppCompatActivity() {
         discovery.stopDiscovery()
         etHost.removeCallbacks(null)
 
-        settings.consoleHost = etHost.text.toString().trim().ifEmpty { "192.168.1.1" }
-        settings.consolePort = etPort.text.toString().trim().toIntOrNull() ?: 9800
-        settings.psk = etPsk.text.toString().trim()
+        val newHost = etHost.text.toString().trim().ifEmpty { "192.168.1.1" }
+        val newPort = etPort.text.toString().trim().toIntOrNull() ?: 9800
+        val newPsk = etPsk.text.toString().trim()
+
+        settings.consoleHost = newHost
+        settings.consolePort = newPort
+        settings.psk = newPsk
         settings.speechLocale = etLocale.text.toString().trim().ifEmpty { "en-US" }
         settings.hapticEnabled = cbHaptic.isChecked
         settings.keepScreenOn = cbScreenOn.isChecked
         settings.continuousListening = cbContinuous.isChecked
+
+        // Clear active profile if connection fields changed from what the profile had
+        val active = settings.activeProfile
+        if (active != null) {
+            val profile = settings.listProfiles().find { it.name == active }
+            if (profile != null &&
+                (profile.host != newHost || profile.port != newPort || profile.psk != newPsk)) {
+                settings.activeProfile = null
+            }
+        }
 
         setResult(RESULT_OK)
         finish()

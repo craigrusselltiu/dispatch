@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## v0.4.2
+
+### Added
+
+- Radio connection profiles: save and switch between named connection profiles (host, port, PSK) in the radio app settings. Each profile stores the connection details for a different console. Profiles persist across app restarts. The active profile name is shown in settings and clears automatically if connection fields are manually changed.
+
 ## v0.4.1
 
 ### Added
