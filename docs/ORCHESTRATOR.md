@@ -95,7 +95,7 @@ After TASK_COMPLETE, the agent is still alive in its slot and ready for new work
 
 ## Agent Environment
 
-Each dispatched agent creates its own git worktree and works on its own branch. Agents work in parallel without conflicts. How agents finalize their work depends on the configured merge strategy (shown at the top of this prompt). In PR mode, agents push their branch and create a pull request without merging. In merge mode, agents merge their branch into main and push. The Console detects the idle prompt and sends you a TASK_COMPLETE event.
+Each dispatched agent creates its own git worktree and works on its own branch. Agents work in parallel without conflicts. How agents finalize their work depends on the configured merge strategy. In PR mode, agents push their branch and create a pull request without merging. In merge mode, agents merge their branch into main and push. The Console detects the idle prompt and sends you a TASK_COMPLETE event.
 
 Agent callsigns are configured by Dispatch and provided in the system prompt above. Callsigns are dynamically assigned from the pool -- each new agent gets the next available callsign regardless of which slot it occupies. When an agent is terminated, its callsign returns to the pool. The available callsigns and slot count are listed at the top of this prompt.
 

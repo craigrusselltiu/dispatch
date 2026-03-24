@@ -420,9 +420,7 @@ fn to_toml_with_comments(cfg: &Config) -> String {
          console_name = \"{console_name}\"\n\
          \n\
          [workflow]\n\
-         # How agents finalize their work:\n\
-         #   \"pr\"    - push branch and create a pull request (default, never merges to main)\n\
-         #   \"merge\" - merge branch into main and push\n\
+         # How agents finalize work: \"pr\" (push branch + create PR, default) or \"merge\" (merge to main + push).\n\
          merge_strategy = \"{merge_strategy}\"\n\
          \n\
          [tools]\n\

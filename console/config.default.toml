@@ -21,9 +21,7 @@ user_callsign = "Dispatch"
 console_name = "Console"
 
 [workflow]
-# How agents finalize their work:
-#   "pr"    - push branch and create a pull request (default, never merges to main)
-#   "merge" - merge branch into main and push
+# How agents finalize work: "pr" (push branch + create PR, default) or "merge" (merge to main + push).
 merge_strategy = "pr"
 
 [tools]
