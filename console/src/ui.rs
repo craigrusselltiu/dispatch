@@ -1,6 +1,7 @@
 // UI rendering: header, footer, panes, overlays, orchestrator view.
 
 use dispatch_core::orchestrator;
+use dispatch_core::strike_team::StrikeTeamPhase;
 use ratatui::{
     layout::{Constraint, Direction, Layout, Rect},
     style::{Color, Modifier, Style},
@@ -122,13 +123,22 @@ pub fn render_header(f: &mut Frame, area: Rect, app: &App) {
         None if app.orch_error.is_some() => "  ORCH: FAILED",
         None => "  ORCH: STARTING",
     };
+    // Strike team progress indicator when executing.
+    let strike_indicator = match &app.strike_team {
+        Some(st) if st.phase == StrikeTeamPhase::Executing => {
+            let (done, total) = st.summary();
+            format!("  STRIKE TEAM {}/{}", done, total)
+        }
+        _ => String::new(),
+    };
     let right = format!(
-        "PSK: {}  AGENTS: {}/{}{}{}  PAGE {}/{}  {}",
+        "PSK: {}  AGENTS: {}/{}{}{}{}  PAGE {}/{}  {}",
         app.psk_display(),
         app.active_count(),
         app.slots.len(),
         workspace_indicator,
         orch_indicator,
+        strike_indicator,
         app.current_page + 1,
         app.total_pages(),
         clock,
@@ -204,6 +214,13 @@ fn pane_info_strip(global_idx: usize, local_idx: usize, app: &App) -> Text<'stat
             } else {
                 Style::default().fg(Color::White).add_modifier(Modifier::BOLD)
             };
+            // Strike team task label: show task ID next to callsign when assigned.
+            let strike_task_label = app
+                .strike_team
+                .as_ref()
+                .and_then(|st| st.task_for_agent(&agent.callsign))
+                .map(|t| format!(" [{}]", t.id))
+                .unwrap_or_default();
             // Activity indicator: shows WORK or IDLE based on PTY output.
             let (activity_label, activity_style) = if agent.task_id.is_some() && !agent.idle {
                 ("WORK", Style::default().fg(Color::Green).add_modifier(Modifier::BOLD))
@@ -214,7 +231,7 @@ fn pane_info_strip(global_idx: usize, local_idx: usize, app: &App) -> Text<'stat
             let line1 = Line::from(vec![
                 Span::styled(marker_str.to_string(), marker_style),
                 Span::styled(
-                    format!("[{}] {}", slot_num, agent.display_name()),
+                    format!("[{}] {}{}", slot_num, agent.display_name(), strike_task_label),
                     name_style,
                 ),
                 Span::styled("  ", Style::default()),
