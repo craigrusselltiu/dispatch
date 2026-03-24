@@ -124,9 +124,15 @@ pub fn dispatch_slot(
     } else if tool_key == "copilot" {
         // GitHub Copilot CLI: YOLO mode auto-accepts all tool/path/URL
         // permissions so the agent works autonomously without prompts.
+        // Copilot natively reads AGENTS.md and .github/copilot-instructions.md
+        // from the repo, so no --system-prompt needed.
         cmd.arg("--yolo");
     }
     if let Some(prompt) = initial_prompt {
+        // Copilot requires -p flag for the prompt; Claude accepts it as a bare arg.
+        if tool_key == "copilot" {
+            cmd.arg("-p");
+        }
         cmd.arg(prompt);
     }
     cmd.cwd(cwd.unwrap_or(repo_root));
