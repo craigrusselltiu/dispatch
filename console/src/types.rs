@@ -6,7 +6,7 @@ use std::{
     time::Instant,
 };
 
-use dispatch_core::orchestrator;
+use dispatch_core::{orchestrator, strike_team};
 
 /// Slots per page (2x2 grid).
 pub const SLOTS_PER_PAGE: usize = 4;
@@ -184,4 +184,6 @@ pub struct App {
     pub user_callsign: String,
     /// Display name for the console/orchestrator (default: "Console").
     pub console_name: String,
+    /// Active strike team state (None when no strike team is running).
+    pub strike_team: Option<strike_team::StrikeTeamState>,
 }

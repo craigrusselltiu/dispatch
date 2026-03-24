@@ -281,6 +281,8 @@ fn main() -> io::Result<()> {
         for i in 0..slot_count {
             if let Some(s) = &app.slots[i] {
                 if s.child_exited.load(Ordering::Relaxed) {
+                    // Strike team: mark task failed on unexpected exit.
+                    app.strike_team_on_agent_exit(i);
                     let callsign = s.display_name().to_string();
                     let task_id = s.task_id.clone();
                     app.slots[i] = None;
@@ -337,6 +339,8 @@ fn main() -> io::Result<()> {
                                 callsign, i + 1
                             ));
                         }
+                        // Strike team: mark task done and free the slot.
+                        app.strike_team_on_agent_idle(&callsign);
                         // Sync ws_state.
                         {
                             let mut st = app.ws_state.lock().unwrap();
@@ -364,6 +368,8 @@ fn main() -> io::Result<()> {
         app.tick_ticker();
         // Advance status blink animation (REC-light pulse).
         app.tick_status_blink();
+        // Advance strike team state machine (dispatch next wave, check completion).
+        app.tick_strike_team();
 
         // dispatch-guj: pick up background-spawned orchestrator when ready.
         if app.orchestrator.is_none() && app.orch_error.is_none() {
@@ -548,6 +554,7 @@ fn main() -> io::Result<()> {
                             tools::ToolCall::ListAgents => "list_agents",
                             tools::ToolCall::ListRepos => "list_repos",
                             tools::ToolCall::MessageAgent { .. } => "message_agent",
+                            tools::ToolCall::StrikeTeam { .. } => "strike_team",
                         };
                         app.push_orch(OrchestratorEventKind::ToolCallIssued {
                             name: call_name.to_string(),

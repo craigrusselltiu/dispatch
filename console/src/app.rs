@@ -2,13 +2,14 @@
 
 use std::{
     io::Write,
+    process::Command,
     sync::Arc,
     thread,
     time::Instant,
 };
 
 use chrono::Local;
-use dispatch_core::{protocol, tools};
+use dispatch_core::{protocol, strike_team, tools};
 
 use crate::types::*;
 use crate::pty::dispatch_slot;
@@ -68,6 +69,7 @@ impl App {
             status_blink_frame: 0,
             user_callsign,
             console_name,
+            strike_team: None,
         }
     }
 
@@ -536,6 +538,125 @@ impl App {
                 tools::ToolResult::Repos { repos }
             }
 
+            tools::ToolCall::StrikeTeam { spec_file, name, repo } => {
+                // Only one strike team at a time.
+                if self.strike_team.is_some() {
+                    return tools::ToolResult::Error {
+                        message: "a strike team is already active".to_string(),
+                    };
+                }
+
+                let target_repo = self.resolve_repo(repo);
+                let st_name = name.as_deref().unwrap_or_else(|| {
+                    // Default name: spec filename without extension.
+                    spec_file.rsplit('/').next()
+                        .and_then(|f| f.rsplit('\\').next())
+                        .and_then(|f| f.strip_suffix(".md"))
+                        .unwrap_or(spec_file)
+                }).to_string();
+
+                // Build planner prompt (no worktree — works in repo root).
+                let planner_prompt = format!(
+                    "You are a task planner for the Dispatch Strike Team system. Your ONLY job is to \
+                     read a spec file and create a task breakdown.\n\n\
+                     1. Read the spec file at: {spec_file}\n\
+                     2. Create a task file at: .dispatch/tasks-{st_name}.md\n\n\
+                     Use this EXACT format:\n\n\
+                     # Strike Team: {st_name}\n\
+                     spec: {spec_file}\n\n\
+                     ## T1: <short title>\n\
+                     status: pending\n\
+                     dependencies: none\n\
+                     prompt: <detailed prompt for an AI agent -- include file paths, function names, acceptance criteria>\n\n\
+                     ## T2: <short title>\n\
+                     status: pending\n\
+                     dependencies: T1\n\
+                     prompt: <detailed prompt>\n\n\
+                     RULES:\n\
+                     - Each task must be completable by a single agent in one session.\n\
+                     - Maximize parallelism: only add dependencies when truly required.\n\
+                     - Prompts must be self-contained with specific file paths and criteria.\n\
+                     - Sequential IDs: T1, T2, T3, etc.\n\
+                     - Aim for 3-15 tasks.\n\
+                     - Do NOT create a git worktree. Work directly in the repo root.\n\
+                     - After creating the file, report the task count via your status message file, then stop."
+                );
+
+                // Dispatch planner agent to repo root (no worktree).
+                let callsign_for_prompt = self.next_callsign()
+                    .unwrap_or_else(|| "Planner".to_string());
+                let slot_idx = match self.slots.iter().position(|s| s.is_none()) {
+                    Some(i) => i,
+                    None => return tools::ToolResult::Error {
+                        message: "no available slots for planner agent".to_string(),
+                    },
+                };
+
+                let effective_tool = self.default_tool.clone();
+                let cmd = self.tool_cmd(&effective_tool).to_string();
+                let full_prompt = format!("Your callsign is {}. {}", callsign_for_prompt, planner_prompt);
+
+                match dispatch_slot(
+                    slot_idx, &effective_tool, &cmd, self.pane_rows, self.pane_cols,
+                    Some(&target_repo), self.scrollback_lines,
+                    repo_name_from_path(&target_repo), &target_repo,
+                    Some(&full_prompt),
+                    &callsign_for_prompt,
+                    &self.merge_strategy,
+                ) {
+                    Some(slot) => { self.slots[slot_idx] = Some(slot); }
+                    None => return tools::ToolResult::Error {
+                        message: "failed to spawn planner agent PTY".to_string(),
+                    },
+                }
+
+                {
+                    let slot = self.slots[slot_idx].as_mut().unwrap();
+                    slot.task_id = Some(format!("strike-team-planner:{}", st_name));
+                    *slot.last_output_at.lock().unwrap() = Instant::now();
+                    slot.idle = false;
+                }
+
+                let planner_callsign = self.slots[slot_idx].as_ref().unwrap().display_name().to_string();
+
+                // Initialize strike team state.
+                let task_file_path = format!("{}/.dispatch/tasks-{}.md", target_repo, st_name);
+                self.strike_team = Some(strike_team::StrikeTeamState {
+                    name: st_name.clone(),
+                    spec_file: spec_file.clone(),
+                    repo: target_repo.clone(),
+                    phase: strike_team::StrikeTeamPhase::Planning,
+                    tasks: Vec::new(),
+                    task_file_path,
+                    planner_callsign: Some(planner_callsign.clone()),
+                });
+
+                self.push_orch(OrchestratorEventKind::Dispatched {
+                    agent: planner_callsign.clone(), slot: slot_idx + 1, tool: effective_tool.clone(),
+                });
+                self.push_ticker(format!("STRIKE TEAM: planning {}...", st_name));
+                self.push_chat("System", &format!("Strike Team '{}': planner dispatched to slot {}.", st_name, slot_idx + 1));
+
+                // Sync ws_state.
+                {
+                    let mut st = self.ws_state.lock().unwrap();
+                    st.slots[slot_idx] = Some(ws_server::AgentSlot {
+                        callsign: planner_callsign.clone(),
+                        tool: effective_tool,
+                        status: ws_server::AgentStatus::Busy,
+                        task: None,
+                        repo: Some(repo_name_from_path(&target_repo).to_string()),
+                    });
+                }
+                self.broadcast_agents();
+
+                tools::ToolResult::StrikeTeamStarted {
+                    name: st_name,
+                    planner_slot: (slot_idx + 1) as u32,
+                    planner_callsign,
+                }
+            }
+
             tools::ToolCall::MessageAgent { agent, text } => {
                 let (slot_occupied, callsigns): (Vec<bool>, Vec<Option<String>>) = self.slots
                     .iter()
@@ -594,6 +715,269 @@ impl App {
                 }
             }
         }
+    }
+
+    // ── strike team state machine ────────────────────────────────────────────
+
+    /// Advance the strike team state machine. Called each frame from the main loop.
+    pub fn tick_strike_team(&mut self) {
+        let phase = match &self.strike_team {
+            Some(st) => st.phase.clone(),
+            None => return,
+        };
+
+        match phase {
+            strike_team::StrikeTeamPhase::Planning => {
+                // Check if the planner agent is idle (finished planning).
+                let planner_cs = match &self.strike_team {
+                    Some(st) => st.planner_callsign.clone(),
+                    None => return,
+                };
+                if let Some(cs) = &planner_cs {
+                    let planner_idle = self.slots.iter().any(|s| {
+                        s.as_ref().map_or(false, |slot| {
+                            slot.display_name().eq_ignore_ascii_case(cs) && slot.task_id.is_none()
+                        })
+                    });
+                    // Also check if planner exited (slot is gone).
+                    let planner_gone = !self.slots.iter().any(|s| {
+                        s.as_ref().map_or(false, |slot| {
+                            slot.display_name().eq_ignore_ascii_case(cs)
+                        })
+                    });
+
+                    if planner_idle || planner_gone {
+                        // Parse the task file and transition to Executing.
+                        let st = self.strike_team.as_mut().unwrap();
+                        let task_file = &st.task_file_path;
+                        match std::fs::read_to_string(task_file) {
+                            Ok(contents) => {
+                                st.tasks = strike_team::parse_task_file(&contents);
+                                let task_count = st.tasks.len();
+                                if task_count == 0 {
+                                    st.phase = strike_team::StrikeTeamPhase::Aborted;
+                                    let name = st.name.clone();
+                                    self.push_ticker(format!("STRIKE TEAM: {} aborted — no tasks found", name));
+                                } else {
+                                    st.phase = strike_team::StrikeTeamPhase::Executing;
+                                    st.planner_callsign = None;
+                                    let name = st.name.clone();
+                                    self.push_ticker(format!("STRIKE TEAM: plan ready, {} tasks", task_count));
+                                    self.push_chat("System", &format!("Strike Team '{}': plan ready with {} tasks.", name, task_count));
+                                }
+                            }
+                            Err(_) => {
+                                st.phase = strike_team::StrikeTeamPhase::Aborted;
+                                let name = st.name.clone();
+                                self.push_ticker(format!("STRIKE TEAM: {} aborted — task file not found", name));
+                            }
+                        }
+
+                        // Terminate the planner agent to free the slot.
+                        if planner_idle {
+                            if let Some(idx) = self.slots.iter().position(|s| {
+                                s.as_ref().map_or(false, |slot| {
+                                    slot.display_name().eq_ignore_ascii_case(cs)
+                                })
+                            }) {
+                                let callsign = self.slots[idx].as_ref().unwrap().display_name().to_string();
+                                crate::pty::terminate_slot(&mut self.slots[idx]);
+                                self.push_orch(OrchestratorEventKind::Terminated {
+                                    agent: callsign, slot: idx + 1,
+                                });
+                                {
+                                    let mut wst = self.ws_state.lock().unwrap();
+                                    wst.slots[idx] = None;
+                                }
+                                self.broadcast_agents();
+                            }
+                        }
+                    }
+                }
+            }
+            strike_team::StrikeTeamPhase::Executing => {
+                self.strike_team_dispatch_ready();
+            }
+            strike_team::StrikeTeamPhase::Complete | strike_team::StrikeTeamPhase::Aborted => {
+                // Nothing to do — terminal states.
+            }
+        }
+    }
+
+    /// Dispatch agents for all ready tasks (pending with all deps done).
+    /// Runs `git pull --ff-only` first to pick up prior merges.
+    fn strike_team_dispatch_ready(&mut self) {
+        let (repo, ready_ids, task_file_path) = {
+            let st = match &self.strike_team {
+                Some(st) => st,
+                None => return,
+            };
+            let ready = strike_team::ready_tasks(&st.tasks);
+            let ids: Vec<String> = ready.iter().map(|t| t.id.clone()).collect();
+            (st.repo.clone(), ids, st.task_file_path.clone())
+        };
+
+        if ready_ids.is_empty() {
+            // Check if all tasks are complete.
+            let st = self.strike_team.as_ref().unwrap();
+            if strike_team::is_complete(&st.tasks) {
+                let summary = strike_team::summary(&st.tasks);
+                let name = st.name.clone();
+                self.strike_team.as_mut().unwrap().phase = strike_team::StrikeTeamPhase::Complete;
+                self.push_ticker(format!("STRIKE TEAM: complete ({})", summary));
+                self.push_chat("System", &format!("Strike Team '{}': complete ({}).", name, summary));
+                if let Some(orch) = &mut self.orchestrator {
+                    orch.send_message(&format!("[EVENT] STRIKE_TEAM_COMPLETE name={} result={}", name, summary));
+                }
+            }
+            return;
+        }
+
+        // git pull --ff-only in repo root to pick up prior merges.
+        let _ = Command::new("git")
+            .args(["pull", "--ff-only"])
+            .current_dir(&repo)
+            .output();
+
+        for task_id in &ready_ids {
+            // Find an available slot.
+            let slot_idx = match self.slots.iter().position(|s| s.is_none()) {
+                Some(i) => i,
+                None => break, // No more slots — wait for next tick.
+            };
+
+            let (prompt, title) = {
+                let st = self.strike_team.as_ref().unwrap();
+                let task = st.tasks.iter().find(|t| t.id == *task_id).unwrap();
+                (task.prompt.clone(), task.title.clone())
+            };
+
+            let callsign = self.next_callsign()
+                .unwrap_or_else(|| format!("Agent-{}", slot_idx + 1));
+            let effective_tool = self.default_tool.clone();
+            let cmd = self.tool_cmd(&effective_tool).to_string();
+            let full_prompt = format!("Your callsign is {}. {}", callsign, prompt);
+
+            match dispatch_slot(
+                slot_idx, &effective_tool, &cmd, self.pane_rows, self.pane_cols,
+                None, self.scrollback_lines,
+                repo_name_from_path(&repo), &repo,
+                Some(&full_prompt),
+                &callsign,
+                &self.merge_strategy,
+            ) {
+                Some(slot) => { self.slots[slot_idx] = Some(slot); }
+                None => continue,
+            }
+
+            {
+                let slot = self.slots[slot_idx].as_mut().unwrap();
+                slot.task_id = Some(format!("strike:{}", task_id));
+                *slot.last_output_at.lock().unwrap() = Instant::now();
+                slot.idle = false;
+            }
+
+            let actual_callsign = self.slots[slot_idx].as_ref().unwrap().display_name().to_string();
+
+            // Update task state: status=active, agent=callsign.
+            {
+                let st = self.strike_team.as_mut().unwrap();
+                strike_team::assign_task(&mut st.tasks, task_id, &actual_callsign);
+                // Write updated task file.
+                let contents = strike_team::write_task_file(st);
+                let _ = std::fs::write(&task_file_path, &contents);
+            }
+
+            self.push_orch(OrchestratorEventKind::Dispatched {
+                agent: actual_callsign.clone(), slot: slot_idx + 1, tool: effective_tool.clone(),
+            });
+            self.push_ticker(format!("STRIKE TEAM: {} -> {}", task_id, actual_callsign));
+            self.push_chat("System", &format!("Strike Team: {} ({}) -> {} (slot {}).", task_id, title, actual_callsign, slot_idx + 1));
+
+            // Sync ws_state.
+            {
+                let mut wst = self.ws_state.lock().unwrap();
+                wst.slots[slot_idx] = Some(ws_server::AgentSlot {
+                    callsign: actual_callsign,
+                    tool: effective_tool,
+                    status: ws_server::AgentStatus::Busy,
+                    task: None,
+                    repo: Some(repo_name_from_path(&repo).to_string()),
+                });
+            }
+            self.broadcast_agents();
+        }
+    }
+
+    /// Called when an agent goes idle (10s no output). If the agent is working
+    /// on a strike team task, mark the task done, terminate the agent to free
+    /// the slot, and write the updated task file.
+    pub fn strike_team_on_agent_idle(&mut self, callsign: &str) {
+        let st = match &mut self.strike_team {
+            Some(st) if st.phase == strike_team::StrikeTeamPhase::Executing => st,
+            _ => return,
+        };
+
+        // Find the task assigned to this callsign.
+        let task_id = match strike_team::task_for_agent(&st.tasks, callsign) {
+            Some(t) => t.id.clone(),
+            None => return,
+        };
+
+        // Mark task done.
+        strike_team::complete_task(&mut st.tasks, &task_id);
+        let contents = strike_team::write_task_file(st);
+        let _ = std::fs::write(&st.task_file_path, &contents);
+
+        let name = st.name.clone();
+        self.push_ticker(format!("STRIKE TEAM: {} done ({})", task_id, callsign));
+        self.push_chat("System", &format!("Strike Team '{}': {} done ({}).", name, task_id, callsign));
+
+        // Terminate the agent to free the slot for the next wave.
+        if let Some(idx) = self.slots.iter().position(|s| {
+            s.as_ref().map_or(false, |slot| {
+                slot.display_name().eq_ignore_ascii_case(callsign)
+            })
+        }) {
+            crate::pty::terminate_slot(&mut self.slots[idx]);
+            self.push_orch(OrchestratorEventKind::Terminated {
+                agent: callsign.to_string(), slot: idx + 1,
+            });
+            {
+                let mut wst = self.ws_state.lock().unwrap();
+                wst.slots[idx] = None;
+            }
+            self.broadcast_agents();
+        }
+    }
+
+    /// Called when an agent process exits unexpectedly. If the agent was working
+    /// on a strike team task, mark the task as failed.
+    pub fn strike_team_on_agent_exit(&mut self, slot_idx: usize) {
+        let callsign = match &self.slots[slot_idx] {
+            Some(s) => s.display_name().to_string(),
+            None => return,
+        };
+
+        let st = match &mut self.strike_team {
+            Some(st) if st.phase == strike_team::StrikeTeamPhase::Executing => st,
+            _ => return,
+        };
+
+        // Find the task assigned to this callsign.
+        let task_id = match strike_team::task_for_agent(&st.tasks, &callsign) {
+            Some(t) => t.id.clone(),
+            None => return,
+        };
+
+        // Mark task failed.
+        strike_team::fail_task(&mut st.tasks, &task_id);
+        let contents = strike_team::write_task_file(st);
+        let _ = std::fs::write(&st.task_file_path, &contents);
+
+        let name = st.name.clone();
+        self.push_ticker(format!("STRIKE TEAM: {} failed ({})", task_id, callsign));
+        self.push_chat("System", &format!("Strike Team '{}': {} failed ({}).", name, task_id, callsign));
     }
 
 }
