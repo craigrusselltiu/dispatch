@@ -116,7 +116,7 @@ pub fn render_header(f: &mut Frame, area: Rect, app: &mut App) {
     let clock = app.clock_display().to_string();
     // dispatch-sa1: show repo count in multi-repo mode.
     let workspace_indicator = if app.is_multi_repo() {
-        format!("  REPOS: {}  ", app.repo_list().len())
+        format!("  REPOS: {}", app.repo_list().len())
     } else {
         String::new()
     };
