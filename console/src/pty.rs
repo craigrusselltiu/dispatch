@@ -8,7 +8,6 @@ use std::{
     time::Instant,
 };
 
-use chrono::Local;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use portable_pty::{native_pty_system, CommandBuilder, PtySize};
 
@@ -384,7 +383,7 @@ pub fn dispatch_slot(
         };
 
     let callsign = callsign.to_string();
-    let wall = Local::now().format("%H:%M").to_string();
+    let wall = crate::util::local_time_hm();
 
     Some(SlotState {
         callsign,
@@ -478,50 +477,50 @@ pub fn poll_agent_messages(slots: &mut [Option<SlotState>]) -> Vec<(usize, Strin
     messages
 }
 
-pub fn key_to_pty_bytes(key: &KeyEvent) -> Vec<u8> {
+/// Convert a key event to PTY escape bytes. Uses Cow::Borrowed for static
+/// sequences (arrow keys, function keys, etc.) to avoid heap allocation on
+/// every keystroke. Only typed characters produce Cow::Owned.
+pub fn key_to_pty_bytes(key: &KeyEvent) -> std::borrow::Cow<'static, [u8]> {
+    use std::borrow::Cow;
     match key.code {
-        KeyCode::Enter => b"\r".to_vec(),
-        KeyCode::Backspace => vec![0x7f],
-        KeyCode::Delete => b"\x1b[3~".to_vec(),
-        KeyCode::Tab => b"\t".to_vec(),
-        KeyCode::BackTab => b"\x1b[Z".to_vec(),
-        KeyCode::Up => b"\x1b[A".to_vec(),
-        KeyCode::Down => b"\x1b[B".to_vec(),
-        KeyCode::Right => b"\x1b[C".to_vec(),
-        KeyCode::Left => b"\x1b[D".to_vec(),
-        KeyCode::Home => b"\x1b[H".to_vec(),
-        KeyCode::End => b"\x1b[F".to_vec(),
-        KeyCode::PageUp => b"\x1b[5~".to_vec(),
-        KeyCode::PageDown => b"\x1b[6~".to_vec(),
-        KeyCode::Esc => b"\x1b".to_vec(),
+        KeyCode::Enter => Cow::Borrowed(b"\r"),
+        KeyCode::Backspace => Cow::Borrowed(&[0x7f]),
+        KeyCode::Delete => Cow::Borrowed(b"\x1b[3~"),
+        KeyCode::Tab => Cow::Borrowed(b"\t"),
+        KeyCode::BackTab => Cow::Borrowed(b"\x1b[Z"),
+        KeyCode::Up => Cow::Borrowed(b"\x1b[A"),
+        KeyCode::Down => Cow::Borrowed(b"\x1b[B"),
+        KeyCode::Right => Cow::Borrowed(b"\x1b[C"),
+        KeyCode::Left => Cow::Borrowed(b"\x1b[D"),
+        KeyCode::Home => Cow::Borrowed(b"\x1b[H"),
+        KeyCode::End => Cow::Borrowed(b"\x1b[F"),
+        KeyCode::PageUp => Cow::Borrowed(b"\x1b[5~"),
+        KeyCode::PageDown => Cow::Borrowed(b"\x1b[6~"),
+        KeyCode::Esc => Cow::Borrowed(b"\x1b"),
         KeyCode::Char(c) => {
-            if key.modifiers.contains(KeyModifiers::CONTROL) {
-                if c.is_ascii_alphabetic() {
-                    vec![(c.to_ascii_lowercase() as u8) - b'a' + 1]
-                } else {
-                    let mut buf = [0u8; 4];
-                    c.encode_utf8(&mut buf).as_bytes().to_vec()
-                }
+            if key.modifiers.contains(KeyModifiers::CONTROL) && c.is_ascii_alphabetic() {
+                Cow::Owned(vec![(c.to_ascii_lowercase() as u8) - b'a' + 1])
             } else {
                 let mut buf = [0u8; 4];
-                c.encode_utf8(&mut buf).as_bytes().to_vec()
+                let len = c.encode_utf8(&mut buf).len();
+                Cow::Owned(buf[..len].to_vec())
             }
         }
         KeyCode::F(n) => match n {
-            1 => b"\x1bOP".to_vec(),
-            2 => b"\x1bOQ".to_vec(),
-            3 => b"\x1bOR".to_vec(),
-            4 => b"\x1bOS".to_vec(),
-            5 => b"\x1b[15~".to_vec(),
-            6 => b"\x1b[17~".to_vec(),
-            7 => b"\x1b[18~".to_vec(),
-            8 => b"\x1b[19~".to_vec(),
-            9 => b"\x1b[20~".to_vec(),
-            10 => b"\x1b[21~".to_vec(),
-            11 => b"\x1b[23~".to_vec(),
-            12 => b"\x1b[24~".to_vec(),
-            _ => vec![],
+            1 => Cow::Borrowed(b"\x1bOP"),
+            2 => Cow::Borrowed(b"\x1bOQ"),
+            3 => Cow::Borrowed(b"\x1bOR"),
+            4 => Cow::Borrowed(b"\x1bOS"),
+            5 => Cow::Borrowed(b"\x1b[15~"),
+            6 => Cow::Borrowed(b"\x1b[17~"),
+            7 => Cow::Borrowed(b"\x1b[18~"),
+            8 => Cow::Borrowed(b"\x1b[19~"),
+            9 => Cow::Borrowed(b"\x1b[20~"),
+            10 => Cow::Borrowed(b"\x1b[21~"),
+            11 => Cow::Borrowed(b"\x1b[23~"),
+            12 => Cow::Borrowed(b"\x1b[24~"),
+            _ => Cow::Borrowed(&[]),
         },
-        _ => vec![],
+        _ => Cow::Borrowed(&[]),
     }
 }

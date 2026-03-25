@@ -8,7 +8,6 @@ use std::{
     time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
-use chrono::Local;
 use dispatch_core::{protocol, strike_team, tools};
 
 use crate::types::*;
@@ -82,7 +81,7 @@ impl App {
 
     /// Push an event to the orchestrator log (dispatch-6nm).
     pub fn push_orch(&mut self, kind: OrchestratorEventKind) {
-        let time = Local::now().format("%H:%M:%S").to_string();
+        let time = crate::util::local_time_hms();
         self.orch_log.push_back(OrchestratorEvent { time, kind });
         // Cap at 500 entries to bound memory.
         if self.orch_log.len() > 500 {
@@ -361,7 +360,7 @@ impl App {
             .unwrap_or(0);
         // Refresh clock string only when the minute changes (every 60s).
         if now_secs / 60 != self.cached_clock_second / 60 || self.cached_clock.is_empty() {
-            self.cached_clock = Local::now().format("%H:%M").to_string();
+            self.cached_clock = crate::util::local_time_hm();
             self.cached_clock_second = now_secs;
         }
         &self.cached_clock

@@ -1,6 +1,34 @@
 // Standalone utility functions for the dispatch console.
 
 use std::time::Duration;
+use time::macros::format_description;
+
+/// Format local time as "HH:MM:SS". Falls back to UTC if local offset unavailable.
+pub fn local_time_hms() -> String {
+    let fmt = format_description!("[hour]:[minute]:[second]");
+    time::OffsetDateTime::now_local()
+        .unwrap_or_else(|_| time::OffsetDateTime::now_utc())
+        .format(fmt)
+        .unwrap_or_default()
+}
+
+/// Format local time as "HH:MM". Falls back to UTC if local offset unavailable.
+pub fn local_time_hm() -> String {
+    let fmt = format_description!("[hour]:[minute]");
+    time::OffsetDateTime::now_local()
+        .unwrap_or_else(|_| time::OffsetDateTime::now_utc())
+        .format(fmt)
+        .unwrap_or_default()
+}
+
+/// Format local time as "YYYYMMDD_HHMMSS" for file names. Falls back to UTC.
+pub fn local_timestamp_file() -> String {
+    let fmt = format_description!("[year][month][day]_[hour][minute][second]");
+    time::OffsetDateTime::now_local()
+        .unwrap_or_else(|_| time::OffsetDateTime::now_utc())
+        .format(fmt)
+        .unwrap_or_default()
+}
 
 /// Extract the short directory name from a repo root path (dispatch-2dc).
 pub fn repo_name_from_path(path: &str) -> &str {

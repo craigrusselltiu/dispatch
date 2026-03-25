@@ -440,7 +440,7 @@ fn main() -> io::Result<()> {
                     // Save image to .dispatch/images/ in the repo root.
                     let images_dir = format!("{}/.dispatch/images", app.default_repo_root());
                     let _ = std::fs::create_dir_all(&images_dir);
-                    let timestamp = chrono::Local::now().format("%Y%m%d_%H%M%S").to_string();
+                    let timestamp = util::local_timestamp_file();
                     let image_path = format!("{}/{}_{}", images_dir, timestamp, filename);
 
                     let decoded = base64::engine::general_purpose::STANDARD.decode(&data);
