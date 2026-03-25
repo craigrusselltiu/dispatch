@@ -41,6 +41,7 @@ class RadioWebSocketClientTest {
                 override fun onConnected() { latch.countDown() }
                 override fun onMessage(text: String) {}
                 override fun onDisconnected() {}
+                override fun onReconnectGaveUp() {}
             }
         )
 
@@ -76,6 +77,7 @@ class RadioWebSocketClientTest {
                 override fun onConnected() {}
                 override fun onMessage(text: String) {}
                 override fun onDisconnected() {}
+                override fun onReconnectGaveUp() {}
             }
         )
 
@@ -101,6 +103,7 @@ class RadioWebSocketClientTest {
                 override fun onConnected() { latch.countDown() }
                 override fun onMessage(text: String) {}
                 override fun onDisconnected() {}
+                override fun onReconnectGaveUp() {}
             }
         )
 
@@ -120,6 +123,7 @@ class RadioWebSocketClientTest {
                 override fun onConnected() {}
                 override fun onMessage(text: String) {}
                 override fun onDisconnected() {}
+                override fun onReconnectGaveUp() {}
             }
         )
 
@@ -152,6 +156,7 @@ class RadioWebSocketClientTest {
                 }
                 override fun onMessage(text: String) {}
                 override fun onDisconnected() {}
+                override fun onReconnectGaveUp() {}
             }
         )
 

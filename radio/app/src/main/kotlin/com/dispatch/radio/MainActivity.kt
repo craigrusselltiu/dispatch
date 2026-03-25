@@ -111,6 +111,10 @@ class MainActivity : AppCompatActivity() {
         override fun onConnected() = setConnected(true)
         override fun onDisconnected() = setConnected(false)
         override fun onMessage(text: String) = handleMessage(text)
+        override fun onReconnectGaveUp() {
+            tvConnStatus.text = "GAVE UP"
+            addChatMessage("System", "Reconnect failed after 20 attempts. Tap settings to retry.")
+        }
     }
 
     private val serviceConnection = object : ServiceConnection {

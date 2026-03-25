@@ -67,6 +67,10 @@ class RadioService : Service() {
                 override fun onMessage(text: String) {
                     listener?.onMessage(text)
                 }
+                override fun onReconnectGaveUp() {
+                    updateNotification("Gave up reconnecting")
+                    listener?.onReconnectGaveUp()
+                }
             },
             certFingerprint = certFingerprint,
         )

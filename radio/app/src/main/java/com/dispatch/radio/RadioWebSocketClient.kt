@@ -36,6 +36,8 @@ class RadioWebSocketClient(
         fun onConnected()
         fun onMessage(text: String)
         fun onDisconnected()
+        /** Called when the client exhausts all reconnect attempts and gives up. */
+        fun onReconnectGaveUp()
     }
 
     private val httpClient: OkHttpClient = buildClient(certFingerprint)
@@ -49,19 +51,35 @@ class RadioWebSocketClient(
     private var reconnectDelay = INITIAL_DELAY_MS
     private var reconnectAttempts = 0
 
+    /** Whether the client has given up reconnecting after exhausting all attempts. */
+    @Volatile var gaveUp = false
+        private set
+
     fun connect() {
         stopped = false
+        gaveUp = false
         openConnection()
     }
 
     fun disconnect() {
         stopped = true
+        gaveUp = false
         reconnectDelay = INITIAL_DELAY_MS
         reconnectAttempts = 0
         mainHandler.removeCallbacksAndMessages(null)
         webSocket?.close(CLOSE_NORMAL, "disconnect")
         webSocket = null
         connected = false
+    }
+
+    /** Manually retry after the client gave up. No-op if already connected or retrying. */
+    fun reconnect() {
+        if (connected || (!stopped && !gaveUp)) return
+        stopped = false
+        gaveUp = false
+        reconnectDelay = INITIAL_DELAY_MS
+        reconnectAttempts = 0
+        openConnection()
     }
 
     fun send(text: String): Boolean {
@@ -118,7 +136,9 @@ class RadioWebSocketClient(
     private fun scheduleReconnect() {
         reconnectAttempts++
         if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
-            // Give up to save battery. User can reconnect via settings.
+            // Give up to save battery. User can manually reconnect.
+            gaveUp = true
+            mainHandler.post { listener.onReconnectGaveUp() }
             return
         }
         mainHandler.postDelayed({
