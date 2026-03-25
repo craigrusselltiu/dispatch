@@ -127,8 +127,10 @@ pub fn strip_system_tags(text: &str) -> String {
 
 /// Remove lines with internal message prefixes that the orchestrator receives
 /// for coordination but should never be forwarded to user-facing chat on the
-/// radio. Strips `[EVENT]`, `[AGENT_MSG]`, and `[MIC]` prefixed lines so the
-/// LLM cannot echo or fabricate them into the chat stream.
+/// radio. Strips `[EVENT]`, `[AGENT_MSG]`, `[MIC]`, and `Human:` prefixed
+/// lines so the LLM cannot echo or fabricate them into the chat stream.
+/// `Human:` is particularly dangerous because it creates fake conversation
+/// turns that look like real user input.
 pub fn strip_event_lines(text: &str) -> String {
     text.lines()
         .filter(|line| {
@@ -136,6 +138,7 @@ pub fn strip_event_lines(text: &str) -> String {
             !trimmed.starts_with("[EVENT]")
                 && !trimmed.starts_with("[AGENT_MSG]")
                 && !trimmed.starts_with("[MIC]")
+                && !trimmed.starts_with("Human:")
         })
         .collect::<Vec<_>>()
         .join("\n")
