@@ -3,17 +3,22 @@ package com.dispatch.radio
 import android.app.AlertDialog
 import android.graphics.Typeface
 import android.os.Bundle
+import android.view.View
+import android.view.ViewGroup
+import android.widget.AdapterView
+import android.widget.ArrayAdapter
 import android.widget.Button
 import android.widget.CheckBox
 import android.widget.EditText
 import android.widget.LinearLayout
+import android.widget.Spinner
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
 
 /**
  * Settings screen (dispatch-88k.7).
  *
- * - Connection profile saving and switching
+ * - Connection profile saving and switching (dropdown selector)
  * - mDNS console discovery (dispatch-ct2.1)
  * - Console IP + port
  * - Pre-shared key (manual entry)
@@ -37,14 +42,28 @@ class SettingsActivity : AppCompatActivity() {
     private lateinit var btnReset: Button
     private lateinit var btnDiscover: Button
     private lateinit var tvDiscoverStatus: TextView
-    private lateinit var tvActiveProfile: TextView
+    private lateinit var spinnerProfiles: Spinner
     private lateinit var btnSaveProfile: Button
-    private lateinit var btnLoadProfile: Button
-    private lateinit var llProfiles: LinearLayout
+    private lateinit var btnDeleteProfile: Button
 
     /** Values loaded from settings, used to detect manual edits. */
     private var loadedHost = ""
     private var loadedPort = ""
+
+    private val profileSelectionListener = object : AdapterView.OnItemSelectedListener {
+        override fun onItemSelected(parent: AdapterView<*>?, view: View?, position: Int, id: Long) {
+            val profiles = settings.listProfiles()
+            if (profiles.isEmpty() || position >= profiles.size) return
+            val profile = profiles[position]
+            etHost.setText(profile.host)
+            etPort.setText(profile.port.toString())
+            etPsk.setText(profile.psk)
+            settings.activeProfile = profile.name
+            loadedHost = profile.host
+            loadedPort = profile.port.toString()
+        }
+        override fun onNothingSelected(parent: AdapterView<*>?) {}
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -64,19 +83,18 @@ class SettingsActivity : AppCompatActivity() {
         btnReset = findViewById(R.id.btn_reset)
         btnDiscover = findViewById(R.id.btn_discover)
         tvDiscoverStatus = findViewById(R.id.tv_discover_status)
-        tvActiveProfile = findViewById(R.id.tv_active_profile)
+        spinnerProfiles = findViewById(R.id.spinner_profiles)
         btnSaveProfile = findViewById(R.id.btn_save_profile)
-        btnLoadProfile = findViewById(R.id.btn_load_profile)
-        llProfiles = findViewById(R.id.ll_profiles)
+        btnDeleteProfile = findViewById(R.id.btn_delete_profile)
 
         loadSettings()
-        refreshProfileList()
+        refreshProfileDropdown()
 
         btnSave.setOnClickListener { saveSettings() }
         btnReset.setOnClickListener { resetToDefaults() }
         btnDiscover.setOnClickListener { onDiscoverClicked() }
         btnSaveProfile.setOnClickListener { onSaveProfileClicked() }
-        btnLoadProfile.setOnClickListener { onLoadProfileClicked() }
+        btnDeleteProfile.setOnClickListener { onDeleteProfileClicked() }
     }
 
     private fun onDiscoverClicked() {
@@ -118,9 +136,14 @@ class SettingsActivity : AppCompatActivity() {
         }, 5000)
     }
 
-    // ── Connection Profiles ──────────────────────────────────────────────
+    // -- Connection Profiles --------------------------------------------------
 
     private fun onSaveProfileClicked() {
+        val container = LinearLayout(this).apply {
+            orientation = LinearLayout.VERTICAL
+            setPadding(48, 24, 48, 0)
+        }
+
         val input = EditText(this).apply {
             hint = "profile name"
             inputType = android.text.InputType.TYPE_CLASS_TEXT
@@ -129,13 +152,23 @@ class SettingsActivity : AppCompatActivity() {
             typeface = Typeface.MONOSPACE
             background = getDrawable(R.drawable.input_background)
             setPadding(24, 24, 24, 24)
-            // Pre-fill with active profile name if one is set
             settings.activeProfile?.let { setText(it) }
         }
 
-        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
-            .setTitle("Save connection profile")
-            .setView(input)
+        val hint = TextView(this).apply {
+            text = "Letters, numbers, and dashes only."
+            textSize = 10f
+            typeface = Typeface.MONOSPACE
+            setTextColor(getColor(R.color.dim_grey))
+            setPadding(0, 12, 0, 0)
+        }
+
+        container.addView(input)
+        container.addView(hint)
+
+        val dialog = AlertDialog.Builder(this, R.style.Theme_DispatchRadio_Dialog)
+            .setTitle("SAVE PROFILE")
+            .setView(container)
             .setPositiveButton("SAVE") { _, _ ->
                 val name = input.text.toString().trim().lowercase()
                     .replace(Regex("[^a-z0-9-]"), "-")
@@ -151,85 +184,117 @@ class SettingsActivity : AppCompatActivity() {
                     RadioSettings.ConnectionProfile(name, host, port, psk)
                 )
                 settings.activeProfile = name
-                refreshProfileList()
+                refreshProfileDropdown()
             }
             .setNegativeButton("CANCEL", null)
             .show()
+
+        styleDialogButtons(dialog)
     }
 
-    private fun onLoadProfileClicked() {
+    private fun onDeleteProfileClicked() {
         val profiles = settings.listProfiles()
-        if (profiles.isEmpty()) {
-            tvActiveProfile.text = "NO SAVED PROFILES"
-            tvActiveProfile.setTextColor(getColor(R.color.dim_grey))
-            return
-        }
+        if (profiles.isEmpty()) return
+        val position = spinnerProfiles.selectedItemPosition
+        if (position < 0 || position >= profiles.size) return
+        val profile = profiles[position]
 
-        val names = profiles.map { it.name }.toTypedArray()
-        AlertDialog.Builder(this, android.R.style.Theme_DeviceDefault_Dialog)
-            .setTitle("Load connection profile")
-            .setItems(names) { _, which ->
-                val profile = profiles[which]
-                etHost.setText(profile.host)
-                etPort.setText(profile.port.toString())
-                etPsk.setText(profile.psk)
-                settings.activeProfile = profile.name
-                loadedHost = profile.host
-                loadedPort = profile.port.toString()
-                refreshProfileList()
+        val dialog = AlertDialog.Builder(this, R.style.Theme_DispatchRadio_Dialog)
+            .setTitle("DELETE PROFILE")
+            .setMessage("Delete \"${profile.name}\"?")
+            .setPositiveButton("DELETE") { _, _ ->
+                settings.deleteProfile(profile.name)
+                refreshProfileDropdown()
             }
             .setNegativeButton("CANCEL", null)
             .show()
+
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.apply {
+            setTextColor(getColor(R.color.red))
+            typeface = Typeface.MONOSPACE
+            isAllCaps = true
+        }
+        dialog.getButton(AlertDialog.BUTTON_NEGATIVE)?.apply {
+            setTextColor(getColor(R.color.dim_grey))
+            typeface = Typeface.MONOSPACE
+            isAllCaps = true
+        }
     }
 
-    private fun refreshProfileList() {
+    private fun refreshProfileDropdown() {
+        // Detach listener to prevent auto-loading during adapter/selection changes
+        spinnerProfiles.onItemSelectedListener = null
+
+        val profiles = settings.listProfiles()
         val active = settings.activeProfile
-        if (active != null) {
-            tvActiveProfile.text = "ACTIVE: $active"
-            tvActiveProfile.setTextColor(getColor(R.color.green))
+
+        if (profiles.isEmpty()) {
+            val adapter = profileAdapter(listOf("NO SAVED PROFILES"), dimmed = true)
+            spinnerProfiles.adapter = adapter
+            spinnerProfiles.isEnabled = false
+            btnDeleteProfile.isEnabled = false
+            btnDeleteProfile.alpha = 0.4f
         } else {
-            tvActiveProfile.text = "NO ACTIVE PROFILE"
-            tvActiveProfile.setTextColor(getColor(R.color.dim_grey))
+            val adapter = profileAdapter(profiles.map { it.name }, dimmed = false)
+            spinnerProfiles.adapter = adapter
+            spinnerProfiles.isEnabled = true
+            btnDeleteProfile.isEnabled = true
+            btnDeleteProfile.alpha = 1.0f
+
+            if (active != null) {
+                val idx = profiles.indexOfFirst { it.name == active }
+                if (idx >= 0) spinnerProfiles.setSelection(idx)
+            }
         }
 
-        llProfiles.removeAllViews()
-        val profiles = settings.listProfiles()
-        for (profile in profiles) {
-            val row = LinearLayout(this).apply {
-                orientation = LinearLayout.HORIZONTAL
-                setPadding(0, 4, 0, 4)
-            }
+        // Re-attach listener after pending layout passes to skip initial callbacks
+        spinnerProfiles.post {
+            spinnerProfiles.onItemSelectedListener = profileSelectionListener
+        }
+    }
 
-            val label = TextView(this).apply {
-                text = "${profile.name}  ${profile.host}:${profile.port}"
-                textSize = 11f
-                typeface = Typeface.MONOSPACE
-                setTextColor(
-                    if (profile.name == active) getColor(R.color.green)
-                    else getColor(R.color.white)
-                )
-                layoutParams = LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f)
-            }
-
-            val btnDelete = TextView(this).apply {
-                text = "DEL"
-                textSize = 11f
-                typeface = Typeface.MONOSPACE
-                setTextColor(getColor(R.color.red))
-                setPadding(16, 0, 0, 0)
-                setOnClickListener {
-                    settings.deleteProfile(profile.name)
-                    refreshProfileList()
+    private fun profileAdapter(items: List<String>, dimmed: Boolean): ArrayAdapter<String> {
+        val textColor = if (dimmed) R.color.dim_grey else R.color.white
+        val adapter = object : ArrayAdapter<String>(
+            this, android.R.layout.simple_spinner_item, items
+        ) {
+            override fun getView(position: Int, convertView: View?, parent: ViewGroup): View {
+                return (super.getView(position, convertView, parent) as TextView).apply {
+                    setTextColor(getColor(textColor))
+                    typeface = Typeface.MONOSPACE
+                    textSize = 12f
+                    setPadding(24, 20, 24, 20)
                 }
             }
+            override fun getDropDownView(position: Int, convertView: View?, parent: ViewGroup): View {
+                return (super.getDropDownView(position, convertView, parent) as TextView).apply {
+                    setTextColor(getColor(textColor))
+                    setBackgroundColor(getColor(R.color.background))
+                    typeface = Typeface.MONOSPACE
+                    textSize = 12f
+                    setPadding(24, 28, 24, 28)
+                }
+            }
+        }
+        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        return adapter
+    }
 
-            row.addView(label)
-            row.addView(btnDelete)
-            llProfiles.addView(row)
+    /** Style dialog buttons with proper contrast colors. */
+    private fun styleDialogButtons(dialog: AlertDialog) {
+        dialog.getButton(AlertDialog.BUTTON_POSITIVE)?.apply {
+            setTextColor(getColor(R.color.green))
+            typeface = Typeface.MONOSPACE
+            isAllCaps = true
+        }
+        dialog.getButton(AlertDialog.BUTTON_NEGATIVE)?.apply {
+            setTextColor(getColor(R.color.dim_grey))
+            typeface = Typeface.MONOSPACE
+            isAllCaps = true
         }
     }
 
-    // ── Settings load/save ───────────────────────────────────────────────
+    // -- Settings load/save ---------------------------------------------------
 
     private fun loadSettings() {
         etHost.setText(settings.consoleHost)
@@ -246,7 +311,7 @@ class SettingsActivity : AppCompatActivity() {
     private fun resetToDefaults() {
         settings.resetToDefaults()
         loadSettings()
-        refreshProfileList()
+        refreshProfileDropdown()
     }
 
     override fun onDestroy() {
