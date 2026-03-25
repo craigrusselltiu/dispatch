@@ -207,6 +207,7 @@ pub fn dispatch_slot(
     initial_prompt: Option<&str>,
     callsign: &str,
     merge_strategy: &str,
+    commit_prefix: Option<&str>,
 ) -> Option<SlotState> {
     let pty_system = native_pty_system();
     let pair = pty_system
@@ -237,6 +238,12 @@ pub fn dispatch_slot(
     // Set DISPATCH_MSG_FILE env var so the agent can write messages to a file
     // instead of echoing to the terminal. This eliminates terminal noise issues.
     cmd.env("DISPATCH_MSG_FILE", &msg_file);
+
+    // Set DISPATCH_COMMIT_PREFIX so agents prefix their commit messages
+    // (used by strike team tasks to tag commits with team name + task number).
+    if let Some(prefix) = commit_prefix {
+        cmd.env("DISPATCH_COMMIT_PREFIX", prefix);
+    }
 
     // Build agent instructions with the configured merge strategy.
     let instructions = build_agent_instructions(repo_root, merge_strategy);

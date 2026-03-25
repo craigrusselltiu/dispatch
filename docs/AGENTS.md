@@ -48,7 +48,7 @@ Send at most 2-3 messages per task: one when starting, one when done, and option
    git worktree add .dispatch/.worktrees/{callsign} -b dispatch/{callsign} HEAD
    cd .dispatch/.worktrees/{callsign}
    ```
-3. Do the work. Commit with clear messages. Run `git status` to ensure nothing is unstaged or untracked.
+3. Do the work. Commit with clear messages. If the `DISPATCH_COMMIT_PREFIX` environment variable is set, **every** commit message must start with its value followed by `: ` (e.g. `$DISPATCH_COMMIT_PREFIX: <description>`). Run `git status` to ensure nothing is unstaged or untracked.
 <!-- WORKFLOW_STEP_4 -->
 4. Merge your branch into main, clean up, and push:
    ```bash

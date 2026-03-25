@@ -450,6 +450,7 @@ impl App {
                         Some(&full_prompt),
                         &callsign_for_prompt,
                         &self.merge_strategy,
+                        None,
                     ) {
                         Some(slot) => { self.slots[slot_idx] = Some(slot); }
                         None => return tools::ToolResult::Error {
@@ -687,6 +688,7 @@ impl App {
                     Some(&full_prompt),
                     &callsign_for_prompt,
                     &self.merge_strategy,
+                    None,
                 ) {
                     Some(slot) => { self.slots[slot_idx] = Some(slot); }
                     None => return tools::ToolResult::Error {
@@ -999,19 +1001,23 @@ impl App {
                 None => break, // No more slots — wait for next tick.
             };
 
-            let (prompt, title, source_file) = {
+            let (prompt, title, source_file, st_name) = {
                 let st = &self.strike_teams[st_idx];
                 let task = st.tasks.iter().find(|t| t.id == *task_id).unwrap();
-                (task.prompt.clone(), task.title.clone(), st.source_file.clone())
+                (task.prompt.clone(), task.title.clone(), st.source_file.clone(), st.name.clone())
             };
 
             let callsign = self.next_callsign()
                 .unwrap_or_else(|| format!("Agent-{}", slot_idx + 1));
             let effective_tool = self.default_tool.clone();
             let cmd = self.tool_cmd(&effective_tool).to_string();
+            let task_num = task_id.strip_prefix('T').unwrap_or(task_id);
+            let commit_prefix = format!("{} #{}", st_name, task_num);
             let full_prompt = format!(
-                "Your callsign is {}. Source document: {} -- read it for full context. {}",
-                callsign, source_file, prompt
+                "Your callsign is {}. COMMIT PREFIX: you MUST prefix ALL git commit messages with \
+                 '{}: ' (example: '{}: implement feature X'). \
+                 Source document: {} -- read it for full context. {}",
+                callsign, commit_prefix, commit_prefix, source_file, prompt
             );
 
             match dispatch_slot(
@@ -1021,6 +1027,7 @@ impl App {
                 Some(&full_prompt),
                 &callsign,
                 &self.merge_strategy,
+                Some(&commit_prefix),
             ) {
                 Some(slot) => { self.slots[slot_idx] = Some(slot); }
                 None => continue,
@@ -1156,6 +1163,7 @@ impl App {
             Some(&verifier_prompt),
             &callsign,
             &self.merge_strategy,
+            None,
         ) {
             Some(slot) => { self.slots[slot_idx] = Some(slot); }
             None => return,

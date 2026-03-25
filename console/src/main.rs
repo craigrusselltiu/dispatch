@@ -796,6 +796,7 @@ fn main() -> io::Result<()> {
                                                     None,
                                                     &cs,
                                                     &app.merge_strategy,
+                                                    None,
                                                 ) {
                                                     let page = g / SLOTS_PER_PAGE;
                                                     let local = g % SLOTS_PER_PAGE;
@@ -895,6 +896,7 @@ fn main() -> io::Result<()> {
                                             None,
                                             &cs,
                                             &app.merge_strategy,
+                                            None,
                                         ) {
                                             let name = slot.display_name().to_string();
                                             app.push_orch(OrchestratorEventKind::Dispatched { agent: name.clone(), slot: target_g + 1, tool: tool_key.clone() });
