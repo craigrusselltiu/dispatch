@@ -663,6 +663,12 @@ fn parse_action_json(json_str: &str) -> Result<tools::ToolCall, serde_json::Erro
             let text = v.get("text").and_then(|t| t.as_str()).unwrap_or("").to_string();
             Ok(tools::ToolCall::MessageAgent { agent, text })
         }
+        "strike_team" => {
+            let spec_file = v.get("source_file").and_then(|s| s.as_str()).unwrap_or("").to_string();
+            let name = v.get("name").and_then(|n| n.as_str()).map(|s| s.to_string());
+            let repo = v.get("repo").and_then(|r| r.as_str()).unwrap_or("").to_string();
+            Ok(tools::ToolCall::StrikeTeam { spec_file, name, repo })
+        }
         _ => {
             use serde::de::Error;
             Err(serde_json::Error::custom(format!("unknown action: {}", action)))
@@ -699,6 +705,36 @@ mod tests {
         let calls = parse_all_tool_calls(text);
         assert_eq!(calls.len(), 1);
         assert!(matches!(calls[0], tools::ToolCall::Dispatch { .. }));
+    }
+
+    #[test]
+    fn parse_strike_team_action() {
+        let text = "Launching strike team.\n```action\n{\"action\": \"strike_team\", \"source_file\": \"docs/PERFORMANCE_REVIEW.md\", \"repo\": \"dispatch\"}\n```";
+        let calls = parse_all_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        match &calls[0] {
+            tools::ToolCall::StrikeTeam { spec_file, name, repo } => {
+                assert_eq!(spec_file, "docs/PERFORMANCE_REVIEW.md");
+                assert!(name.is_none());
+                assert_eq!(repo, "dispatch");
+            }
+            _ => panic!("expected StrikeTeam"),
+        }
+    }
+
+    #[test]
+    fn parse_strike_team_action_with_name() {
+        let text = "```action\n{\"action\": \"strike_team\", \"source_file\": \"docs/spec.md\", \"name\": \"perf\", \"repo\": \"myrepo\"}\n```";
+        let calls = parse_all_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        match &calls[0] {
+            tools::ToolCall::StrikeTeam { spec_file, name, repo } => {
+                assert_eq!(spec_file, "docs/spec.md");
+                assert_eq!(name.as_deref(), Some("perf"));
+                assert_eq!(repo, "myrepo");
+            }
+            _ => panic!("expected StrikeTeam"),
+        }
     }
 
     #[test]
