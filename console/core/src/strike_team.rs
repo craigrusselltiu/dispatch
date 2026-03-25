@@ -80,15 +80,20 @@ pub struct StrikeTeamState {
 ///
 /// Expects markdown with `## T<N>: <title>` headings followed by `key: value`
 /// lines for status, dependencies, prompt, and agent.
+///
+/// Prompts support multi-line values: lines indented with 2+ spaces after the
+/// `prompt:` line are appended as continuation lines (trimmed, joined with `\n`).
 pub fn parse_task_file(content: &str) -> Vec<Task> {
     let mut tasks = Vec::new();
     let mut current: Option<Task> = None;
+    let mut in_prompt = false;
 
     for line in content.lines() {
         let trimmed = line.trim();
 
         // New task heading: ## T1: Some title
         if let Some(rest) = trimmed.strip_prefix("## ") {
+            in_prompt = false;
             // Flush previous task.
             if let Some(task) = current.take() {
                 tasks.push(task);
@@ -111,6 +116,14 @@ pub fn parse_task_file(content: &str) -> Vec<Task> {
         // Key-value lines within a task block.
         let Some(task) = current.as_mut() else { continue };
 
+        // Prompt continuation: indented (2+ spaces) non-empty line after prompt:.
+        if in_prompt && !trimmed.is_empty() && line.starts_with("  ") {
+            task.prompt.push('\n');
+            task.prompt.push_str(trimmed);
+            continue;
+        }
+        in_prompt = false;
+
         if let Some(val) = trimmed.strip_prefix("status:") {
             let val = val.trim();
             task.status = match val {
@@ -126,6 +139,7 @@ pub fn parse_task_file(content: &str) -> Vec<Task> {
             }
         } else if let Some(val) = trimmed.strip_prefix("prompt:") {
             task.prompt = val.trim().to_string();
+            in_prompt = true;
         } else if let Some(val) = trimmed.strip_prefix("agent:") {
             let val = val.trim();
             if !val.is_empty() {
@@ -156,7 +170,16 @@ pub fn write_task_file(tasks: &[Task]) -> String {
         } else {
             out.push_str(&format!("dependencies: {}\n", task.dependencies.join(", ")));
         }
-        out.push_str(&format!("prompt: {}\n", task.prompt));
+        // Multi-line prompts: first line after "prompt:", rest indented with 2 spaces.
+        let mut prompt_lines = task.prompt.lines();
+        if let Some(first) = prompt_lines.next() {
+            out.push_str(&format!("prompt: {}\n", first));
+            for cont in prompt_lines {
+                out.push_str(&format!("  {}\n", cont));
+            }
+        } else {
+            out.push_str("prompt:\n");
+        }
         if let Some(agent) = &task.agent {
             out.push_str(&format!("agent: {}\n", agent));
         }
@@ -239,6 +262,8 @@ prompt: Create a User struct in src/models/user.rs with serde derives.
 status: pending
 dependencies: T1
 prompt: Create REST endpoints for CRUD operations on users.
+  Add routes for GET /users, POST /users, GET /users/:id.
+  Return JSON responses with proper status codes.
 
 ## T3: Add authentication middleware
 status: pending
@@ -465,5 +490,85 @@ prompt: Test the thing.
     fn parse_header_only() {
         let tasks = parse_task_file("# Strike Team: test\nspec: foo.md\n");
         assert!(tasks.is_empty());
+    }
+
+    #[test]
+    fn parse_multiline_prompt() {
+        let content = "\
+## T1: Setup database
+status: pending
+dependencies: none
+prompt: Create the database schema in src/db/schema.rs.
+  Add tables for users and sessions.
+  Include indexes on email and session_token columns.
+agent: Alpha
+
+## T2: Simple task
+status: pending
+dependencies: T1
+prompt: Do a simple thing.
+";
+        let tasks = parse_task_file(content);
+        assert_eq!(tasks.len(), 2);
+
+        // T1 has a multi-line prompt joined with newlines.
+        assert_eq!(
+            tasks[0].prompt,
+            "Create the database schema in src/db/schema.rs.\n\
+             Add tables for users and sessions.\n\
+             Include indexes on email and session_token columns."
+        );
+        // Agent field is still parsed after multi-line prompt.
+        assert_eq!(tasks[0].agent.as_deref(), Some("Alpha"));
+
+        // T2 has a single-line prompt.
+        assert_eq!(tasks[1].prompt, "Do a simple thing.");
+    }
+
+    #[test]
+    fn multiline_prompt_roundtrip() {
+        let tasks = vec![
+            Task {
+                id: "T1".into(),
+                title: "Multi-line task".into(),
+                status: TaskStatus::Pending,
+                dependencies: vec![],
+                prompt: "First line.\nSecond line.\nThird line.".into(),
+                agent: None,
+            },
+            Task {
+                id: "T2".into(),
+                title: "Single-line task".into(),
+                status: TaskStatus::Pending,
+                dependencies: vec!["T1".into()],
+                prompt: "Just one line.".into(),
+                agent: None,
+            },
+        ];
+        let written = write_task_file(&tasks);
+        assert!(written.contains("prompt: First line.\n  Second line.\n  Third line.\n"));
+        assert!(written.contains("prompt: Just one line.\n"));
+
+        let reparsed = parse_task_file(&written);
+        assert_eq!(reparsed.len(), 2);
+        assert_eq!(reparsed[0].prompt, tasks[0].prompt);
+        assert_eq!(reparsed[1].prompt, tasks[1].prompt);
+    }
+
+    #[test]
+    fn multiline_prompt_in_sample() {
+        // Verify the multi-line prompt in the sample task file is parsed correctly.
+        let tasks = parse_task_file(SAMPLE_TASK_FILE);
+        assert_eq!(
+            tasks[1].prompt,
+            "Create REST endpoints for CRUD operations on users.\n\
+             Add routes for GET /users, POST /users, GET /users/:id.\n\
+             Return JSON responses with proper status codes."
+        );
+        // Single-line prompts still work.
+        assert_eq!(
+            tasks[0].prompt,
+            "Create a User struct in src/models/user.rs with serde derives."
+        );
     }
 }

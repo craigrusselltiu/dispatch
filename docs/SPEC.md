@@ -277,12 +277,17 @@ spec: docs/auth-spec.md
 ## T1: Implement user model
 status: pending
 dependencies: none
-prompt: Create a User struct in src/models/user.rs with fields id, email, name, created_at. Add serde derives.
+prompt: Create a User struct in src/models/user.rs.
+  Fields: id (Uuid), email (String), name (String), created_at (DateTime).
+  Derive serde Serialize/Deserialize and Debug.
+  Add a User::new(email, name) constructor that generates the id and timestamp.
 
 ## T2: Add user API endpoints
 status: pending
 dependencies: T1
 prompt: Create REST endpoints for CRUD operations on users in src/routes/users.rs.
+  Add routes for GET /users, POST /users, GET /users/:id, DELETE /users/:id.
+  Return JSON responses with proper HTTP status codes.
 
 ## T3: Add authentication middleware
 status: pending
@@ -292,7 +297,9 @@ prompt: Implement JWT authentication middleware in src/middleware/auth.rs.
 ## T4: Wire auth into endpoints
 status: pending
 dependencies: T2, T3
-prompt: Apply auth middleware to user endpoints. Add integration tests.
+prompt: Apply auth middleware to user endpoints.
+  Protect POST, DELETE routes with JWT validation.
+  Add integration tests covering authenticated and unauthenticated requests.
 ```
 
 **Fields per task:**
@@ -301,12 +308,12 @@ prompt: Apply auth middleware to user endpoints. Add integration tests.
 |-------|--------|-------------|
 | `status` | `pending`, `active`, `done`, `failed` | Current state |
 | `dependencies` | `none` or comma-separated IDs (`T1, T3`) | Dependency list |
-| `prompt` | Single line of text | Self-contained agent instruction |
+| `prompt` | First line after `prompt:`, with 2-space indented continuation lines | Self-contained agent instruction (multi-line) |
 | `agent` | Callsign (e.g., `Alpha`) | Written by console when assigned |
 
 **Readiness rule:** a task is ready when its status is `pending` and all dependencies have status `done`.
 
-**Parsing:** line-by-line string matching. `## T<N>:` starts a task, `key: value` lines set fields. No markdown parsing library needed.
+**Parsing:** line-by-line string matching. `## T<N>:` starts a task, `key: value` lines set fields. Prompt continuation lines are indented with 2+ spaces. No markdown parsing library needed.
 
 ### Execution Loop
 
@@ -314,7 +321,7 @@ Runs inside the existing 16ms main loop tick -- no new threads or async.
 
 1. `git pull --ff-only` in repo root (pick up prior merges from completed agents).
 2. Scan tasks: find all where status=`pending` and all deps are `done`.
-3. For each ready task with an available slot: dispatch a fresh agent with the task's prompt.
+3. For each ready task with an available slot: dispatch a fresh agent with the task's prompt and a reference to the original spec file for context.
 4. Update task file: status=`active`, agent=`<callsign>`.
 5. When an agent goes idle (existing 10s idle detection):
    - Mark task `done` in the task file.
