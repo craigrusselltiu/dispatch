@@ -63,7 +63,7 @@ class AgentStatusOverlay(private val context: Context) {
         if (orchestratorStatus != null) {
             val orchColor = when (orchestratorStatus) {
                 "idle" -> 0xFFFFAA00.toInt()       // Amber
-                "thinking" -> 0xFF00FF41.toInt()    // Neon green
+                "thinking" -> 0xFFFF3333.toInt()    // Red
                 "dead" -> 0xFFFF3333.toInt()        // Red
                 "failed" -> 0xFFFF3333.toInt()      // Red
                 "starting" -> 0xFF666666.toInt()    // Dim gray
