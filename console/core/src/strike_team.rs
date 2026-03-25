@@ -62,7 +62,7 @@ pub enum StrikeTeamPhase {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StrikeTeamState {
     pub name: String,
-    pub spec_file: String,
+    pub source_file: String,
     pub repo: String,
     pub phase: StrikeTeamPhase,
     pub tasks: Vec<Task>,
@@ -251,7 +251,7 @@ mod tests {
 
     const SAMPLE_TASK_FILE: &str = "\
 # Strike Team: auth-system
-spec: docs/auth-spec.md
+source: docs/auth-spec.md
 
 ## T1: Implement user model
 status: pending
@@ -488,7 +488,7 @@ prompt: Test the thing.
 
     #[test]
     fn parse_header_only() {
-        let tasks = parse_task_file("# Strike Team: test\nspec: foo.md\n");
+        let tasks = parse_task_file("# Strike Team: test\nsource: foo.md\n");
         assert!(tasks.is_empty());
     }
 

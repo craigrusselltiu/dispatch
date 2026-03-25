@@ -11,7 +11,7 @@
 //   list_agents()                     — get all agent slot states
 //   list_repos()                      — list known repositories
 //   message_agent(agent, text)        — send text to an agent's PTY
-//   strike_team(spec_file, name?, repo) — launch a strike team from a spec
+//   strike_team(source_file, name?, repo) — launch a strike team from a document
 
 use serde::{Deserialize, Serialize};
 
@@ -60,8 +60,8 @@ pub enum ToolCall {
     /// Launch a Strike Team from a document.
     StrikeTeam {
         /// Path to the document (spec, review, design doc, etc.), relative to repo root.
-        spec_file: String,
-        /// Short name for this operation. Defaults to spec filename without extension.
+        source_file: String,
+        /// Short name for this operation. Defaults to source filename without extension.
         #[serde(default)]
         name: Option<String>,
         /// Repository name or path.
@@ -127,7 +127,7 @@ pub enum ToolResult {
     /// Strike team launched.
     StrikeTeamAcknowledged {
         name: String,
-        spec_file: String,
+        source_file: String,
         repo: String,
     },
     /// Tool call failed.
@@ -236,20 +236,20 @@ pub fn tool_definitions() -> serde_json::Value {
             "input_schema": {
                 "type": "object",
                 "properties": {
-                    "spec_file": {
+                    "source_file": {
                         "type": "string",
                         "description": "Path to the document (spec, review, design doc, TODO list, etc.), relative to repo root."
                     },
                     "name": {
                         "type": "string",
-                        "description": "Short name for this operation. Defaults to spec filename without extension."
+                        "description": "Short name for this operation. Defaults to source filename without extension."
                     },
                     "repo": {
                         "type": "string",
                         "description": "Repository name or path."
                     }
                 },
-                "required": ["spec_file", "repo"]
+                "required": ["source_file", "repo"]
             }
         }
     ])
@@ -409,11 +409,11 @@ mod tests {
 
     #[test]
     fn parse_strike_team_call() {
-        let text = r#"<tool_call>{"name": "strike_team", "input": {"spec_file": "docs/auth-spec.md", "repo": "myrepo"}}</tool_call>"#;
+        let text = r#"<tool_call>{"name": "strike_team", "input": {"source_file": "docs/auth-spec.md", "repo": "myrepo"}}</tool_call>"#;
         let call = parse_tool_call(text).unwrap();
         match call {
-            ToolCall::StrikeTeam { spec_file, name, repo } => {
-                assert_eq!(spec_file, "docs/auth-spec.md");
+            ToolCall::StrikeTeam { source_file, name, repo } => {
+                assert_eq!(source_file, "docs/auth-spec.md");
                 assert!(name.is_none());
                 assert_eq!(repo, "myrepo");
             }
@@ -423,11 +423,11 @@ mod tests {
 
     #[test]
     fn parse_strike_team_call_with_name() {
-        let text = r#"<tool_call>{"name": "strike_team", "input": {"spec_file": "docs/auth-spec.md", "name": "auth", "repo": "myrepo"}}</tool_call>"#;
+        let text = r#"<tool_call>{"name": "strike_team", "input": {"source_file": "docs/auth-spec.md", "name": "auth", "repo": "myrepo"}}</tool_call>"#;
         let call = parse_tool_call(text).unwrap();
         match call {
-            ToolCall::StrikeTeam { spec_file, name, repo } => {
-                assert_eq!(spec_file, "docs/auth-spec.md");
+            ToolCall::StrikeTeam { source_file, name, repo } => {
+                assert_eq!(source_file, "docs/auth-spec.md");
                 assert_eq!(name.as_deref(), Some("auth"));
                 assert_eq!(repo, "myrepo");
             }

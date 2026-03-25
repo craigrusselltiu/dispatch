@@ -19,7 +19,7 @@ Location: `.dispatch/tasks-<name>.md`
 
 ```markdown
 # Strike Team: auth-system
-spec: docs/auth-spec.md
+source: docs/auth-spec.md
 
 ## T1: Implement user model
 status: pending
@@ -71,7 +71,7 @@ Idle --> Planning --> Executing --> Complete
 
 ### Planning Phase
 
-1. Orchestrator issues `strike_team(spec_file, name, repo)` tool call
+1. Orchestrator issues `strike_team(source_file, name, repo)` tool call
 2. Console dispatches a planner agent to the repo root (no worktree)
 3. Planner reads the document, extracts actionable items, creates `.dispatch/tasks-<name>.md`, reports task count via status message, then stops
 4. Console detects planner idle/exit, parses the task file, transitions to Executing
@@ -82,7 +82,7 @@ Runs inside the existing 16ms main loop tick — no new threads or async.
 
 1. `git pull --ff-only` in repo root (pick up prior merges from completed agents). On failure, log to the ticker and continue -- agents may work against stale code but execution is not halted.
 2. Scan tasks: find all where status=`pending` and all deps are `done`
-3. For each ready task with an available slot: dispatch a fresh agent with the task's prompt and a reference to the original spec file for context
+3. For each ready task with an available slot: dispatch a fresh agent with the task's prompt and a reference to the original source file for context
 4. Update task file: status=`active`, agent=`<callsign>`
 5. When an agent goes idle (existing 10s idle detection):
    - Mark task `done` in the task file
@@ -110,20 +110,20 @@ On idle detection, the console **terminates** the agent to free the slot. This e
   "input_schema": {
     "type": "object",
     "properties": {
-      "spec_file": {
+      "source_file": {
         "type": "string",
         "description": "Path to the document (spec, review, design doc, TODO list, etc.), relative to repo root."
       },
       "name": {
         "type": "string",
-        "description": "Short name for this operation. Defaults to spec filename without extension."
+        "description": "Short name for this operation. Defaults to source filename without extension."
       },
       "repo": {
         "type": "string",
         "description": "Repository name or path."
       }
     },
-    "required": ["spec_file", "repo"]
+    "required": ["source_file", "repo"]
   }
 }
 ```
@@ -140,14 +140,14 @@ The document may be anything: a feature spec, a bug report, a performance review
 a design doc, a list of TODOs, or any other document with actionable content.
 Your job is to parse whatever is in the document and extract concrete tasks from it.
 
-1. Read the document at: {spec_file}
+1. Read the document at: {source_file}
 2. Analyze its contents and identify all actionable items
 3. Create a task file at: .dispatch/tasks-{name}.md
 
 Use this EXACT format:
 
 # Strike Team: {name}
-spec: {spec_file}
+source: {source_file}
 
 ## T1: <short title>
 status: pending
@@ -197,7 +197,7 @@ Pure logic — no PTY, TUI, or async dependencies. Contains:
 - `TaskStatus` enum (`Pending`, `Active`, `Done`, `Failed`)
 - `Task` struct (id, title, status, dependencies, prompt, agent)
 - `StrikeTeamPhase` enum (`Planning`, `Executing`, `Complete`, `Aborted`)
-- `StrikeTeamState` struct (name, spec_file, repo, phase, tasks, task_file_path)
+- `StrikeTeamState` struct (name, source_file, repo, phase, tasks, task_file_path)
 - Parser: `parse_task_file(contents: &str) -> Vec<Task>`
 - Writer: `write_task_file(tasks: &[Task]) -> String`
 - Readiness: `ready_tasks(tasks: &[Task]) -> Vec<&Task>`
@@ -208,7 +208,7 @@ Pure logic — no PTY, TUI, or async dependencies. Contains:
 
 **`console/core/src/lib.rs`** — `pub mod strike_team;`
 
-**`console/core/src/tools.rs`** — Add `StrikeTeam` variant to `ToolCall` enum and `StrikeTeamAcknowledged { name, spec_file, repo }` variant to `ToolResult` enum. Add tool definition JSON and parser arm.
+**`console/core/src/tools.rs`** — Add `StrikeTeam` variant to `ToolCall` enum and `StrikeTeamAcknowledged { name, source_file, repo }` variant to `ToolResult` enum. Add tool definition JSON and parser arm.
 
 **`console/src/types.rs`** — Add `strike_team: Option<StrikeTeamState>` to `App`.
 
@@ -261,7 +261,7 @@ Post-implementation comparison of this design doc against the code as committed.
 
 **Function signatures — methods vs free functions.** The Architecture section describes `write_task_file(&self)`, `ready_tasks(&self)`, `task_for_agent()`, `summary()` as if they are methods on `StrikeTeamState`. The implementation uses free functions taking `&[Task]` slices (e.g., `write_task_file(tasks: &[Task])`, `summary(tasks: &[Task])`). This is better design — pure functions on slices are more composable and testable — but the doc should be updated to match. **Fixed:** Architecture section updated to show actual free function signatures with `&[Task]` parameters.
 
-**ToolResult variant name.** The original app integration code referenced a `ToolResult::StrikeTeamStarted` variant with fields `{ name, planner_slot, planner_callsign }`. The actual enum defines `StrikeTeamAcknowledged` with fields `{ name, spec_file, repo }`. The variant name and fields were mismatched at the call site. **Fixed:** Architecture section updated to explicitly name the `StrikeTeamAcknowledged { name, spec_file, repo }` variant.
+**ToolResult variant name.** The original app integration code referenced a `ToolResult::StrikeTeamStarted` variant with fields `{ name, planner_slot, planner_callsign }`. The actual enum defines `StrikeTeamAcknowledged` with fields `{ name, source_file, repo }`. The variant name and fields were mismatched at the call site. **Fixed:** Architecture section updated to explicitly name the `StrikeTeamAcknowledged { name, source_file, repo }` variant.
 
 **No cancellation mechanism.** The Edge Cases section says "console stops dispatching if strike team state is cleared" but no code path clears the state while a strike team is active. The only terminal transitions are Complete (all tasks done/failed) and Aborted (planner error). A user who manually terminates agents will find the strike team keeps dispatching new ones for ready tasks. **Fixed:** Added `abort_strike_team()` method to `App` and wired it to the `s` keybinding in command mode. Pressing `s` transitions the strike team to Aborted phase, stopping all future dispatching. Active agents finish normally. Edge Cases sections in FEAT-STRIKE-TEAM.md and SPEC.md updated, keybinding added to SPEC.md, help overlay, and main loop.
 

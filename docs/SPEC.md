@@ -192,7 +192,7 @@ The console parses the `"action"` field to determine which tool to execute. Para
 | `list_agents` | _(none)_ | List all active agent slots with callsign, tool, working/idle status, and repo. |
 | `list_repos` | _(none)_ | List available repositories that agents can work in. |
 | `message_agent` | `agent`, `text` | Send text to an agent's terminal (PTY). Use for follow-up instructions or answering agent questions. |
-| `strike_team` | `spec_file` (required), `repo` (required), `name` (optional) | Launch a Strike Team: read any document (spec, review, design doc, etc.), break it into tasks with dependencies, then dispatch agents in parallel waves until all tasks are complete. See [Strike Team](#strike-team). |
+| `strike_team` | `source_file` (required), `repo` (required), `name` (optional) | Launch a Strike Team: read any document (spec, review, design doc, etc.), break it into tasks with dependencies, then dispatch agents in parallel waves until all tasks are complete. See [Strike Team](#strike-team). |
 
 The `agent` parameter accepts either a callsign (e.g. "Alpha") or a slot number (e.g. "1"), case-insensitive.
 
@@ -266,7 +266,7 @@ Idle --> Planning --> Executing --> Complete
 
 ### How It Works
 
-1. The orchestrator issues a `strike_team(spec_file, name, repo)` action.
+1. The orchestrator issues a `strike_team(source_file, name, repo)` action.
 2. The console dispatches a **planner agent** that reads the document and creates a task file (`.dispatch/tasks-<name>.md`) with dependency information.
 3. Once the planner finishes, the console parses the task file and transitions to the Executing phase.
 4. The console scans for **ready** tasks (status `pending` with all dependencies `done`) and dispatches agents in parallel for each ready task that has an available slot.
@@ -280,7 +280,7 @@ Location: `.dispatch/tasks-<name>.md`
 
 ```markdown
 # Strike Team: auth-system
-spec: docs/auth-spec.md
+source: docs/auth-spec.md
 
 ## T1: Implement user model
 status: pending
