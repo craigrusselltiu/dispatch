@@ -36,6 +36,8 @@ dependencies {
     implementation(libs.material)
     implementation(libs.gson)
     implementation(libs.okhttp)
+    implementation(libs.kotlinx.coroutines.android)
+    implementation(libs.lifecycle.runtime.ktx)
     testImplementation(libs.junit)
     testImplementation(libs.mockito.core)
 }

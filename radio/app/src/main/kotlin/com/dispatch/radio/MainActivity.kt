@@ -26,6 +26,10 @@ import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.ActivityCompat
 import androidx.core.content.ContextCompat
 import androidx.core.content.FileProvider
+import androidx.lifecycle.lifecycleScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import android.graphics.Typeface
 import com.dispatch.radio.model.Agent
 import com.dispatch.radio.model.callsignColor
@@ -398,12 +402,13 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun handleMessage(text: String) {
-        val json = runCatching { gson.fromJson(text, JsonObject::class.java) }.getOrNull() ?: return
-        handleParsedMessage(json)
+        lifecycleScope.launch(Dispatchers.Default) {
+            val json = runCatching { gson.fromJson(text, JsonObject::class.java) }.getOrNull() ?: return@launch
+            withContext(Dispatchers.Main) { handleParsedMessage(json) }
+        }
     }
 
-    /** Process a parsed WebSocket message. Separated from handleMessage so
-     *  JSON parsing can be moved off the main thread in the future. */
+    /** Process a parsed WebSocket message on the main thread. */
     private fun handleParsedMessage(json: JsonObject) {
         when (json.get("type")?.asString) {
             "agents" -> {
@@ -645,14 +650,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     /** Read image bytes, base64 encode, and send over WebSocket.
-     *  Image I/O runs on a background thread to avoid blocking the main thread. */
+     *  Image I/O runs on Dispatchers.IO to avoid blocking the main thread. */
     private fun sendImageToAgent(uri: Uri, callsign: String) {
-        Thread {
+        lifecycleScope.launch(Dispatchers.IO) {
             try {
-                val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return@Thread
+                val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return@launch
                 if (bytes.size > MAX_IMAGE_BYTES) {
-                    runOnUiThread { addChatMessage("System", "Image too large (max 5 MB).") }
-                    return@Thread
+                    withContext(Dispatchers.Main) { addChatMessage("System", "Image too large (max 5 MB).") }
+                    return@launch
                 }
                 val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
 
@@ -662,16 +667,16 @@ class MainActivity : AppCompatActivity() {
                 } ?: "image.jpg"
 
                 val msg = """{"type":"send_image","callsign":${gson.toJson(callsign)},"data":"$b64","filename":${gson.toJson(filename)}}"""
-                runOnUiThread {
+                withContext(Dispatchers.Main) {
                     val sent = wsSend(msg)
                     if (!sent) {
                         addChatMessage("System", "Failed to send image (not connected).")
                     }
                 }
             } catch (e: Exception) {
-                runOnUiThread { addChatMessage("System", "Failed to read image.") }
+                withContext(Dispatchers.Main) { addChatMessage("System", "Failed to read image.") }
             }
-        }.start()
+        }
     }
 
     override fun onDestroy() {
