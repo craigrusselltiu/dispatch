@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 The format is based on [Keep a Changelog](https://keepachangelog.com/).
 
+## v0.4.3
+
+### Changed
+
+- Strike team task prompts now support multi-line values. Lines indented with 2+ spaces after `prompt:` are parsed as continuation lines, allowing the planner to write detailed prompts with file paths, function signatures, and acceptance criteria.
+- Strike team task agents now receive the spec file path in their prompt so they can read the original spec for full context about the overall project.
+- Updated planner agent prompt to include a concrete example of a good multi-line prompt and explicit guidance on using indented continuation lines.
+
 ## v0.4.2
 
 ### Added

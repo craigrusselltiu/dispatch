@@ -601,15 +601,24 @@ impl App {
                      ## T1: <short title>\n\
                      status: pending\n\
                      dependencies: none\n\
-                     prompt: <detailed prompt for an AI agent -- include file paths, function names, acceptance criteria>\n\n\
+                     prompt: <first line of prompt>\n\
+                     \x20\x20<continuation lines indented with 2 spaces>\n\n\
                      ## T2: <short title>\n\
                      status: pending\n\
                      dependencies: T1\n\
-                     prompt: <detailed prompt>\n\n\
+                     prompt: <first line of prompt>\n\
+                     \x20\x20<more detail on indented continuation lines>\n\n\
+                     EXAMPLE of a good prompt:\n\n\
+                     prompt: Create a User struct in src/models/user.rs.\n\
+                     \x20\x20Fields: id (Uuid), email (String), name (String), created_at (DateTime).\n\
+                     \x20\x20Derive serde Serialize/Deserialize and Debug.\n\
+                     \x20\x20Add a User::new(email, name) constructor that generates the id and timestamp.\n\
+                     \x20\x20Add unit tests for User::new in the same file.\n\n\
                      RULES:\n\
                      - Each task must be completable by a single agent in one session.\n\
                      - Maximize parallelism: only add dependencies when truly required.\n\
-                     - Prompts must be self-contained with specific file paths and criteria.\n\
+                     - Write detailed, multi-line prompts with specific file paths, function signatures, and acceptance criteria.\n\
+                     - Use 2-space indented continuation lines for multi-line prompts.\n\
                      - Sequential IDs: T1, T2, T3, etc.\n\
                      - Aim for 3-15 tasks.\n\
                      - Do NOT create a git worktree. Work directly in the repo root.\n\
@@ -896,17 +905,20 @@ impl App {
                 None => break, // No more slots — wait for next tick.
             };
 
-            let (prompt, title) = {
+            let (prompt, title, spec_file) = {
                 let st = self.strike_team.as_ref().unwrap();
                 let task = st.tasks.iter().find(|t| t.id == *task_id).unwrap();
-                (task.prompt.clone(), task.title.clone())
+                (task.prompt.clone(), task.title.clone(), st.spec_file.clone())
             };
 
             let callsign = self.next_callsign()
                 .unwrap_or_else(|| format!("Agent-{}", slot_idx + 1));
             let effective_tool = self.default_tool.clone();
             let cmd = self.tool_cmd(&effective_tool).to_string();
-            let full_prompt = format!("Your callsign is {}. {}", callsign, prompt);
+            let full_prompt = format!(
+                "Your callsign is {}. Strike team spec: {} -- read it for full context. {}",
+                callsign, spec_file, prompt
+            );
 
             match dispatch_slot(
                 slot_idx, &effective_tool, &cmd, self.pane_rows, self.pane_cols,
