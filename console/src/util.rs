@@ -34,9 +34,11 @@ pub fn format_runtime(elapsed: Duration) -> String {
 }
 
 /// Truncate a string to `max` chars, appending "..." if trimmed.
-/// Uses char boundaries to avoid panicking on multi-byte UTF-8.
+/// Uses char count (not byte length) for the comparison and char
+/// boundaries for slicing to avoid panicking on multi-byte UTF-8.
 pub fn truncate(s: &str, max: usize) -> String {
-    if s.len() <= max {
+    let char_count = s.chars().count();
+    if char_count <= max {
         return s.to_string();
     }
     if max > 3 {
@@ -179,4 +181,109 @@ pub fn compute_pane_size(term_rows: u16, term_cols: u16) -> (u16, u16) {
     // Each pane is half the terminal width minus 2 for borders.
     let cols = (term_cols / 2).saturating_sub(2).max(20);
     (rows, cols)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // -- truncate --
+
+    #[test]
+    fn truncate_ascii_short() {
+        assert_eq!(truncate("hello", 10), "hello");
+    }
+
+    #[test]
+    fn truncate_ascii_exact() {
+        assert_eq!(truncate("hello", 5), "hello");
+    }
+
+    #[test]
+    fn truncate_ascii_over() {
+        assert_eq!(truncate("hello world", 8), "hello...");
+    }
+
+    #[test]
+    fn truncate_emoji_no_panic() {
+        // 4 emoji = 4 chars, max=10 should not truncate
+        let s = "\u{1F600}\u{1F601}\u{1F602}\u{1F603}";
+        assert_eq!(truncate(s, 10), s);
+    }
+
+    #[test]
+    fn truncate_emoji_truncates() {
+        // 6 emoji = 6 chars, max=5 should truncate to 2 emoji + "..."
+        let s = "\u{1F600}\u{1F601}\u{1F602}\u{1F603}\u{1F604}\u{1F605}";
+        let result = truncate(s, 5);
+        assert_eq!(result, "\u{1F600}\u{1F601}...");
+        assert_eq!(result.chars().count(), 5);
+    }
+
+    #[test]
+    fn truncate_cjk_no_panic() {
+        let s = "\u{4F60}\u{597D}\u{4E16}\u{754C}"; // 4 CJK chars
+        assert_eq!(truncate(s, 4), s);
+    }
+
+    #[test]
+    fn truncate_cjk_truncates() {
+        let s = "\u{4F60}\u{597D}\u{4E16}\u{754C}\u{FF01}"; // 5 CJK chars
+        let result = truncate(s, 4);
+        assert_eq!(result.chars().count(), 4); // 1 char + "..."
+    }
+
+    #[test]
+    fn truncate_multibyte_not_falsely_truncated() {
+        // "cafe\u{0301}" = 5 chars, 6 bytes. max=5 should NOT truncate.
+        let s = "caf\u{00E9}x"; // 5 chars, 6 bytes (e-acute is 2 bytes)
+        assert_eq!(truncate(s, 5), s);
+    }
+
+    #[test]
+    fn truncate_max_zero() {
+        assert_eq!(truncate("hello", 0), "");
+    }
+
+    #[test]
+    fn truncate_max_three() {
+        assert_eq!(truncate("hello", 3), "hel");
+    }
+
+    // -- strip_action_blocks --
+
+    #[test]
+    fn strip_action_blocks_no_blocks() {
+        assert_eq!(strip_action_blocks("hello world"), "hello world");
+    }
+
+    #[test]
+    fn strip_action_blocks_action_block() {
+        let input = "before```action\ndo stuff\n```after";
+        assert_eq!(strip_action_blocks(input), "beforeafter");
+    }
+
+    #[test]
+    fn strip_action_blocks_tool_call() {
+        let input = "start<tool_call>payload</tool_call>end";
+        assert_eq!(strip_action_blocks(input), "startend");
+    }
+
+    #[test]
+    fn strip_action_blocks_tool_result() {
+        let input = "a<tool_result>data</tool_result>b";
+        assert_eq!(strip_action_blocks(input), "ab");
+    }
+
+    #[test]
+    fn strip_action_blocks_multiple() {
+        let input = "x<tool_call>a</tool_call>y<tool_result>b</tool_result>z";
+        assert_eq!(strip_action_blocks(input), "xyz");
+    }
+
+    #[test]
+    fn strip_action_blocks_preserves_ascii() {
+        let plain = "The quick brown fox jumps over the lazy dog.";
+        assert_eq!(strip_action_blocks(plain), plain);
+    }
 }
