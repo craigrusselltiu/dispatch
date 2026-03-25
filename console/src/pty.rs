@@ -333,8 +333,17 @@ pub fn dispatch_slot(
 
             // Write the initial prompt into the interactive session after spawn.
             // Copilot with -p exits after processing; we need it to stay alive.
+            // Unlike Claude (which gets AGENTS.md as a --system-prompt), Copilot
+            // only gets it via --add-dir as supplementary context. We prepend an
+            // explicit instruction to read the file so Copilot follows the full
+            // dispatch workflow (status messages, worktrees, merge strategy).
             if let Some(prompt) = initial_prompt {
-                let prompt = prompt.to_string();
+                let prompt = format!(
+                    "IMPORTANT: First read .dispatch/instructions/AGENTS.md for your operating \
+                     instructions -- it defines how to send status messages, create worktrees, \
+                     and finalize your work. Follow those instructions exactly. {}",
+                    prompt
+                );
                 let last_output_for_delay = Arc::clone(&last_output_at);
                 let w = Arc::clone(&shared);
                 thread::spawn(move || {
