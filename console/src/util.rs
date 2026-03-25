@@ -105,12 +105,18 @@ pub fn strip_system_tags(text: &str) -> String {
     result
 }
 
-/// Remove lines that are internal `[EVENT]` system notifications.
-/// These are sent to the orchestrator for coordination but should not
-/// be forwarded to the user-facing chat on the radio.
+/// Remove lines with internal message prefixes that the orchestrator receives
+/// for coordination but should never be forwarded to user-facing chat on the
+/// radio. Strips `[EVENT]`, `[AGENT_MSG]`, and `[MIC]` prefixed lines so the
+/// LLM cannot echo or fabricate them into the chat stream.
 pub fn strip_event_lines(text: &str) -> String {
     text.lines()
-        .filter(|line| !line.trim_start().starts_with("[EVENT]"))
+        .filter(|line| {
+            let trimmed = line.trim_start();
+            !trimmed.starts_with("[EVENT]")
+                && !trimmed.starts_with("[AGENT_MSG]")
+                && !trimmed.starts_with("[MIC]")
+        })
         .collect::<Vec<_>>()
         .join("\n")
 }
