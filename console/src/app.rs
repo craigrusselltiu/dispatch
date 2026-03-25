@@ -70,6 +70,7 @@ impl App {
             user_callsign,
             console_name,
             strike_team: None,
+            user_initiated_turn: false,
         }
     }
 
@@ -485,6 +486,25 @@ impl App {
             }
 
             tools::ToolCall::Terminate { agent } => {
+                // Gate: only allow terminate when the current orchestrator turn
+                // was triggered by authentic user voice/text input from the radio.
+                // Prevents the LLM from hallucinating a fake [MIC] message and
+                // self-authorizing destructive actions.
+                if !self.user_initiated_turn {
+                    self.push_ticker("BLOCKED: orchestrator tried to terminate without user input".to_string());
+                    self.push_chat("System", &format!(
+                        "Terminate {} blocked: no voice/text input from Dispatch.", agent
+                    ));
+                    return tools::ToolResult::Error {
+                        message: format!(
+                            "terminate '{}' rejected: destructive actions require a preceding \
+                             voice/text command from Dispatch. This turn was not triggered by \
+                             user input.",
+                            agent
+                        ),
+                    };
+                }
+
                 let (slot_occupied, callsigns): (Vec<bool>, Vec<Option<String>>) = self.slots
                     .iter()
                     .map(|s| match s {
