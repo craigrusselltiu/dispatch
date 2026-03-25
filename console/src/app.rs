@@ -877,10 +877,20 @@ impl App {
         }
 
         // git pull --ff-only in repo root to pick up prior merges.
-        let _ = Command::new("git")
+        match Command::new("git")
             .args(["pull", "--ff-only"])
             .current_dir(&repo)
-            .output();
+            .output()
+        {
+            Ok(output) if !output.status.success() => {
+                let stderr = String::from_utf8_lossy(&output.stderr);
+                self.push_ticker(format!("STRIKE TEAM: git pull failed — {}", stderr.trim()));
+            }
+            Err(e) => {
+                self.push_ticker(format!("STRIKE TEAM: git pull error — {}", e));
+            }
+            _ => {}
+        }
 
         for task_id in &ready_ids {
             // Find an available slot.

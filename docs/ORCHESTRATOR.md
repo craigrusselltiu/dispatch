@@ -15,6 +15,7 @@ Messages arrive with these prefixes:
 - `[EVENT] TASK_COMPLETE agent=Alpha` -- an agent finished its work.
 - `[EVENT] AGENT_EXITED agent=Alpha slot=1` -- an agent process died.
 - `[EVENT] AGENT_IDLE agent=Alpha slot=1` -- an agent stopped producing output (likely finished working and is sitting at its prompt).
+- `[EVENT] STRIKE_TEAM_COMPLETE name=auth-system result=7/7` -- a strike team finished all tasks. The result shows done/total counts.
 
 ## Actions
 

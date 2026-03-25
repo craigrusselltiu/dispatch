@@ -253,7 +253,7 @@ A coordinated multi-agent execution mode that takes a spec or feature design doc
 
 ```
 Idle --> Planning --> Executing --> Complete
-                 \-> Failed (planner error)
+                 \-> Aborted (planner error)
 ```
 
 ### How It Works
@@ -321,7 +321,7 @@ Runs inside the existing 16ms main loop tick -- no new threads or async.
    - Terminate the agent (free the slot for next wave).
    - Re-run from step 1.
 6. When an agent process exits unexpectedly: mark task `failed`, continue.
-7. When all tasks are `done` or `failed`: transition to Complete.
+7. When all tasks are `done` or `failed`: transition to Complete and notify the orchestrator via `[EVENT] STRIKE_TEAM_COMPLETE name=<name> result=<done>/<total>`.
 
 Each task agent follows the normal dispatch workflow: creates a worktree from latest main, works on its task, merges to main, pushes, cleans up, and goes idle. On idle detection, the console terminates the agent to free the slot for the next wave.
 
