@@ -251,7 +251,7 @@ fn rpc_read_response(
     expected_id: u64,
 ) -> Result<serde_json::Value, String> {
     let mut line_buf = String::new();
-    for _ in 0..RPC_READ_MAX_LINES {
+    for i in 0..RPC_READ_MAX_LINES {
         line_buf.clear();
         let n = reader.read_line(&mut line_buf).map_err(|e| format!("stdout read: {e}"))?;
         if n == 0 {
@@ -276,6 +276,10 @@ fn rpc_read_response(
                     return Ok(parsed.get("result").cloned().unwrap_or(serde_json::Value::Null));
                 }
             }
+        }
+
+        if i == 1000 {
+            eprintln!("warning: rpc_read_response still waiting for id {} after 1000 lines", expected_id);
         }
 
         // Agent request — auto-handle during init.
