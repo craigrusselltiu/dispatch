@@ -59,6 +59,12 @@ pub struct Orchestrator {
     pub state: OrchestratorState,
     /// Queued messages to send once the current turn completes.
     pending: std::collections::VecDeque<String>,
+    /// Parallel to `pending`: whether each queued message is user-originated.
+    pending_user: std::collections::VecDeque<bool>,
+    /// Whether the current turn was triggered by authentic user voice/text input.
+    /// Used to gate destructive actions (terminate) so the LLM cannot hallucinate
+    /// a fake user message and self-authorize dangerous operations.
+    user_turn: bool,
     /// Session ID from the init message.
     session_id: String,
     /// Protocol in use.
@@ -216,6 +222,8 @@ fn spawn_stream_json(system_prompt: &str, cwd: &str, tool_cmd: &str) -> Result<O
         rx,
         state: OrchestratorState::Idle,
         pending: std::collections::VecDeque::new(),
+        pending_user: std::collections::VecDeque::new(),
+        user_turn: false,
         session_id,
         protocol: Protocol::StreamJson,
         next_rpc_id: Arc::new(AtomicU64::new(1)),
@@ -440,6 +448,8 @@ fn spawn_acp(system_prompt: &str, cwd: &str, tool_key: &str, tool_cmd: &str) -> 
         rx,
         state: OrchestratorState::Idle,
         pending: std::collections::VecDeque::new(),
+        pending_user: std::collections::VecDeque::new(),
+        user_turn: false,
         session_id,
         protocol: Protocol::Acp,
         next_rpc_id,
@@ -449,17 +459,41 @@ fn spawn_acp(system_prompt: &str, cwd: &str, tool_key: &str, tool_cmd: &str) -> 
 // ── Methods ──────────────────────────────────────────────────────────────────
 
 impl Orchestrator {
-    /// Send a user message to the orchestrator.
-    /// If the orchestrator is mid-response, the message is queued.
+    /// Send a system-originated message to the orchestrator (events, agent msgs,
+    /// tool results). Marks the turn as NOT user-initiated, so destructive actions
+    /// (terminate) will be blocked.
     pub fn send_message(&mut self, content: &str) {
         if self.state == OrchestratorState::Dead {
             return;
         }
         if self.state == OrchestratorState::Responding {
             self.pending.push_back(content.to_string());
+            self.pending_user.push_back(false);
             return;
         }
+        self.user_turn = false;
         self.send_raw(content);
+    }
+
+    /// Send a user-originated message (voice/text from Dispatch) to the
+    /// orchestrator. Marks the turn as user-initiated, allowing destructive
+    /// actions like terminate.
+    pub fn send_user_message(&mut self, content: &str) {
+        if self.state == OrchestratorState::Dead {
+            return;
+        }
+        if self.state == OrchestratorState::Responding {
+            self.pending.push_back(content.to_string());
+            self.pending_user.push_back(true);
+            return;
+        }
+        self.user_turn = true;
+        self.send_raw(content);
+    }
+
+    /// Whether the current turn was triggered by user voice/text input.
+    pub fn is_user_turn(&self) -> bool {
+        self.user_turn
     }
 
     /// Send directly (bypasses queue check). Branches on protocol.
@@ -505,6 +539,7 @@ impl Orchestrator {
                         self.state = OrchestratorState::Idle;
                         // Flush pending messages.
                         if let Some(msg) = self.pending.pop_front() {
+                            self.user_turn = self.pending_user.pop_front().unwrap_or(false);
                             self.send_raw(&msg);
                         }
                     }
@@ -532,6 +567,7 @@ impl Orchestrator {
     /// Interrupt the current response: kill the process and clear pending queue.
     pub fn interrupt(&mut self) {
         self.pending.clear();
+        self.pending_user.clear();
         self.kill();
     }
 

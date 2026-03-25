@@ -196,6 +196,14 @@ The console parses the `"action"` field to determine which tool to execute. Para
 
 The `agent` parameter accepts either a callsign (e.g. "Alpha") or a slot number (e.g. "1"), case-insensitive.
 
+### Destructive Action Safeguard
+
+The `terminate` action is gated by user input authentication. The orchestrator LLM can only execute `terminate` when the current turn was triggered by an authentic voice or text message from Dispatch (a `[MIC]` message). If the orchestrator attempts to terminate an agent in response to a system event (`[EVENT]`, `[AGENT_MSG]`, or `<tool_result>`), the action is blocked with an error.
+
+This prevents the LLM from hallucinating fake user messages and self-authorizing destructive actions. Each message sent to the orchestrator is tagged as user-originated or system-originated, and the tag is tracked through the pending queue so it correctly reflects the trigger for each turn.
+
+When a terminate is blocked, the ticker displays "BLOCKED: orchestrator tried to terminate without user input" and a chat message is sent to the radio.
+
 ### Ticker
 
 A single-line LED-style scrolling marquee between the header bar and the quad panes. Text scrolls right-to-left continuously. Messages queue up -- when one finishes scrolling off, the next starts. When idle, the line is blank.

@@ -186,4 +186,9 @@ pub struct App {
     pub console_name: String,
     /// Active strike team state (None when no strike team is running).
     pub strike_team: Option<strike_team::StrikeTeamState>,
+    /// Whether the current orchestrator turn was triggered by user voice/text input.
+    /// Snapshotted before collecting orchestrator outputs each frame. Used to gate
+    /// destructive actions (terminate) so the LLM cannot self-hallucinate user input
+    /// and act on it.
+    pub user_initiated_turn: bool,
 }

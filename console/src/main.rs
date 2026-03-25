@@ -384,7 +384,7 @@ fn main() -> io::Result<()> {
                         let pending: Vec<String> = app.pending_voice.drain(..).collect();
                         if let Some(orch) = &mut app.orchestrator {
                             for msg in pending {
-                                orch.send_message(&format!("[MIC] {}", msg));
+                                orch.send_user_message(&format!("[MIC] {}", msg));
                             }
                         }
                     }
@@ -415,7 +415,7 @@ fn main() -> io::Result<()> {
                     app.push_orch(OrchestratorEventKind::VoiceTranscript { text: text.clone() });
                     app.push_chat(&app.user_callsign.clone(), &text);
                     if let Some(orch) = &mut app.orchestrator {
-                        orch.send_message(&format!("[MIC] {}", text));
+                        orch.send_user_message(&format!("[MIC] {}", text));
                     } else {
                         app.pending_voice.push(text);
                     }
@@ -522,6 +522,11 @@ fn main() -> io::Result<()> {
         }
 
         // dispatch-h62: poll orchestrator output and execute tool calls.
+        // Snapshot whether the current turn was user-initiated BEFORE collecting
+        // outputs, because try_recv may process TurnComplete and start the next
+        // turn (which could be system-initiated), overwriting the flag.
+        app.user_initiated_turn = app.orchestrator.as_ref()
+            .map_or(false, |o| o.is_user_turn());
         // Collect all pending outputs first to avoid borrow conflicts.
         let mut orch_outputs: Vec<orchestrator::OrchestratorOutput> = Vec::new();
         if let Some(orch) = &mut app.orchestrator {
