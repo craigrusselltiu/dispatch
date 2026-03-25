@@ -66,6 +66,9 @@ pub struct ConsoleState {
     pub console_name: String,
     /// Default tool key for dispatching agents (e.g. "claude" or "copilot").
     pub default_tool: String,
+    /// Orchestrator lifecycle status ("idle", "thinking", "dead", "failed", "starting").
+    /// Synced from the main thread so the WS handler can include it in agents messages.
+    pub orchestrator_status: String,
 }
 
 impl ConsoleState {
@@ -81,6 +84,7 @@ impl ConsoleState {
             user_callsign: "Dispatch".to_string(),
             console_name: "Console".to_string(),
             default_tool: "claude".to_string(),
+            orchestrator_status: "starting".to_string(),
         }
     }
 
@@ -160,6 +164,7 @@ pub fn handle_message(raw: RawInbound, state: &SharedState) -> Option<OutboundMs
                 queued_tasks: st.queued_tasks.len() as u32,
                 user_callsign: Some(st.user_callsign.clone()),
                 console_name: Some(st.console_name.clone()),
+                orchestrator_status: Some(st.orchestrator_status.clone()),
                 seq,
             })
         }

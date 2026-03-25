@@ -105,6 +105,7 @@ impl App {
             queued_tasks: st.queued_tasks.len() as u32,
             user_callsign: Some(st.user_callsign.clone()),
             console_name: Some(st.console_name.clone()),
+            orchestrator_status: Some(st.orchestrator_status.clone()),
             seq: None,
         };
         if let Ok(json) = serde_json::to_string(&msg) {
@@ -122,6 +123,39 @@ impl App {
 
     pub fn active_count(&self) -> usize {
         self.slots.iter().filter(|s| s.is_some()).count()
+    }
+
+    /// Compute the current orchestrator status string and, if it changed,
+    /// sync it into the shared WebSocket state and broadcast to radio clients.
+    pub fn sync_orchestrator_status(&self) {
+        let status = self.orchestrator_status_str().to_string();
+        let changed = {
+            let mut st = self.ws_state.lock().unwrap();
+            if st.orchestrator_status != status {
+                st.orchestrator_status = status;
+                true
+            } else {
+                false
+            }
+        };
+        if changed {
+            self.broadcast_agents();
+        }
+    }
+
+    /// Return the orchestrator status as a wire-protocol string.
+    fn orchestrator_status_str(&self) -> &'static str {
+        use dispatch_core::orchestrator;
+        match &self.orchestrator {
+            Some(o) if o.is_alive() => match o.state {
+                orchestrator::OrchestratorState::Idle => "idle",
+                orchestrator::OrchestratorState::Responding => "thinking",
+                orchestrator::OrchestratorState::Dead => "dead",
+            },
+            Some(_) => "dead",
+            None if self.orch_error.is_some() => "failed",
+            None => "starting",
+        }
     }
 
     /// Total pages: determined by the configured slot count (callsigns list length).

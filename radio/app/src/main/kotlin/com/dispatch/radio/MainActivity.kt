@@ -62,6 +62,7 @@ class MainActivity : AppCompatActivity() {
     private var agents: List<Agent> = emptyList()
     private var currentSlot: Int = -1
     private var queuedTasks: Int = 0
+    private var orchestratorStatus: String? = null
 
     // Identity names from console config
     private var userCallsign: String = "Dispatch"
@@ -314,7 +315,7 @@ class MainActivity : AppCompatActivity() {
 
     override fun onKeyDown(keyCode: Int, event: KeyEvent): Boolean {
         return when (keyCode) {
-            KeyEvent.KEYCODE_VOLUME_UP -> volumeUpHandler.onKeyDown(agents)
+            KeyEvent.KEYCODE_VOLUME_UP -> volumeUpHandler.onKeyDown(agents, orchestratorStatus)
             KeyEvent.KEYCODE_VOLUME_DOWN -> {
                 if (event.repeatCount == 0) {
                     if (settings.continuousListening) {
@@ -390,6 +391,7 @@ class MainActivity : AppCompatActivity() {
                 }
                 currentSlot = json.get("target")?.takeUnless { it.isJsonNull }?.asInt ?: currentSlot
                 queuedTasks = json.get("queued_tasks")?.takeUnless { it.isJsonNull }?.asInt ?: 0
+                orchestratorStatus = json.get("orchestrator_status")?.takeUnless { it.isJsonNull }?.asString
                 // Extract identity names from console config
                 json.get("user_callsign")?.takeUnless { it.isJsonNull }?.asString?.let { userCallsign = it }
                 json.get("console_name")?.takeUnless { it.isJsonNull }?.asString?.let { consoleName = it }

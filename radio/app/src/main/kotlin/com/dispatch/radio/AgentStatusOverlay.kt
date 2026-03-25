@@ -24,7 +24,7 @@ class AgentStatusOverlay(private val context: Context) {
 
     private var dialog: AlertDialog? = null
 
-    fun show(agents: List<Agent>) {
+    fun show(agents: List<Agent>, orchestratorStatus: String?) {
         dismiss()
 
         val font = Typeface.MONOSPACE
@@ -57,6 +57,69 @@ class AgentStatusOverlay(private val context: Context) {
         val layout = LinearLayout(context).apply {
             orientation = LinearLayout.VERTICAL
             setPadding((24 * dp).toInt(), (8 * dp).toInt(), (24 * dp).toInt(), (16 * dp).toInt())
+        }
+
+        // --- Orchestrator status (pinned at top) ---
+        if (orchestratorStatus != null) {
+            val orchColor = when (orchestratorStatus) {
+                "idle" -> 0xFFFFAA00.toInt()       // Amber
+                "thinking" -> 0xFF00FF41.toInt()    // Neon green
+                "dead" -> 0xFFFF3333.toInt()        // Red
+                "failed" -> 0xFFFF3333.toInt()      // Red
+                "starting" -> 0xFF666666.toInt()    // Dim gray
+                else -> 0xFF666666.toInt()
+            }
+
+            val orchRow = LinearLayout(context).apply {
+                orientation = LinearLayout.HORIZONTAL
+                gravity = Gravity.CENTER_VERTICAL
+                setPadding(0, (10 * dp).toInt(), 0, (10 * dp).toInt())
+            }
+
+            // Status indicator dot
+            orchRow.addView(View(context).apply {
+                val size = (8 * dp).toInt()
+                layoutParams = LinearLayout.LayoutParams(size, size).apply {
+                    marginEnd = (12 * dp).toInt()
+                }
+                background = GradientDrawable().apply {
+                    shape = GradientDrawable.OVAL
+                    setColor(orchColor)
+                }
+            })
+
+            // Label
+            orchRow.addView(TextView(context).apply {
+                text = "ORCHESTRATOR"
+                setTextColor(Color.WHITE)
+                textSize = 13f
+                typeface = font
+                layoutParams = LinearLayout.LayoutParams(
+                    0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f
+                )
+            })
+
+            // Status value
+            orchRow.addView(TextView(context).apply {
+                text = orchestratorStatus.uppercase()
+                setTextColor(orchColor)
+                textSize = 13f
+                typeface = font
+                gravity = Gravity.END
+            })
+
+            layout.addView(orchRow)
+
+            // Divider after orchestrator row
+            layout.addView(View(context).apply {
+                setBackgroundColor(0xFF333333.toInt())
+                layoutParams = LinearLayout.LayoutParams(
+                    LinearLayout.LayoutParams.MATCH_PARENT, (1 * dp).toInt()
+                ).apply {
+                    topMargin = (2 * dp).toInt()
+                    bottomMargin = (4 * dp).toInt()
+                }
+            })
         }
 
         if (active.isEmpty()) {

@@ -24,11 +24,11 @@ class VolumeUpHandler(
     private var statusOverlay: AgentStatusOverlay? = null
 
     /** Call from Activity.onKeyDown for KEYCODE_VOLUME_UP. Returns true to consume. */
-    fun onKeyDown(agents: List<Agent>): Boolean {
+    fun onKeyDown(agents: List<Agent>, orchestratorStatus: String?): Boolean {
         if (isKeyDown) return true // Ignore key-repeat events while held
         isKeyDown = true
         if (VolumeKeyBridge.isActivityInForeground) {
-            statusOverlay = AgentStatusOverlay(context).also { it.show(agents) }
+            statusOverlay = AgentStatusOverlay(context).also { it.show(agents, orchestratorStatus) }
         }
         return true
     }
