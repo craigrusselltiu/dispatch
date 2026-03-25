@@ -62,6 +62,8 @@ class ContinuousListenManager(
     fun destroy() {
         active = false
         handler.removeCallbacksAndMessages(null)
+        recognizer?.stopListening()
+        recognizer?.setRecognitionListener(null)
         recognizer?.destroy()
         recognizer = null
     }

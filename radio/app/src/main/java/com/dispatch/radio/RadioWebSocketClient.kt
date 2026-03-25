@@ -47,6 +47,7 @@ class RadioWebSocketClient(
     @Volatile private var stopped = false
 
     private var reconnectDelay = INITIAL_DELAY_MS
+    private var reconnectAttempts = 0
 
     fun connect() {
         stopped = false
@@ -56,6 +57,7 @@ class RadioWebSocketClient(
     fun disconnect() {
         stopped = true
         reconnectDelay = INITIAL_DELAY_MS
+        reconnectAttempts = 0
         mainHandler.removeCallbacksAndMessages(null)
         webSocket?.close(CLOSE_NORMAL, "disconnect")
         webSocket = null
@@ -77,6 +79,7 @@ class RadioWebSocketClient(
         override fun onOpen(webSocket: WebSocket, response: Response) {
             connected = true
             reconnectDelay = INITIAL_DELAY_MS
+            reconnectAttempts = 0
             webSocket.send(MSG_LIST_AGENTS)
             mainHandler.post { listener.onConnected() }
         }
@@ -113,6 +116,11 @@ class RadioWebSocketClient(
     }
 
     private fun scheduleReconnect() {
+        reconnectAttempts++
+        if (reconnectAttempts > MAX_RECONNECT_ATTEMPTS) {
+            // Give up to save battery. User can reconnect via settings.
+            return
+        }
         mainHandler.postDelayed({
             if (!stopped) {
                 openConnection()
@@ -126,6 +134,8 @@ class RadioWebSocketClient(
         private const val PING_INTERVAL_SECONDS = 15L
         private const val INITIAL_DELAY_MS = 1_000L
         private const val MAX_DELAY_MS = 30_000L
+        /** Stop reconnecting after this many attempts (~30 min with exp backoff). */
+        private const val MAX_RECONNECT_ATTEMPTS = 20
         private const val CLOSE_NORMAL = 1000
         private const val MSG_LIST_AGENTS = """{"type":"list_agents"}"""
 

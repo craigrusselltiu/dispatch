@@ -34,72 +34,92 @@ pub fn format_runtime(elapsed: Duration) -> String {
 }
 
 /// Truncate a string to `max` chars, appending "..." if trimmed.
+/// Uses char boundaries to avoid panicking on multi-byte UTF-8.
 pub fn truncate(s: &str, max: usize) -> String {
     if s.len() <= max {
-        s.to_string()
-    } else if max > 3 {
-        format!("{}...", &s[..max - 3])
+        return s.to_string();
+    }
+    if max > 3 {
+        let truncated: String = s.chars().take(max - 3).collect();
+        format!("{}...", truncated)
     } else {
-        s[..max].to_string()
+        s.chars().take(max).collect()
     }
 }
 
 /// Strip ```action ... ```, <tool_call>...</tool_call>, and
 /// <tool_result>...</tool_result> blocks from text, returning only the
 /// prose/reasoning portion for chat display (dispatch-chat).
+/// Single-pass: copies non-block segments into a new String, avoiding
+/// the quadratic cost of repeated replace_range() calls.
 pub fn strip_action_blocks(text: &str) -> String {
-    let mut result = text.to_string();
-    // Remove ```action ... ``` blocks
-    while let Some(start) = result.find("```action") {
-        if let Some(end_fence) = result[start + 9..].find("```") {
-            let end = start + 9 + end_fence + 3;
-            result.replace_range(start..end, "");
+    let mut result = String::with_capacity(text.len());
+    let mut pos = 0;
+
+    while pos < text.len() {
+        let remaining = &text[pos..];
+        // Try each block pattern at current position.
+        if let Some(end) = try_skip_block(remaining, "```action", "```")
+            .or_else(|| try_skip_block(remaining, "<tool_call>", "</tool_call>"))
+            .or_else(|| try_skip_block(remaining, "<tool_result>", "</tool_result>"))
+        {
+            pos += end;
         } else {
-            break;
-        }
-    }
-    // Remove <tool_call>...</tool_call> blocks
-    while let Some(start) = result.find("<tool_call>") {
-        if let Some(end) = result.find("</tool_call>") {
-            result.replace_range(start..end + "</tool_call>".len(), "");
-        } else {
-            break;
-        }
-    }
-    // Remove <tool_result>...</tool_result> blocks
-    while let Some(start) = result.find("<tool_result>") {
-        if let Some(end) = result.find("</tool_result>") {
-            result.replace_range(start..end + "</tool_result>".len(), "");
-        } else {
-            break;
+            // Advance one char (handles multi-byte UTF-8 correctly).
+            let ch = remaining.chars().next().unwrap();
+            result.push(ch);
+            pos += ch.len_utf8();
         }
     }
     result
 }
 
+/// If `text` starts with `open_tag`, find the matching `close_tag`
+/// and return the byte offset just past it (relative to `text`).
+fn try_skip_block(text: &str, open_tag: &str, close_tag: &str) -> Option<usize> {
+    if !text.starts_with(open_tag) {
+        return None;
+    }
+    let after_open = open_tag.len();
+    text[after_open..].find(close_tag).map(|offset| after_open + offset + close_tag.len())
+}
+
 /// Strip system context tags that leak from the LLM framework into
 /// orchestrator output. Removes `<reminder>`, `<current_datetime>`,
 /// `<system_notification>`, and `<sql_tables>` blocks.
+/// Single-pass approach to avoid quadratic replace_range() cost.
 pub fn strip_system_tags(text: &str) -> String {
-    let mut result = text.to_string();
-    // Order matters: strip outer tags first so nested content is removed together.
-    let tags: &[(&str, &str)] = &[
+    const TAGS: &[(&str, &str)] = &[
         ("<reminder>", "</reminder>"),
         ("<current_datetime>", "</current_datetime>"),
         ("<system_notification>", "</system_notification>"),
         ("<sql_tables>", "</sql_tables>"),
     ];
-    for &(open, close) in tags {
-        loop {
-            let Some(start) = result.find(open) else { break };
-            if let Some(end_offset) = result[start..].find(close) {
-                result.replace_range(start..start + end_offset + close.len(), "");
-            } else {
-                // No closing tag: remove from the opening tag to end of line.
-                let end = result[start..].find('\n').map_or(result.len(), |p| start + p);
-                result.replace_range(start..end, "");
+
+    let mut result = String::with_capacity(text.len());
+    let mut pos = 0;
+
+    while pos < text.len() {
+        let remaining = &text[pos..];
+        let mut matched = false;
+        for &(open, close) in TAGS {
+            if remaining.starts_with(open) {
+                let after_open = open.len();
+                if let Some(close_offset) = remaining[after_open..].find(close) {
+                    pos += after_open + close_offset + close.len();
+                } else {
+                    // No closing tag: skip to end of line.
+                    let eol = remaining.find('\n').unwrap_or(remaining.len());
+                    pos += eol;
+                }
+                matched = true;
                 break;
             }
+        }
+        if !matched {
+            let ch = remaining.chars().next().unwrap();
+            result.push(ch);
+            pos += ch.len_utf8();
         }
     }
     result

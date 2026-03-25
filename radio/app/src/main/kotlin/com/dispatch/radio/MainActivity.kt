@@ -314,11 +314,16 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
         VolumeKeyBridge.isActivityInForeground = true
+        // Restart the blink animator (cancelled in onPause to save battery).
+        startStatusBlink()
     }
 
     override fun onPause() {
         super.onPause()
         VolumeKeyBridge.isActivityInForeground = false
+        // Cancel the infinite blink animator to stop 60fps CPU wakes while backgrounded.
+        statusBlinkAnimator?.cancel()
+        statusBlinkAnimator = null
     }
 
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
@@ -393,6 +398,12 @@ class MainActivity : AppCompatActivity() {
 
     private fun handleMessage(text: String) {
         val json = runCatching { gson.fromJson(text, JsonObject::class.java) }.getOrNull() ?: return
+        handleParsedMessage(json)
+    }
+
+    /** Process a parsed WebSocket message. Separated from handleMessage so
+     *  JSON parsing can be moved off the main thread in the future. */
+    private fun handleParsedMessage(json: JsonObject) {
         when (json.get("type")?.asString) {
             "agents" -> {
                 val slots = json.getAsJsonArray("slots") ?: return
@@ -632,29 +643,34 @@ class MainActivity : AppCompatActivity() {
             .show()
     }
 
-    /** Read image bytes, base64 encode, and send over WebSocket. */
+    /** Read image bytes, base64 encode, and send over WebSocket.
+     *  Image I/O runs on a background thread to avoid blocking the main thread. */
     private fun sendImageToAgent(uri: Uri, callsign: String) {
-        try {
-            val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return
-            if (bytes.size > MAX_IMAGE_BYTES) {
-                addChatMessage("System", "Image too large (max 5 MB).")
-                return
-            }
-            val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
+        Thread {
+            try {
+                val bytes = contentResolver.openInputStream(uri)?.use { it.readBytes() } ?: return@Thread
+                if (bytes.size > MAX_IMAGE_BYTES) {
+                    runOnUiThread { addChatMessage("System", "Image too large (max 5 MB).") }
+                    return@Thread
+                }
+                val b64 = Base64.encodeToString(bytes, Base64.NO_WRAP)
 
-            // Derive filename from URI or use default
-            val filename = uri.lastPathSegment?.substringAfterLast('/')?.let {
-                if (it.contains('.')) it else "$it.jpg"
-            } ?: "image.jpg"
+                // Derive filename from URI or use default
+                val filename = uri.lastPathSegment?.substringAfterLast('/')?.let {
+                    if (it.contains('.')) it else "$it.jpg"
+                } ?: "image.jpg"
 
-            val msg = """{"type":"send_image","callsign":${gson.toJson(callsign)},"data":"$b64","filename":${gson.toJson(filename)}}"""
-            val sent = wsSend(msg)
-            if (!sent) {
-                addChatMessage("System", "Failed to send image (not connected).")
+                val msg = """{"type":"send_image","callsign":${gson.toJson(callsign)},"data":"$b64","filename":${gson.toJson(filename)}}"""
+                runOnUiThread {
+                    val sent = wsSend(msg)
+                    if (!sent) {
+                        addChatMessage("System", "Failed to send image (not connected).")
+                    }
+                }
+            } catch (e: Exception) {
+                runOnUiThread { addChatMessage("System", "Failed to read image.") }
             }
-        } catch (e: Exception) {
-            addChatMessage("System", "Failed to read image.")
-        }
+        }.start()
     }
 
     override fun onDestroy() {

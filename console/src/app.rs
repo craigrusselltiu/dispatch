@@ -5,7 +5,7 @@ use std::{
     process::Command,
     sync::Arc,
     thread,
-    time::Instant,
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 
 use chrono::Local;
@@ -71,6 +71,10 @@ impl App {
             console_name,
             strike_team: None,
             user_initiated_turn: false,
+            needs_redraw: true,
+            cached_clock: String::new(),
+            cached_clock_second: 0,
+            frame_counter: 0,
         }
     }
 
@@ -83,6 +87,7 @@ impl App {
             self.orch_log.pop_front();
             self.orch_scroll = self.orch_scroll.saturating_sub(1);
         }
+        self.needs_redraw = true;
     }
 
     /// Push a chat message to all connected radio clients (dispatch-chat).
@@ -244,8 +249,14 @@ impl App {
 
     /// Advance the status blink frame counter.
     /// Called once per render loop (~16ms). Produces a ~1s cycle (60 frames).
+    /// Only marks a redraw when the blink visual state actually changes.
     pub fn tick_status_blink(&mut self) {
+        let old_on = (self.status_blink_frame % 60) < 42;
         self.status_blink_frame = self.status_blink_frame.wrapping_add(1);
+        let new_on = (self.status_blink_frame % 60) < 42;
+        if old_on != new_on {
+            self.needs_redraw = true;
+        }
     }
 
     /// Whether the status indicator dot should be "on" (visible) this frame.
@@ -269,6 +280,7 @@ impl App {
         } else {
             self.ticker_pending.push_back(text);
         }
+        self.needs_redraw = true;
     }
 
     /// Advance the ticker by one frame (~16ms). Scrolls one char every 3 frames (~50ms).
@@ -276,6 +288,7 @@ impl App {
         if self.ticker_items.is_empty() && self.ticker_pending.is_empty() {
             return;
         }
+        self.needs_redraw = true;
         self.ticker_frame_counter = self.ticker_frame_counter.wrapping_add(1);
         if self.ticker_frame_counter % 3 == 0 {
             for item in &mut self.ticker_items {
@@ -329,6 +342,20 @@ impl App {
             }
         }
         line.into_iter().collect()
+    }
+
+    /// Get cached clock string (HH:MM), updated at most once per second.
+    pub fn clock_display(&mut self) -> &str {
+        let now_secs = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+        // Refresh clock string only when the minute changes (every 60s).
+        if now_secs / 60 != self.cached_clock_second / 60 || self.cached_clock.is_empty() {
+            self.cached_clock = Local::now().format("%H:%M").to_string();
+            self.cached_clock_second = now_secs;
+        }
+        &self.cached_clock
     }
 
     // ── orchestrator tool execution (dispatch-x94) ──────────────────────────

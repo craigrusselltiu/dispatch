@@ -191,4 +191,13 @@ pub struct App {
     /// destructive actions (terminate) so the LLM cannot self-hallucinate user input
     /// and act on it.
     pub user_initiated_turn: bool,
+    /// Dirty flag: set when something visual changed, cleared after draw.
+    /// Skips terminal.draw() when clean to avoid 60fps idle CPU burn.
+    pub needs_redraw: bool,
+    /// Cached clock string (updated once per second, not every frame).
+    pub cached_clock: String,
+    /// Second value when cached_clock was last updated.
+    pub cached_clock_second: u64,
+    /// Frame counter for throttling periodic work (agent message polling).
+    pub frame_counter: u32,
 }

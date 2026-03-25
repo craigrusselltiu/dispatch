@@ -27,12 +27,17 @@ class AudioLevelView @JvmOverloads constructor(
 
     private val segmentCount = 20
     private val segmentGap = 2f
+    private var lastUpdateMs = 0L
 
-    /** Audio level from 0.0 to 1.0. */
+    /** Audio level from 0.0 to 1.0. Throttled to ~15fps to save battery. */
     var level: Float = 0f
         set(value) {
-            field = value.coerceIn(0f, 1f)
-            invalidate()
+            val now = System.currentTimeMillis()
+            if (now - lastUpdateMs >= 66) { // ~15fps
+                field = value.coerceIn(0f, 1f)
+                lastUpdateMs = now
+                invalidate()
+            }
         }
 
     override fun onDraw(canvas: Canvas) {
