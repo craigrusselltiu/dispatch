@@ -964,7 +964,7 @@ impl App {
             let effective_tool = self.default_tool.clone();
             let cmd = self.tool_cmd(&effective_tool).to_string();
             let full_prompt = format!(
-                "Your callsign is {}. Strike team spec: {} -- read it for full context. {}",
+                "Your callsign is {}. Source document: {} -- read it for full context. {}",
                 callsign, spec_file, prompt
             );
 
