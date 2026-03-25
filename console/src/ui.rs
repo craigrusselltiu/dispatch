@@ -27,7 +27,7 @@ pub fn screen_to_lines(screen: &vt100::Screen) -> Vec<Line<'static>> {
     let (rows, cols) = screen.size();
     let mut lines = Vec::with_capacity(rows as usize);
     for row in 0..rows {
-        let mut spans: Vec<Span<'static>> = Vec::with_capacity(cols as usize / 4);
+        let mut spans: Vec<Span<'static>> = Vec::with_capacity(cols as usize);
         let mut current_text = String::new();
         let mut current_style = Style::default();
 
@@ -71,8 +71,7 @@ pub fn screen_to_lines(screen: &vt100::Screen) -> Vec<Line<'static>> {
             }
         }
         if !current_text.is_empty() {
-            spans.push(Span::styled(current_text, current_style));
-            current_text = String::new();
+            spans.push(Span::styled(std::mem::take(&mut current_text), current_style));
         }
         lines.push(Line::from(spans));
     }
