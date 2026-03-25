@@ -24,13 +24,14 @@ fn vt100_color_to_ratatui(color: vt100::Color) -> Option<Color> {
 }
 
 pub fn screen_to_lines(screen: &vt100::Screen) -> Vec<Line<'static>> {
-    let mut lines = Vec::new();
-    for row in 0..screen.size().0 {
-        let mut spans: Vec<Span<'static>> = Vec::new();
+    let (rows, cols) = screen.size();
+    let mut lines = Vec::with_capacity(rows as usize);
+    for row in 0..rows {
+        let mut spans: Vec<Span<'static>> = Vec::with_capacity(cols as usize / 4);
         let mut current_text = String::new();
         let mut current_style = Style::default();
 
-        for col in 0..screen.size().1 {
+        for col in 0..cols {
             let cell = screen.cell(row, col).unwrap();
             let mut style = Style::default();
             if let Some(fg) = vt100_color_to_ratatui(cell.fgcolor()) {
@@ -50,21 +51,28 @@ pub fn screen_to_lines(screen: &vt100::Screen) -> Vec<Line<'static>> {
             }
 
             let ch = cell.contents();
-            let ch = if ch.is_empty() { " ".to_string() } else { ch };
 
             if style == current_style {
-                current_text.push_str(&ch);
+                if ch.is_empty() {
+                    current_text.push(' ');
+                } else {
+                    current_text.push_str(&ch);
+                }
             } else {
                 if !current_text.is_empty() {
-                    spans.push(Span::styled(current_text.clone(), current_style));
-                    current_text.clear();
+                    spans.push(Span::styled(std::mem::take(&mut current_text), current_style));
                 }
-                current_text = ch;
+                if ch.is_empty() {
+                    current_text.push(' ');
+                } else {
+                    current_text = ch;
+                }
                 current_style = style;
             }
         }
         if !current_text.is_empty() {
             spans.push(Span::styled(current_text, current_style));
+            current_text = String::new();
         }
         lines.push(Line::from(spans));
     }
@@ -81,7 +89,7 @@ pub fn render_ticker(f: &mut Frame, area: Rect, app: &App) {
     f.render_widget(Paragraph::new(Line::from(Span::styled(text, style))), area);
 }
 
-pub fn render_header(f: &mut Frame, area: Rect, app: &App) {
+pub fn render_header(f: &mut Frame, area: Rect, app: &mut App) {
     // Status indicator pulses like a REC light: dot blinks on/off, text stays visible.
     let blink_on = app.status_blink_on();
     let (dot, dot_style, text, text_style) = match app.radio_state {
@@ -105,7 +113,7 @@ pub fn render_header(f: &mut Frame, area: Rect, app: &App) {
         }
     };
 
-    let clock = chrono::Local::now().format("%H:%M").to_string();
+    let clock = app.clock_display().to_string();
     // dispatch-sa1: show repo count in multi-repo mode.
     let workspace_indicator = if app.is_multi_repo() {
         format!("  REPOS: {}  ", app.repo_list().len())
@@ -474,7 +482,8 @@ pub fn render_orchestrator(f: &mut Frame, area: Rect, app: &App) {
     let scroll = app.orch_scroll.min(max_scroll);
     let start = total.saturating_sub(visible + scroll);
     let end = (start + visible).min(total);
-    let visible_lines: Vec<Line<'static>> = lines[start..end].to_vec();
+    // drain() moves Lines out of the vec without deep-cloning.
+    let visible_lines: Vec<Line<'static>> = lines.drain(start..end).collect();
 
     let paragraph = Paragraph::new(Text::from(visible_lines));
     f.render_widget(paragraph, inner);

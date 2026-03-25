@@ -242,13 +242,16 @@ fn rpc_write(writer: &Arc<Mutex<BufWriter<std::process::ChildStdin>>>, msg: &ser
 /// Read lines from stdout until we get a JSON-RPC response matching `expected_id`.
 /// Any agent requests received in the meantime are auto-handled (permissions
 /// approved, everything else rejected). Notifications are ignored during init.
+/// Max lines to read before giving up on a response (prevents indefinite blocking).
+const RPC_READ_MAX_LINES: usize = 10_000;
+
 fn rpc_read_response(
     reader: &mut BufReader<std::process::ChildStdout>,
     writer: &Arc<Mutex<BufWriter<std::process::ChildStdin>>>,
     expected_id: u64,
 ) -> Result<serde_json::Value, String> {
     let mut line_buf = String::new();
-    loop {
+    for _ in 0..RPC_READ_MAX_LINES {
         line_buf.clear();
         let n = reader.read_line(&mut line_buf).map_err(|e| format!("stdout read: {e}"))?;
         if n == 0 {
@@ -281,6 +284,7 @@ fn rpc_read_response(
         }
         // Notifications during init — ignore.
     }
+    Err(format!("no response for RPC id {} after {} lines", expected_id, RPC_READ_MAX_LINES))
 }
 
 /// Respond to an agent-initiated JSON-RPC request.

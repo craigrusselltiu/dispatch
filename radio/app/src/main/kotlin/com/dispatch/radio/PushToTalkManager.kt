@@ -68,6 +68,8 @@ class PushToTalkManager(
 
     fun destroy() {
         handler.removeCallbacksAndMessages(null)
+        recognizer?.stopListening()
+        recognizer?.setRecognitionListener(null)
         recognizer?.destroy()
         recognizer = null
         listening = false

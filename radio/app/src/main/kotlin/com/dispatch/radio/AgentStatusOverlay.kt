@@ -12,6 +12,7 @@ import android.widget.TextView
 import android.graphics.Typeface
 import com.dispatch.radio.model.Agent
 import com.dispatch.radio.model.callsignColor
+import java.lang.ref.WeakReference
 
 /**
  * Shows a hold-to-view overlay listing all active agent statuses.
@@ -19,13 +20,19 @@ import com.dispatch.radio.model.callsignColor
  * Each row shows a colored status dot, the callsign in its unique color,
  * and the status text on the right. Agents are listed in slot order
  * (earliest dispatched first). The caller dismisses when the button is released.
+ *
+ * Uses a WeakReference to avoid leaking the Activity context if the overlay
+ * instance outlives its activity (e.g. due to an exception before cleanup).
  */
-class AgentStatusOverlay(private val context: Context) {
+class AgentStatusOverlay(context: Context) {
 
+    private val contextRef = WeakReference(context)
     private var dialog: AlertDialog? = null
 
     fun show(agents: List<Agent>, orchestratorStatus: String?) {
         dismiss()
+
+        val context = contextRef.get() ?: return
 
         val font = Typeface.MONOSPACE
         val active = agents.filter { it.status != "empty" }.sortedBy { it.slot }

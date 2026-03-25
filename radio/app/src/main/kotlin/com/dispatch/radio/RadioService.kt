@@ -25,6 +25,7 @@ class RadioService : Service() {
 
     private val binder = LocalBinder()
     private var wsClient: RadioWebSocketClient? = null
+    private var cachedPendingIntent: PendingIntent? = null
 
     /** Activity sets this to receive WebSocket callbacks. */
     var listener: RadioWebSocketClient.Listener? = null
@@ -87,18 +88,23 @@ class RadioService : Service() {
         getSystemService(NotificationManager::class.java).createNotificationChannel(channel)
     }
 
-    private fun buildNotification(status: String): Notification {
-        val intent = Intent(this, MainActivity::class.java).apply {
-            flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+    private fun ensurePendingIntent(): PendingIntent {
+        return cachedPendingIntent ?: run {
+            val intent = Intent(this, MainActivity::class.java).apply {
+                flags = Intent.FLAG_ACTIVITY_SINGLE_TOP
+            }
+            PendingIntent.getActivity(this, 0, intent, PendingIntent.FLAG_IMMUTABLE).also {
+                cachedPendingIntent = it
+            }
         }
-        val pendingIntent = PendingIntent.getActivity(
-            this, 0, intent, PendingIntent.FLAG_IMMUTABLE
-        )
+    }
+
+    private fun buildNotification(status: String): Notification {
         return Notification.Builder(this, CHANNEL_ID)
             .setContentTitle("Dispatch Radio")
             .setContentText(status)
             .setSmallIcon(R.mipmap.ic_launcher)
-            .setContentIntent(pendingIntent)
+            .setContentIntent(ensurePendingIntent())
             .setOngoing(true)
             .build()
     }

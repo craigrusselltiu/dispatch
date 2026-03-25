@@ -431,11 +431,13 @@ pub fn terminate_slot(slot: &mut Option<SlotState>) -> Option<String> {
 }
 
 /// Resize all active PTYs to the new pane size (dispatch-bgz.6).
-pub fn resize_all_slots(slots: &mut [Option<SlotState>], new_size: PtySize) {
+/// Preserves scrollback capacity (previously lost by passing 0).
+pub fn resize_all_slots(slots: &mut [Option<SlotState>], new_size: PtySize, scrollback: u32) {
+    let scrollback = (scrollback as usize).min(10_000);
     for slot in slots.iter_mut().flatten() {
         let _ = slot.master.resize(new_size);
         let mut parser = slot.screen.lock().unwrap();
-        *parser = vt100::Parser::new(new_size.rows, new_size.cols, 0);
+        *parser = vt100::Parser::new(new_size.rows, new_size.cols, scrollback);
     }
 }
 

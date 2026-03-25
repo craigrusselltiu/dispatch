@@ -130,20 +130,23 @@ impl ConsoleState {
     }
 
     /// Next unused callsign from the configured list (dynamic assignment).
+    /// Linear scan with case-insensitive comparison; avoids building a HashSet
+    /// and repeated to_uppercase() allocations for a max-26-slot list.
     pub fn next_callsign(&self) -> Option<String> {
-        let used: std::collections::HashSet<String> = self.slots.iter()
-            .filter_map(|s| s.as_ref().map(|a| a.callsign.to_uppercase()))
-            .collect();
         self.callsigns.iter()
-            .find(|cs| !used.contains(&cs.to_uppercase()))
+            .find(|cs| {
+                !self.slots.iter().any(|s| {
+                    s.as_ref().map_or(false, |a| a.callsign.eq_ignore_ascii_case(cs))
+                })
+            })
             .cloned()
     }
 
     /// Find the 0-indexed slot containing an agent with the given callsign.
+    /// Case-insensitive comparison without allocating uppercase copies.
     pub fn find_slot_by_callsign(&self, callsign: &str) -> Option<usize> {
-        let upper = callsign.to_uppercase();
         self.slots.iter().position(|s| {
-            s.as_ref().map(|a| a.callsign.to_uppercase() == upper).unwrap_or(false)
+            s.as_ref().map_or(false, |a| a.callsign.eq_ignore_ascii_case(callsign))
         })
     }
 }
