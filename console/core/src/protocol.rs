@@ -6,11 +6,8 @@
 use serde::{Deserialize, Serialize};
 
 /// NATO phonetic alphabet, used as the default agent callsign list.
-pub const NATO_DEFAULTS: [&str; 26] = [
+pub const NATO_DEFAULTS: [&str; 8] = [
     "Alpha", "Bravo", "Charlie", "Delta", "Echo", "Foxtrot", "Golf", "Hotel",
-    "India", "Juliet", "Kilo", "Lima", "Mike", "November", "Oscar", "Papa",
-    "Quebec", "Romeo", "Sierra", "Tango", "Uniform", "Victor", "Whiskey",
-    "X-ray", "Yankee", "Zulu",
 ];
 
 // --- Inbound messages (radio → console) ---
