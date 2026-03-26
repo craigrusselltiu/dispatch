@@ -15,6 +15,19 @@ use crate::pty::dispatch_slot;
 use crate::util::repo_name_from_path;
 use crate::ws_server;
 
+/// Read a prompt template from `docs/{filename}` in the given repo root and
+/// substitute `{placeholder}` pairs. Returns the processed text, or panics
+/// if the template file is missing (it ships with the repo).
+fn read_prompt_template(repo_root: &str, filename: &str, replacements: &[(&str, &str)]) -> String {
+    let path = format!("{}/docs/{}", repo_root, filename);
+    let mut text = std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("failed to read prompt template {}: {}", path, e));
+    for &(placeholder, value) in replacements {
+        text = text.replace(placeholder, value);
+    }
+    text
+}
+
 impl App {
     pub fn new(
         psk: String,
@@ -652,41 +665,10 @@ impl App {
                         .unwrap_or(source_file)
                 }).to_string();
 
-                // Build planner prompt (no worktree — works in repo root).
-                let planner_prompt = format!(
-                    "You are a task planner for the Dispatch Strike Team system. Your ONLY job is to \
-                     read a document and break it down into actionable tasks.\n\n\
-                     The document may be anything: a feature spec, a bug report, a performance review, \
-                     a design doc, a list of TODOs, or any other document with actionable content. \
-                     Your job is to parse whatever is in the document and extract concrete tasks from it.\n\n\
-                     1. Read the document at: {source_file}\n\
-                     2. Analyze its contents and identify all actionable items\n\
-                     3. Create a task file at: .dispatch/tasks-{st_name}.md\n\n\
-                     Use this EXACT format:\n\n\
-                     # Strike Team: {st_name}\n\
-                     source: {source_file}\n\n\
-                     ## T1: <short title>\n\
-                     status: pending\n\
-                     dependencies: none\n\
-                     prompt: <first line of prompt>\n\
-                     \x20\x20<continuation lines indented with 2 spaces>\n\n\
-                     ## T2: <short title>\n\
-                     status: pending\n\
-                     dependencies: T1\n\
-                     prompt: <first line of prompt>\n\
-                     \x20\x20<more detail on indented continuation lines>\n\n\
-                     RULES:\n\
-                     - Read the document carefully and extract every actionable item as a task.\n\
-                     - Each task prompt must be self-contained: include all relevant context, file paths, \
-                     code snippets, and acceptance criteria from the source document so the agent can \
-                     complete the task without reading the original document.\n\
-                     - Each task must be completable by a single agent in one session.\n\
-                     - Maximize parallelism: only add dependencies when truly required.\n\
-                     - Write detailed, multi-line prompts using 2-space indented continuation lines.\n\
-                     - Sequential IDs: T1, T2, T3, etc.\n\
-                     - Aim for 3-15 tasks. Group small related items into a single task if needed.\n\
-                     - Do NOT create a git worktree. Work directly in the repo root.\n\
-                     - After creating the file, report the task count via your status message file, then stop."
+                // Build planner prompt from docs/PLANNER.md template.
+                let planner_prompt = read_prompt_template(
+                    &target_repo, "PLANNER.md",
+                    &[("{source_file}", &source_file), ("{name}", &st_name)],
                 );
 
                 // Dispatch planner agent to repo root (no worktree).
@@ -1165,17 +1147,12 @@ impl App {
         let cmd = self.tool_cmd(&effective_tool).to_string();
 
         let verifier_prompt = format!(
-            "Your callsign is {}. You are a verification agent for the Dispatch Strike Team system. \
-             All implementation tasks are complete. Your job is to verify the implementations against \
-             the original document.\n\n\
-             1. Read the source document at: {}\n\
-             2. Read the task file at: {}\n\
-             3. For each task, check that the implementation matches what was specified.\n\
-             4. Look for integration issues between tasks -- things that individual agents may have \
-                missed because they worked in isolation.\n\
-             5. Fix any issues you find. If a fix requires code changes, make them directly.\n\
-             6. Report your findings via your status message file, then stop.",
-            callsign, source_file, task_file_path
+            "Your callsign is {}. {}",
+            callsign,
+            read_prompt_template(
+                &repo, "VERIFIER.md",
+                &[("{source_file}", &source_file), ("{task_file_path}", &task_file_path)],
+            )
         );
 
         match dispatch_slot(
