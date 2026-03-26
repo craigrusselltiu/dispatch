@@ -1,6 +1,7 @@
 // Standalone utility functions for the dispatch console.
 
-use std::time::Duration;
+use if_addrs::{get_if_addrs, IfAddr};
+use std::{net::Ipv4Addr, time::Duration};
 use time::macros::format_description;
 
 /// Format local time as "HH:MM:SS". Falls back to UTC if local offset unavailable.
@@ -189,12 +190,109 @@ pub fn clean_dispatch_dirs(repo_root: &str) {
     }
 }
 
-/// Detect the machine's local network IP by connecting a UDP socket.
-/// No data is sent; this just determines the outgoing interface address.
+/// Detect the machine's local network IP.
+/// Prefers a physical LAN IPv4 over VPN or virtual adapters when possible.
 pub fn local_ip() -> Option<String> {
+    preferred_lan_ipv4()
+        .map(|ip| ip.to_string())
+        .or_else(route_local_ip)
+}
+
+/// Pick the best LAN IPv4 to show in the UI and advertise over mDNS.
+///
+/// We prefer RFC1918 addresses on physical Ethernet/Wi-Fi interfaces and
+/// penalize VPN and virtual adapters. This avoids resolving the console to
+/// WARP, Hyper-V, Docker, or other non-LAN interfaces on Windows machines.
+pub fn preferred_lan_ipv4() -> Option<Ipv4Addr> {
+    let mut candidates = get_if_addrs()
+        .ok()?
+        .into_iter()
+        .filter_map(|interface| match interface.addr {
+            IfAddr::V4(addr) => {
+                let score = score_ipv4_candidate(&interface.name, addr.ip)?;
+                Some((score, interface.name, addr.ip))
+            }
+            IfAddr::V6(_) => None,
+        })
+        .collect::<Vec<_>>();
+
+    candidates.sort_by(|a, b| a.cmp(b));
+    candidates.pop().map(|(_, _, ip)| ip)
+}
+
+fn route_local_ip() -> Option<String> {
     let socket = std::net::UdpSocket::bind("0.0.0.0:0").ok()?;
     socket.connect("8.8.8.8:80").ok()?;
     socket.local_addr().ok().map(|a| a.ip().to_string())
+}
+
+fn score_ipv4_candidate(interface_name: &str, ip: Ipv4Addr) -> Option<i32> {
+    if ip.is_loopback()
+        || ip.is_link_local()
+        || ip.is_broadcast()
+        || ip.is_multicast()
+        || ip.is_unspecified()
+    {
+        return None;
+    }
+
+    let mut score = if ip.is_private() {
+        400
+    } else if is_cgnat(ip) {
+        -200
+    } else {
+        50
+    };
+
+    if looks_virtual_interface(interface_name) {
+        score -= 300;
+    } else if looks_physical_interface(interface_name) {
+        score += 100;
+    }
+
+    Some(score)
+}
+
+fn looks_physical_interface(interface_name: &str) -> bool {
+    let name = interface_name.to_ascii_lowercase();
+    name.contains("ethernet")
+        || name.contains("wi-fi")
+        || name.contains("wifi")
+        || name.starts_with("en")
+        || name.starts_with("eth")
+        || name.starts_with("wl")
+}
+
+fn looks_virtual_interface(interface_name: &str) -> bool {
+    let name = interface_name.to_ascii_lowercase();
+    [
+        "warp",
+        "cloudflare",
+        "vethernet",
+        "hyper-v",
+        "virtual",
+        "vmware",
+        "virtualbox",
+        "vbox",
+        "docker",
+        "podman",
+        "tailscale",
+        "zerotier",
+        "wireguard",
+        "loopback",
+        "bluetooth",
+        "bridge",
+        "hamachi",
+        "tun",
+        "tap",
+    ]
+    .iter()
+    .any(|keyword| name.contains(keyword))
+}
+
+fn is_cgnat(ip: Ipv4Addr) -> bool {
+    let octets = ip.octets();
+    octets[0] == 100 && (64..=127).contains(&octets[1])
 }
 
 /// Compute PTY dimensions from terminal size.
@@ -313,5 +411,27 @@ mod tests {
     fn strip_action_blocks_preserves_ascii() {
         let plain = "The quick brown fox jumps over the lazy dog.";
         assert_eq!(strip_action_blocks(plain), plain);
+    }
+
+    #[test]
+    fn prefers_physical_private_ip_over_vpn_ip() {
+        let ethernet = score_ipv4_candidate("Ethernet 5", Ipv4Addr::new(10, 61, 5, 37)).unwrap();
+        let warp = score_ipv4_candidate("CloudflareWARP", Ipv4Addr::new(100, 96, 2, 212)).unwrap();
+        assert!(ethernet > warp);
+    }
+
+    #[test]
+    fn penalizes_virtual_private_interfaces() {
+        let ethernet = score_ipv4_candidate("Ethernet 5", Ipv4Addr::new(10, 61, 5, 37)).unwrap();
+        let hyper_v =
+            score_ipv4_candidate("vEthernet (Default Switch)", Ipv4Addr::new(172, 24, 160, 1))
+                .unwrap();
+        assert!(ethernet > hyper_v);
+    }
+
+    #[test]
+    fn rejects_loopback_and_link_local_ips() {
+        assert!(score_ipv4_candidate("Ethernet 5", Ipv4Addr::new(127, 0, 0, 1)).is_none());
+        assert!(score_ipv4_candidate("Ethernet 5", Ipv4Addr::new(169, 254, 1, 5)).is_none());
     }
 }

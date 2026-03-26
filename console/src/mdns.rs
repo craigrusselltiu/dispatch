@@ -3,8 +3,9 @@
 // Advertises the console's WebSocket server as `_dispatch._tcp.local.`
 // so the Android radio can discover it on the LAN without manual IP entry.
 
+use crate::util::preferred_lan_ipv4;
 use mdns_sd::{ServiceDaemon, ServiceInfo};
-use std::collections::HashMap;
+use std::{collections::HashMap, net::IpAddr};
 
 const SERVICE_TYPE: &str = "_dispatch._tcp.local.";
 
@@ -35,15 +36,27 @@ pub fn advertise(port: u16, tls_fingerprint: Option<&str>) -> Option<ServiceDaem
         map
     });
 
-    let service = match ServiceInfo::new(
-        SERVICE_TYPE,
-        &hostname,
-        &host_label,
-        "",   // empty IP = auto-detect all interfaces
-        port,
-        properties,
-    ) {
-        Ok(s) => s.enable_addr_auto(),
+    let advertised_ip = preferred_lan_ipv4();
+    let service = match match advertised_ip {
+        Some(ip) => ServiceInfo::new(
+            SERVICE_TYPE,
+            &hostname,
+            &host_label,
+            IpAddr::V4(ip),
+            port,
+            properties,
+        ),
+        None => ServiceInfo::new(
+            SERVICE_TYPE,
+            &hostname,
+            &host_label,
+            "", // fallback: auto-detect if we could not pick a LAN IPv4
+            port,
+            properties,
+        )
+        .map(|s| s.enable_addr_auto()),
+    } {
+        Ok(s) => s,
         Err(e) => {
             eprintln!("mdns: failed to create service info: {e}");
             return None;
@@ -55,6 +68,10 @@ pub fn advertise(port: u16, tls_fingerprint: Option<&str>) -> Option<ServiceDaem
         return None;
     }
 
-    eprintln!("mdns: advertising {SERVICE_TYPE} on port {port}");
+    if let Some(ip) = advertised_ip {
+        eprintln!("mdns: advertising {SERVICE_TYPE} on {ip}:{port}");
+    } else {
+        eprintln!("mdns: advertising {SERVICE_TYPE} on port {port} (auto interface)");
+    }
     Some(mdns)
 }
