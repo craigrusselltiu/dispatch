@@ -834,20 +834,6 @@ copilot = "copilot"
 
 The console automatically adds tool-specific flags when spawning agents: `--dangerously-skip-permissions` and `--system-prompt` for Claude, `--yolo` for Copilot (auto-accepts all permissions for autonomous operation).
 
-### Channels
-
-Channels save and restore complete console configurations. Each channel is a named copy of `config.toml` stored in the `channels/` subdirectory of the config directory. Use channels to maintain different setups for different machines, contexts, or projects.
-
-```sh
-dispatch channel save home       # Snapshot current config as "home"
-dispatch channel load work       # Overwrite config.toml with "work" channel
-dispatch channel list            # Show all saved channels with summary
-dispatch channel show home       # Print contents of "home" channel
-dispatch channel delete old      # Remove a saved channel
-```
-
-Channel names are sanitized to lowercase alphanumeric characters and hyphens. Loading a channel overwrites `config.toml`; restart the console to apply.
-
 ### CLI
 
 ```
@@ -855,11 +841,6 @@ dispatch                        # Start the console (default)
 dispatch regenerate-psk         # Generate a new PSK
 dispatch show-psk               # Print the current PSK to stdout
 dispatch edit-config            # Open config.toml in VS Code
-dispatch channel save <name>    # Save current config as a channel
-dispatch channel load <name>    # Load a saved channel
-dispatch channel list           # List saved channels
-dispatch channel delete <name>  # Delete a saved channel
-dispatch channel show <name>    # Print channel contents
 ```
 
 ---

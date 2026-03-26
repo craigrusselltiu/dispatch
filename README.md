@@ -147,30 +147,7 @@ dispatch                        # Start the console in the current repo
 dispatch regenerate-psk         # Generate a new PSK
 dispatch show-psk               # Print the current PSK
 dispatch edit-config            # Open config.toml in VS Code
-dispatch channel save <name>    # Save current config as a named channel
-dispatch channel load <name>    # Load a saved channel (restart to apply)
-dispatch channel list           # List all saved channels
-dispatch channel delete <name>  # Delete a saved channel
-dispatch channel show <name>    # Print contents of a saved channel
 ```
-
-### Console Channels
-
-Channels let you save and switch between different console configurations -- like tuning a radio dial to different frequencies. Each channel is a snapshot of your `config.toml` (server port, PSK, agent callsigns, identity, tools).
-
-Save your current setup before changing anything:
-
-```sh
-dispatch channel save home
-```
-
-Create different configurations for different machines or contexts, then load the one you need:
-
-```sh
-dispatch channel load work
-```
-
-Channels are stored as individual TOML files in the config directory under `channels/`.
 
 ## Repository Structure
 

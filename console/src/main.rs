@@ -66,37 +66,6 @@ enum Commands {
     ShowPsk,
     /// Open the config file in VS Code
     EditConfig,
-    /// Manage console configuration channels (save/load/list/delete/show)
-    Channel {
-        #[command(subcommand)]
-        action: ChannelAction,
-    },
-}
-
-#[derive(Subcommand)]
-enum ChannelAction {
-    /// Save the current config as a named channel
-    Save {
-        /// Channel name (e.g. "home", "work", "laptop")
-        name: String,
-    },
-    /// Load a saved channel (overwrites config.toml -- restart to apply)
-    Load {
-        /// Channel name to load
-        name: String,
-    },
-    /// List all saved channels
-    List,
-    /// Delete a saved channel
-    Delete {
-        /// Channel name to delete
-        name: String,
-    },
-    /// Show the contents of a saved channel
-    Show {
-        /// Channel name to display
-        name: String,
-    },
 }
 
 // ── main ──────────────────────────────────────────────────────────────────────
@@ -124,16 +93,6 @@ fn main() -> io::Result<()> {
             if !status.success() {
                 eprintln!("VS Code exited with status {}", status);
                 std::process::exit(1);
-            }
-            return Ok(());
-        }
-        Some(Commands::Channel { action }) => {
-            match action {
-                ChannelAction::Save { name } => config::channel_save(&name),
-                ChannelAction::Load { name } => config::channel_load(&name),
-                ChannelAction::List => config::channel_list(),
-                ChannelAction::Delete { name } => config::channel_delete(&name),
-                ChannelAction::Show { name } => config::channel_show(&name),
             }
             return Ok(());
         }
