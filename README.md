@@ -40,7 +40,7 @@ No fixed command patterns. The orchestrator understands natural language and use
 
 ### Prerequisites
 
-- **Console**: Rust toolchain (`cargo`), Git, and an AI coding agent ([Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview) and/or [GitHub Copilot CLI](https://githubnext.com/projects/copilot-cli))
+- **Console**: Rust toolchain (`cargo`), Git, and an AI coding agent ([Claude Code](https://code.claude.com/docs/en/overview) and/or [GitHub Copilot CLI](https://github.com/github/copilot-cli))
 - **Radio**: Android Studio, Android device running API 28+ (Android 9+)
 - Both devices on the same local network
 
