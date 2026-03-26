@@ -187,6 +187,14 @@ impl App {
             .unwrap_or("claude")
     }
 
+    /// The directory the console was launched in.
+    pub fn working_dir(&self) -> &str {
+        match &self.workspace {
+            Workspace::SingleRepo { root } => root.as_str(),
+            Workspace::MultiRepo { parent, .. } => parent.as_str(),
+        }
+    }
+
     /// Whether we're in multi-repo mode (dispatch-sa1).
     pub fn is_multi_repo(&self) -> bool {
         matches!(self.workspace, Workspace::MultiRepo { .. })

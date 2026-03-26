@@ -11,7 +11,7 @@ use ratatui::{
 };
 
 use crate::types::*;
-use crate::util::{format_runtime, local_ip, repo_name_from_path, truncate};
+use crate::util::{format_runtime, local_ip, repo_name_from_path, truncate, truncate_left};
 
 // ── VT100 screen conversion ────────────────────────────────────────────────
 
@@ -184,11 +184,23 @@ pub fn render_header(f: &mut Frame, area: Rect, app: &mut App) {
         Span::styled(right_padded, Style::default().fg(Color::White)),
     ]);
 
+    // Right-aligned directory path in the top border.
+    let dir_label = {
+        let dir = app.working_dir();
+        // Leave room for " DISPATCH " title (10 chars) + borders (2) + padding (4).
+        let max_len = (area.width as usize).saturating_sub(16);
+        format!(" {} ", truncate_left(dir, max_len))
+    };
+
     let block = Block::default()
         .title(Span::styled(
             " DISPATCH ",
             Style::default().fg(Color::Green).add_modifier(Modifier::BOLD),
         ))
+        .title_top(Line::from(Span::styled(
+            dir_label,
+            Style::default().fg(Color::DarkGray),
+        )).right_aligned())
         .borders(Borders::ALL)
         .border_style(Style::default().fg(Color::Green));
 

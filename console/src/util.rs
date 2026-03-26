@@ -62,6 +62,22 @@ pub fn format_runtime(elapsed: Duration) -> String {
     format!("{}m{:02}s", s / 60, s % 60)
 }
 
+/// Truncate a string from the left to `max` chars, prepending "..." if trimmed.
+/// Useful for paths where the rightmost portion (directory name) is most important.
+pub fn truncate_left(s: &str, max: usize) -> String {
+    let char_count = s.chars().count();
+    if char_count <= max {
+        return s.to_string();
+    }
+    if max > 3 {
+        let skip = char_count - (max - 3);
+        let truncated: String = s.chars().skip(skip).collect();
+        format!("...{}", truncated)
+    } else {
+        s.chars().skip(char_count - max).collect()
+    }
+}
+
 /// Truncate a string to `max` chars, appending "..." if trimmed.
 /// Uses char count (not byte length) for the comparison and char
 /// boundaries for slicing to avoid panicking on multi-byte UTF-8.
