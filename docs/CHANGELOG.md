@@ -2,6 +2,13 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.4.7
+
+### Fixed
+
+- `.dispatch/` directory is now created eagerly at startup for each configured repo, instead of lazily on first agent dispatch. Includes `messages/`, `images/`, `MEMORY.md`, and `.gitignore`.
+- Restructured orchestrator instructions with "Ground Rules" section at the top: do not use tools (blocks message reception), strike team requests should be issued immediately without reading the document first. Removes duplicate investigation rules.
+
 ## v0.4.6
 
 ### Fixed

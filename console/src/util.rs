@@ -186,6 +186,38 @@ fn is_protocol_line(s: &str) -> bool {
     false
 }
 
+/// Ensure the `.dispatch/` directory tree exists for a repo and add a
+/// `.gitignore` so dispatch artifacts are never committed. Called at startup.
+pub fn ensure_dispatch_dir(repo_root: &str) {
+    let dispatch_dir = format!("{}/.dispatch", repo_root);
+    for subdir in &["messages", "images"] {
+        let _ = std::fs::create_dir_all(format!("{}/{}", dispatch_dir, subdir));
+    }
+
+    // Seed MEMORY.md if missing.
+    let memory_path = format!("{}/MEMORY.md", dispatch_dir);
+    if !std::path::Path::new(&memory_path).exists() {
+        let template = "\
+# Shared Agent Memory
+
+Knowledge base from prior agents. Updated when agents learn something valuable.
+
+## Build & Test
+
+## Gotchas
+
+## Notes
+";
+        let _ = std::fs::write(&memory_path, template);
+    }
+
+    // Ensure .gitignore exists so .dispatch/ is never committed.
+    let gitignore_path = format!("{}/.gitignore", dispatch_dir);
+    if !std::path::Path::new(&gitignore_path).exists() {
+        let _ = std::fs::write(&gitignore_path, "*\n");
+    }
+}
+
 /// Clear stale `.dispatch/messages/` and `.dispatch/images/` contents for a repo.
 /// Called at startup to manage disk space. Removes files only (not subdirectories).
 pub fn clean_dispatch_dirs(repo_root: &str) {

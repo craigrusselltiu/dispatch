@@ -53,7 +53,7 @@ sample-repo/
   (repo's own files)
 ```
 
-The `.dispatch/` directory is gitignored by the console on first run.
+The `.dispatch/` directory is created by the console at startup for each configured repo, and gitignored via an internal `.dispatch/.gitignore`.
 
 ### Shared Agent Memory
 

@@ -185,8 +185,9 @@ fn main() -> io::Result<()> {
         cfg.identity.console_name.clone(),
     );
 
-    // Clear stale agent message and image files from previous sessions.
+    // Ensure .dispatch/ directory exists for each repo, then clear stale files.
     for repo in &app.repo_list() {
+        util::ensure_dispatch_dir(repo);
         util::clean_dispatch_dirs(repo);
     }
 
