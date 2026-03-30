@@ -158,6 +158,9 @@ fn spawn_stream_json(system_prompt: &str, cwd: &str, tool_cmd: &str, nonce: &str
         "--output-format", "stream-json",
         "--input-format", "stream-json",
         "--verbose",
+        // Block file/code tools so the orchestrator cannot investigate the
+        // codebase itself. It must delegate to agents via action blocks.
+        "--disallowedTools", "Read,Edit,Write,Bash,Glob,Grep,WebFetch,WebSearch,Agent,NotebookEdit",
     ]);
     cmd.args(["--system-prompt", system_prompt]);
     cmd.current_dir(cwd);
