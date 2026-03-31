@@ -30,6 +30,14 @@ RULES:
 - Maximize parallelism: only add dependencies when truly required.
 - Write detailed, multi-line prompts using 2-space indented continuation lines.
 - Sequential IDs: T1, T2, T3, etc.
-- Aim for 3-15 tasks. Group small related items into a single task if needed.
 - Do NOT create a git worktree. Work directly in the repo root.
 - After creating the file, report the task count via your status message file, then stop.
+
+TASK GRANULARITY -- this is critical:
+- Each task should do ONE focused thing: one module, one interface layer, one command, one output format. If a task description contains "and" joining distinct concerns, it should probably be two tasks.
+- Break large modules into layers: e.g. "parse raw XML" and "interpret parsed data into domain types" are separate tasks, not one.
+- Break multi-output work into one task per output: e.g. "JSON output" and "Markdown output" are separate tasks.
+- Break multi-command CLIs into one task per command (or group trivially similar commands).
+- A good task takes one agent 5-20 minutes. If it would take significantly longer, split it.
+- Prefer more, smaller tasks over fewer large ones. Aim for 8-30 tasks depending on document complexity. Larger specs will naturally produce more tasks.
+- Small, related items that share the same file and concern CAN be grouped (e.g. "add 3 similar validation rules to the same validator"), but distinct functions or modules should not be combined.
