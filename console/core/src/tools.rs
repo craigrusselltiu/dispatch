@@ -126,6 +126,39 @@ pub enum ToolResult {
     Error { message: String },
 }
 
+// ── Document alias candidates ───────────────────────────────────────────────
+
+/// Well-known document aliases and their candidate paths (checked in order).
+/// Used by both the orchestrator system prompt and console-side resolution.
+pub const DOCUMENT_ALIASES: &[(&str, &[&str])] = &[
+    (
+        "the spec",
+        &["docs/SPEC.md", "docs/spec.md", "SPEC.md", "spec.md"],
+    ),
+    (
+        "the architecture",
+        &[
+            "docs/ARCHITECTURE.md",
+            "docs/architecture.md",
+            "ARCHITECTURE.md",
+            "architecture.md",
+        ],
+    ),
+    (
+        "the changelog",
+        &[
+            "docs/CHANGELOG.md",
+            "docs/changelog.md",
+            "CHANGELOG.md",
+            "changelog.md",
+        ],
+    ),
+    (
+        "the readme",
+        &["README.md", "docs/README.md", "readme.md", "docs/readme.md"],
+    ),
+];
+
 // ── Tool definitions for LLM ────────────────────────────────────────────────
 
 /// Return tool definitions as a JSON array suitable for LLM tool-calling APIs.

@@ -102,7 +102,7 @@ pub fn generate_nonce() -> String {
     format!("{:04x}", hasher.finish() as u16)
 }
 
-/// Compact timestamp for debug logs (HH:MM:SS.mmm).
+/// Compact UTC timestamp for debug logs (HH:MM:SS.mmm).
 fn chrono_compact() -> String {
     use std::time::{SystemTime, UNIX_EPOCH};
     let d = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
@@ -164,37 +164,8 @@ pub fn build_system_prompt(
 }
 
 fn format_document_aliases(repo_root: &str) -> String {
-    const ALIASES: [(&str, &[&str]); 4] = [
-        (
-            "the spec",
-            &["docs/SPEC.md", "docs/spec.md", "SPEC.md", "spec.md"],
-        ),
-        (
-            "the architecture",
-            &[
-                "docs/ARCHITECTURE.md",
-                "docs/architecture.md",
-                "ARCHITECTURE.md",
-                "architecture.md",
-            ],
-        ),
-        (
-            "the changelog",
-            &[
-                "docs/CHANGELOG.md",
-                "docs/changelog.md",
-                "CHANGELOG.md",
-                "changelog.md",
-            ],
-        ),
-        (
-            "the readme",
-            &["README.md", "docs/README.md", "readme.md", "docs/readme.md"],
-        ),
-    ];
-
     let mut lines = Vec::new();
-    for (alias, candidates) in ALIASES {
+    for &(alias, candidates) in tools::DOCUMENT_ALIASES {
         if let Some(found) = candidates
             .iter()
             .find(|candidate| std::path::Path::new(repo_root).join(candidate).exists())
@@ -618,6 +589,8 @@ fn spawn_acp(
             }
 
             // Try parsing the line on its own first (fast path for NDJSON).
+            // Note: lines are trimmed before accumulation, which is safe for
+            // ACP JSON-RPC messages (no significant intra-string whitespace).
             let parsed: serde_json::Value = match serde_json::from_str(trimmed) {
                 Ok(v) => {
                     // If we had an accumulator going, it was junk — discard it.

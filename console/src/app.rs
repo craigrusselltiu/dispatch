@@ -72,36 +72,30 @@ fn resolve_repo_relative_path_case_insensitive(
 }
 
 fn strike_team_source_candidates(source_file: &str) -> Vec<&'static str> {
-    match source_file
-        .trim()
-        .trim_matches('"')
-        .to_ascii_lowercase()
-        .as_str()
-    {
-        "" | "spec" | "the spec" | "spec.md" | "specification" | "the specification" => {
-            vec!["docs/SPEC.md", "docs/spec.md", "SPEC.md", "spec.md"]
+    let normalized = source_file.trim().trim_matches('"').to_ascii_lowercase();
+
+    // Match against the shared alias table: check the alias name itself and
+    // each candidate path (so "spec.md" matches "the spec" entry).
+    for &(alias, candidates) in tools::DOCUMENT_ALIASES {
+        let alias_lower = alias.to_ascii_lowercase();
+        // Strip leading "the " for bare-word matching (e.g. "spec" -> "the spec").
+        let bare = alias_lower.strip_prefix("the ").unwrap_or(&alias_lower);
+        if normalized.is_empty()
+            || normalized == alias_lower
+            || normalized == bare
+            || normalized == format!("{}.md", bare)
+            || normalized == format!("the {}", bare)
+            // "specification" / "the specification" -> "the spec"
+            || (bare == "spec"
+                && (normalized == "specification" || normalized == "the specification"))
+            || candidates
+                .iter()
+                .any(|c| c.to_ascii_lowercase() == normalized)
+        {
+            return candidates.to_vec();
         }
-        "architecture" | "the architecture" | "architecture.md" => {
-            vec![
-                "docs/ARCHITECTURE.md",
-                "docs/architecture.md",
-                "ARCHITECTURE.md",
-                "architecture.md",
-            ]
-        }
-        "changelog" | "the changelog" | "changelog.md" => {
-            vec![
-                "docs/CHANGELOG.md",
-                "docs/changelog.md",
-                "CHANGELOG.md",
-                "changelog.md",
-            ]
-        }
-        "readme" | "the readme" | "readme.md" => {
-            vec!["README.md", "docs/README.md", "readme.md", "docs/readme.md"]
-        }
-        _ => Vec::new(),
     }
+    Vec::new()
 }
 
 fn resolve_strike_team_source_file(repo_root: &str, source_file: &str) -> Option<String> {
@@ -1403,56 +1397,27 @@ impl App {
             // In PR mode, build consolidation instructions listing every
             // successfully-completed task branch for the verifier to merge.
             let consolidation = if self.merge_strategy == "pr" {
-                let branches: Vec<String> = st
-                    .tasks
-                    .iter()
-                    .filter(|t| {
-                        t.status == dispatch_core::strike_team::TaskStatus::Done
-                            && t.agent.is_some()
-                    })
-                    .map(|t| {
-                        format!(
-                            "- `origin/dispatch/{}` ({}: {})",
-                            t.agent.as_ref().unwrap(),
-                            t.id,
-                            t.title,
-                        )
-                    })
-                    .collect();
-
-                let merge_cmds: String = st
-                    .tasks
-                    .iter()
-                    .filter(|t| {
-                        t.status == dispatch_core::strike_team::TaskStatus::Done
-                            && t.agent.is_some()
-                    })
-                    .map(|t| {
-                        format!(
-                            "git merge origin/dispatch/{} --no-ff -m \"Merge {}: {}\"",
-                            t.agent.as_ref().unwrap(),
-                            t.id,
-                            t.title,
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
-
-                let cleanup_cmds: String = st
-                    .tasks
-                    .iter()
-                    .filter(|t| {
-                        t.status == dispatch_core::strike_team::TaskStatus::Done
-                            && t.agent.is_some()
-                    })
-                    .map(|t| {
-                        format!(
-                            "git push origin --delete dispatch/{}",
-                            t.agent.as_ref().unwrap(),
-                        )
-                    })
-                    .collect::<Vec<_>>()
-                    .join("\n");
+                let mut branches = Vec::new();
+                let mut merge_cmds = Vec::new();
+                let mut cleanup_cmds = Vec::new();
+                for t in st.tasks.iter().filter(|t| {
+                    t.status == dispatch_core::strike_team::TaskStatus::Done
+                        && t.agent.is_some()
+                }) {
+                    let agent = t.agent.as_ref().unwrap();
+                    branches.push(format!(
+                        "- `origin/dispatch/{}` ({}: {})",
+                        agent, t.id, t.title,
+                    ));
+                    merge_cmds.push(format!(
+                        "git merge origin/dispatch/{} --no-ff -m \"Merge {}: {}\"",
+                        agent, t.id, t.title,
+                    ));
+                    cleanup_cmds.push(format!(
+                        "git push origin --delete dispatch/{}",
+                        agent,
+                    ));
+                }
 
                 format!(
                     "\n\n## PR Consolidation\n\n\
@@ -1465,8 +1430,8 @@ impl App {
                      ```bash\n{}\n```\n",
                     st.name,
                     branches.join("\n"),
-                    merge_cmds,
-                    cleanup_cmds,
+                    merge_cmds.join("\n"),
+                    cleanup_cmds.join("\n"),
                 )
             } else {
                 String::new()
