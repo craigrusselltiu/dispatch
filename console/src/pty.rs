@@ -78,15 +78,40 @@ const WORKFLOW_PR: &str = "\
    git worktree remove .dispatch/.worktrees/{callsign} --force
    ```";
 
-/// Build agent instructions by reading `docs/AGENTS.md` and swapping the
-/// workflow finalization step based on `merge_strategy`.  Also appends
-/// shared memory if any prior agents have written to it.
+// Workflow step 4 for strike team task agents in "pr" strategy.
+// Agents push their branch but do NOT create individual PRs -- the verifier
+// consolidates all task branches into a single PR later.
+const WORKFLOW_PR_STRIKE_TEAM: &str = "\
+4. Push your branch. **Do NOT create a pull request** -- the verifier will consolidate all task branches into one PR.
+   ```bash
+   cd \"$(git rev-parse --path-format=absolute --git-common-dir)/..\"
+   git push -u origin dispatch/{callsign}
+   git worktree remove .dispatch/.worktrees/{callsign} --force
+   ```";
+
+// Workflow step 4 for the strike team verifier in "pr" strategy.
+// The verifier consolidates all task branches and creates a single PR.
+const WORKFLOW_PR_VERIFIER: &str = "\
+4. Push the consolidated branch and create a single pull request for the entire strike team:
+   ```bash
+   cd \"$(git rev-parse --path-format=absolute --git-common-dir)/..\"
+   git push -u origin dispatch/{callsign}
+   gh pr create --base main --head dispatch/{callsign} --title \"<strike team name>: <1-line summary>\" --body \"<list each completed task and what it did>\"
+   git worktree remove .dispatch/.worktrees/{callsign} --force
+   ```
+   The PR title should name the feature or change, NOT individual tasks. The PR body should list each task with a brief description of what was done.";
+
+/// Agent instructions bundled at compile time.
+const AGENTS_MD: &str = include_str!("../../docs/AGENTS.md");
+
+/// Build agent instructions using the compile-time-bundled AGENTS.md and
+/// swapping the workflow finalization step based on `merge_strategy`.  Also
+/// appends shared memory if any prior agents have written to it.
 ///
 /// Returns the full instruction text ready for injection as a system prompt
 /// (Claude) or written to `.dispatch/instructions/AGENTS.md` (Copilot).
 fn build_agent_instructions(repo_root: &str, merge_strategy: &str) -> Option<String> {
-    let agents_md_path = format!("{}/docs/AGENTS.md", repo_root);
-    let mut instructions = std::fs::read_to_string(&agents_md_path).ok()?;
+    let mut instructions = AGENTS_MD.to_string();
 
     // Replace the merge/PR workflow block between markers.
     // Uses HTML comment markers in AGENTS.md for robust matching.
@@ -94,7 +119,12 @@ fn build_agent_instructions(repo_root: &str, merge_strategy: &str) -> Option<Str
     let marker_end = "<!-- WORKFLOW_STEP_4_END -->";
     if let (Some(s4), Some(s5_marker)) = (instructions.find(marker_start), instructions.find(marker_end)) {
         let after_marker = s5_marker + marker_end.len();
-        let workflow = if merge_strategy == "merge" { WORKFLOW_MERGE } else { WORKFLOW_PR };
+        let workflow = match merge_strategy {
+            "merge" => WORKFLOW_MERGE,
+            "pr-strike-team" => WORKFLOW_PR_STRIKE_TEAM,
+            "pr-verifier" => WORKFLOW_PR_VERIFIER,
+            _ => WORKFLOW_PR,
+        };
         let mut patched = String::with_capacity(instructions.len());
         patched.push_str(&instructions[..s4]);
         patched.push_str(workflow);

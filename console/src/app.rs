@@ -2,6 +2,7 @@
 
 use std::{
     io::Write,
+    path::Path,
     process::Command,
     sync::Arc,
     thread,
@@ -10,22 +11,111 @@ use std::{
 
 use dispatch_core::{protocol, strike_team, tools};
 
-use crate::types::*;
 use crate::pty::dispatch_slot;
+use crate::types::*;
 use crate::util::repo_name_from_path;
 use crate::ws_server;
 
-/// Read a prompt template from `docs/{filename}` in the given repo root and
-/// substitute `{placeholder}` pairs. Returns the processed text, or panics
-/// if the template file is missing (it ships with the repo).
-fn read_prompt_template(repo_root: &str, filename: &str, replacements: &[(&str, &str)]) -> String {
-    let path = format!("{}/docs/{}", repo_root, filename);
-    let mut text = std::fs::read_to_string(&path)
-        .unwrap_or_else(|e| panic!("failed to read prompt template {}: {}", path, e));
+/// Prompt templates bundled at compile time.
+const PLANNER_MD: &str = include_str!("../../docs/PLANNER.md");
+const VERIFIER_MD: &str = include_str!("../../docs/VERIFIER.md");
+
+/// Apply placeholder substitutions to a bundled prompt template.
+fn render_prompt_template(template: &str, replacements: &[(&str, &str)]) -> String {
+    let mut text = template.to_string();
     for &(placeholder, value) in replacements {
         text = text.replace(placeholder, value);
     }
     text
+}
+
+fn resolve_repo_relative_path_case_insensitive(
+    repo_root: &str,
+    relative_path: &str,
+) -> Option<String> {
+    let trimmed = relative_path.trim().trim_matches('"');
+    if trimmed.is_empty() {
+        return None;
+    }
+
+    let mut current = std::path::PathBuf::from(repo_root);
+    let mut exact_parts = Vec::new();
+    for component in Path::new(trimmed).components() {
+        match component {
+            std::path::Component::CurDir => {}
+            std::path::Component::Normal(part) => {
+                let wanted = part.to_string_lossy();
+                let entry = std::fs::read_dir(&current)
+                    .ok()?
+                    .filter_map(Result::ok)
+                    .find(|entry| {
+                        entry
+                            .file_name()
+                            .to_string_lossy()
+                            .eq_ignore_ascii_case(&wanted)
+                    })?;
+                let exact = entry.file_name().to_string_lossy().into_owned();
+                current.push(&exact);
+                exact_parts.push(exact);
+            }
+            std::path::Component::ParentDir
+            | std::path::Component::RootDir
+            | std::path::Component::Prefix(_) => return None,
+        }
+    }
+
+    if exact_parts.is_empty() || !current.is_file() {
+        return None;
+    }
+
+    Some(exact_parts.join("/"))
+}
+
+fn strike_team_source_candidates(source_file: &str) -> Vec<&'static str> {
+    match source_file
+        .trim()
+        .trim_matches('"')
+        .to_ascii_lowercase()
+        .as_str()
+    {
+        "" | "spec" | "the spec" | "spec.md" | "specification" | "the specification" => {
+            vec!["docs/SPEC.md", "docs/spec.md", "SPEC.md", "spec.md"]
+        }
+        "architecture" | "the architecture" | "architecture.md" => {
+            vec![
+                "docs/ARCHITECTURE.md",
+                "docs/architecture.md",
+                "ARCHITECTURE.md",
+                "architecture.md",
+            ]
+        }
+        "changelog" | "the changelog" | "changelog.md" => {
+            vec![
+                "docs/CHANGELOG.md",
+                "docs/changelog.md",
+                "CHANGELOG.md",
+                "changelog.md",
+            ]
+        }
+        "readme" | "the readme" | "readme.md" => {
+            vec!["README.md", "docs/README.md", "readme.md", "docs/readme.md"]
+        }
+        _ => Vec::new(),
+    }
+}
+
+fn resolve_strike_team_source_file(repo_root: &str, source_file: &str) -> Option<String> {
+    if let Some(path) = resolve_repo_relative_path_case_insensitive(repo_root, source_file) {
+        return Some(path);
+    }
+
+    for candidate in strike_team_source_candidates(source_file) {
+        if let Some(path) = resolve_repo_relative_path_case_insensitive(repo_root, candidate) {
+            return Some(path);
+        }
+    }
+
+    None
 }
 
 impl App {
@@ -238,15 +328,17 @@ impl App {
         }
         let repos = self.repo_list();
         // Exact match on short directory name (case-insensitive).
-        if let Some(path) = repos.iter().find(|p| {
-            repo_name_from_path(p).eq_ignore_ascii_case(name)
-        }) {
+        if let Some(path) = repos
+            .iter()
+            .find(|p| repo_name_from_path(p).eq_ignore_ascii_case(name))
+        {
             return path.to_string();
         }
         // Path suffix match (e.g. "GitHub/testament" matches ".../GitHub/testament").
-        if let Some(path) = repos.iter().find(|p| {
-            p.to_lowercase().ends_with(&name.to_lowercase())
-        }) {
+        if let Some(path) = repos
+            .iter()
+            .find(|p| p.to_lowercase().ends_with(&name.to_lowercase()))
+        {
             return path.to_string();
         }
         self.default_repo_root().to_string()
@@ -254,10 +346,13 @@ impl App {
 
     /// Next unused callsign from the configured list (dynamic assignment).
     pub fn next_callsign(&self) -> Option<String> {
-        let used: std::collections::HashSet<String> = self.slots.iter()
+        let used: std::collections::HashSet<String> = self
+            .slots
+            .iter()
             .filter_map(|s| s.as_ref().map(|slot| slot.display_name().to_uppercase()))
             .collect();
-        self.callsigns.iter()
+        self.callsigns
+            .iter()
             .find(|cs| !used.contains(&cs.to_uppercase()))
             .cloned()
     }
@@ -318,7 +413,8 @@ impl App {
             }
             // Remove items that have fully scrolled off the left edge.
             // An item is off-screen when its offset exceeds char_count + generous margin.
-            self.ticker_items.retain(|item| item.offset <= item.char_count + 300);
+            self.ticker_items
+                .retain(|item| item.offset <= item.char_count + 300);
 
             // Promote a pending item once the last active item has fully entered
             // the screen (scrolled past its own length + a small gap).
@@ -392,72 +488,83 @@ impl App {
     /// Execute a tool call from the orchestrator agent. Returns the result.
     pub fn execute_tool(&mut self, call: &tools::ToolCall) -> tools::ToolResult {
         match call {
-            tools::ToolCall::Dispatch { repo, prompt, callsign: requested_callsign, tool: requested_tool } => {
+            tools::ToolCall::Dispatch {
+                repo,
+                prompt,
+                callsign: requested_callsign,
+                tool: requested_tool,
+            } => {
                 // Dynamic callsign assignment: agents go into the next
                 // available slot rather than a fixed slot per callsign.
-                let (slot_idx, callsign_for_prompt) = if let Some(cs) = requested_callsign.as_deref() {
-                    // Check if an agent with this callsign is already active.
-                    let active_idx = self.slots.iter().enumerate().find_map(|(i, s)| {
-                        s.as_ref().and_then(|slot| {
-                            if slot.display_name().eq_ignore_ascii_case(cs) {
-                                Some(i)
-                            } else {
-                                None
-                            }
-                        })
-                    });
+                let (slot_idx, callsign_for_prompt) =
+                    if let Some(cs) = requested_callsign.as_deref() {
+                        // Check if an agent with this callsign is already active.
+                        let active_idx = self.slots.iter().enumerate().find_map(|(i, s)| {
+                            s.as_ref().and_then(|slot| {
+                                if slot.display_name().eq_ignore_ascii_case(cs) {
+                                    Some(i)
+                                } else {
+                                    None
+                                }
+                            })
+                        });
 
-                    if let Some(idx) = active_idx {
-                        // Agent exists — must be idle (no active task).
-                        match &self.slots[idx] {
-                            Some(slot) if slot.task_id.is_some() => {
-                                return tools::ToolResult::Error {
-                                    message: format!("{} (slot {}) is busy", cs, idx + 1),
-                                };
+                        if let Some(idx) = active_idx {
+                            // Agent exists — must be idle (no active task).
+                            match &self.slots[idx] {
+                                Some(slot) if slot.task_id.is_some() => {
+                                    return tools::ToolResult::Error {
+                                        message: format!("{} (slot {}) is busy", cs, idx + 1),
+                                    };
+                                }
+                                _ => (Some(idx), cs.to_string()),
                             }
-                            _ => (Some(idx), cs.to_string()),
+                        } else {
+                            // Callsign not active — assign to first empty slot.
+                            match self.slots.iter().position(|s| s.is_none()) {
+                                Some(idx) => (Some(idx), cs.to_string()),
+                                None => {
+                                    return tools::ToolResult::Error {
+                                        message: "no available slots".to_string(),
+                                    }
+                                }
+                            }
                         }
                     } else {
-                        // Callsign not active — assign to first empty slot.
-                        match self.slots.iter().position(|s| s.is_none()) {
-                            Some(idx) => (Some(idx), cs.to_string()),
-                            None => return tools::ToolResult::Error {
-                                message: "no available slots".to_string(),
-                            },
-                        }
-                    }
-                } else {
-                    // No callsign requested: find an idle slot or empty slot.
-                    let idle = self.slots.iter().enumerate().find_map(|(i, s)| {
-                        match s {
+                        // No callsign requested: find an idle slot or empty slot.
+                        let idle = self.slots.iter().enumerate().find_map(|(i, s)| match s {
                             Some(slot) if slot.task_id.is_none() => Some(i),
                             _ => None,
-                        }
-                    });
+                        });
 
-                    if let Some(idx) = idle {
-                        let cs = self.slots[idx].as_ref().unwrap().display_name().to_string();
-                        (Some(idx), cs)
-                    } else {
-                        // Empty slot + next available callsign from the pool.
-                        match self.slots.iter().position(|s| s.is_none()) {
-                            Some(idx) => {
-                                let cs = self.next_callsign()
-                                    .unwrap_or_else(|| format!("Agent-{}", idx + 1));
-                                (Some(idx), cs)
+                        if let Some(idx) = idle {
+                            let cs = self.slots[idx].as_ref().unwrap().display_name().to_string();
+                            (Some(idx), cs)
+                        } else {
+                            // Empty slot + next available callsign from the pool.
+                            match self.slots.iter().position(|s| s.is_none()) {
+                                Some(idx) => {
+                                    let cs = self
+                                        .next_callsign()
+                                        .unwrap_or_else(|| format!("Agent-{}", idx + 1));
+                                    (Some(idx), cs)
+                                }
+                                None => {
+                                    return tools::ToolResult::Error {
+                                        message: "no available slots".to_string(),
+                                    }
+                                }
                             }
-                            None => return tools::ToolResult::Error {
-                                message: "no available slots".to_string(),
-                            },
                         }
-                    }
-                };
+                    };
 
                 let slot_idx = match slot_idx {
                     Some(i) => i,
-                    None => return tools::ToolResult::Error {
-                        message: "no available slots".to_string(),
-                    },
+                    None => {
+                        return tools::ToolResult::Error {
+                            message: "no available slots".to_string(),
+                        }
+                    }
                 };
 
                 let target_repo = self.resolve_repo(repo);
@@ -465,7 +572,8 @@ impl App {
                 let full_prompt = format!("Your callsign is {}. {}", callsign_for_prompt, prompt);
 
                 // Resolve which tool to use for this dispatch.
-                let effective_tool = requested_tool.as_deref()
+                let effective_tool = requested_tool
+                    .as_deref()
                     .unwrap_or(&self.default_tool)
                     .to_string();
 
@@ -473,18 +581,28 @@ impl App {
                 if self.slots[slot_idx].is_none() {
                     let cmd = self.tool_cmd(&effective_tool).to_string();
                     match dispatch_slot(
-                        slot_idx, &effective_tool, &cmd, self.pane_rows, self.pane_cols,
-                        None, self.scrollback_lines,
-                        repo_name_from_path(&target_repo), &target_repo,
+                        slot_idx,
+                        &effective_tool,
+                        &cmd,
+                        self.pane_rows,
+                        self.pane_cols,
+                        None,
+                        self.scrollback_lines,
+                        repo_name_from_path(&target_repo),
+                        &target_repo,
                         Some(&full_prompt),
                         &callsign_for_prompt,
                         &self.merge_strategy,
                         None,
                     ) {
-                        Some(slot) => { self.slots[slot_idx] = Some(slot); }
-                        None => return tools::ToolResult::Error {
-                            message: "failed to spawn agent PTY".to_string(),
-                        },
+                        Some(slot) => {
+                            self.slots[slot_idx] = Some(slot);
+                        }
+                        None => {
+                            return tools::ToolResult::Error {
+                                message: "failed to spawn agent PTY".to_string(),
+                            }
+                        }
                     }
                 } else {
                     // Existing idle agent: write the prompt to the PTY so it
@@ -515,12 +633,20 @@ impl App {
                 };
 
                 self.push_orch(OrchestratorEventKind::Dispatched {
-                    agent: callsign.clone(), slot: slot_idx + 1, tool: effective_tool.clone(),
+                    agent: callsign.clone(),
+                    slot: slot_idx + 1,
+                    tool: effective_tool.clone(),
                 });
-                self.push_ticker(format!(
-                    "DISPATCH: {} (slot {})", callsign, slot_idx + 1
-                ));
-                self.push_chat("System", &format!("Dispatched {} to slot {}: {}", callsign, slot_idx + 1, prompt));
+                self.push_ticker(format!("DISPATCH: {} (slot {})", callsign, slot_idx + 1));
+                self.push_chat(
+                    "System",
+                    &format!(
+                        "Dispatched {} to slot {}: {}",
+                        callsign,
+                        slot_idx + 1,
+                        prompt
+                    ),
+                );
 
                 // Sync ws_state.
                 {
@@ -548,10 +674,16 @@ impl App {
                 // Prevents the LLM from hallucinating a fake MIC message and
                 // self-authorizing destructive actions.
                 if !self.user_initiated_turn {
-                    self.push_ticker("BLOCKED: orchestrator tried to terminate without user input".to_string());
-                    self.push_chat("System", &format!(
-                        "Terminate {} blocked: no voice/text input from Dispatch.", agent
-                    ));
+                    self.push_ticker(
+                        "BLOCKED: orchestrator tried to terminate without user input".to_string(),
+                    );
+                    self.push_chat(
+                        "System",
+                        &format!(
+                            "Terminate {} blocked: no voice/text input from Dispatch.",
+                            agent
+                        ),
+                    );
                     return tools::ToolResult::Error {
                         message: format!(
                             "terminate '{}' rejected: destructive actions require a preceding \
@@ -562,7 +694,8 @@ impl App {
                     };
                 }
 
-                let (slot_occupied, callsigns): (Vec<bool>, Vec<Option<String>>) = self.slots
+                let (slot_occupied, callsigns): (Vec<bool>, Vec<Option<String>>) = self
+                    .slots
                     .iter()
                     .map(|s| match s {
                         Some(slot) => (true, Some(slot.display_name().to_string())),
@@ -572,19 +705,25 @@ impl App {
 
                 let idx = match tools::resolve_agent(agent, &slot_occupied, &callsigns) {
                     Some(i) => i,
-                    None => return tools::ToolResult::Error {
-                        message: format!("agent '{}' not found", agent),
-                    },
+                    None => {
+                        return tools::ToolResult::Error {
+                            message: format!("agent '{}' not found", agent),
+                        }
+                    }
                 };
 
                 let callsign = self.slots[idx].as_ref().unwrap().display_name().to_string();
                 crate::pty::terminate_slot(&mut self.slots[idx]);
 
                 self.push_orch(OrchestratorEventKind::Terminated {
-                    agent: callsign.clone(), slot: idx + 1,
+                    agent: callsign.clone(),
+                    slot: idx + 1,
                 });
                 self.push_ticker(format!("TERMINATED: {} (slot {})", callsign, idx + 1));
-                self.push_chat("System", &format!("Terminated agent {} (slot {}).", callsign, idx + 1));
+                self.push_chat(
+                    "System",
+                    &format!("Terminated agent {} (slot {}).", callsign, idx + 1),
+                );
 
                 // Sync ws_state.
                 {
@@ -623,7 +762,10 @@ impl App {
             }
 
             tools::ToolCall::ListAgents => {
-                let agents: Vec<tools::AgentInfo> = self.slots.iter().enumerate()
+                let agents: Vec<tools::AgentInfo> = self
+                    .slots
+                    .iter()
+                    .enumerate()
                     .filter_map(|(i, s)| {
                         s.as_ref().map(|slot| {
                             let status = if slot.task_id.is_some() && !slot.idle {
@@ -646,58 +788,109 @@ impl App {
             }
 
             tools::ToolCall::ListRepos => {
-                let repos = self.repo_list().iter().map(|path| {
-                    tools::RepoInfo {
+                let repos = self
+                    .repo_list()
+                    .iter()
+                    .map(|path| tools::RepoInfo {
                         name: repo_name_from_path(path).to_string(),
                         path: path.to_string(),
-                    }
-                }).collect();
+                    })
+                    .collect();
                 tools::ToolResult::Repos { repos }
             }
 
-            tools::ToolCall::StrikeTeam { source_file, name, repo } => {
+            tools::ToolCall::StrikeTeam {
+                source_file,
+                name,
+                repo,
+            } => {
                 let target_repo = self.resolve_repo(repo);
-                let st_name = name.as_deref().unwrap_or_else(|| {
-                    // Default name: source filename without extension.
-                    source_file.rsplit('/').next()
-                        .and_then(|f| f.rsplit('\\').next())
-                        .and_then(|f| f.strip_suffix(".md"))
-                        .unwrap_or(source_file)
-                }).to_string();
+                let resolved_source_file = match resolve_strike_team_source_file(
+                    &target_repo,
+                    source_file,
+                ) {
+                    Some(path) => path,
+                    None => {
+                        let repo_name = repo_name_from_path(&target_repo);
+                        let message = if source_file.trim().is_empty() {
+                            format!(
+                                "could not resolve a default strike team document in repo '{}' (expected something like docs/SPEC.md)",
+                                repo_name
+                            )
+                        } else {
+                            format!(
+                                "could not resolve strike team source file '{}' in repo '{}'",
+                                source_file, repo_name
+                            )
+                        };
+                        return tools::ToolResult::Error { message };
+                    }
+                };
+                let st_name = name
+                    .as_deref()
+                    .unwrap_or_else(|| {
+                        // Default name: source filename without extension.
+                        resolved_source_file
+                            .rsplit('/')
+                            .next()
+                            .and_then(|f| f.rsplit('\\').next())
+                            .and_then(|f| f.strip_suffix(".md"))
+                            .unwrap_or(&resolved_source_file)
+                    })
+                    .to_string();
 
                 // Build planner prompt from docs/PLANNER.md template.
-                let planner_prompt = read_prompt_template(
-                    &target_repo, "PLANNER.md",
-                    &[("{source_file}", &source_file), ("{name}", &st_name)],
+                let planner_prompt = render_prompt_template(
+                    PLANNER_MD,
+                    &[
+                        ("{source_file}", &resolved_source_file),
+                        ("{name}", &st_name),
+                    ],
                 );
 
                 // Dispatch planner agent to repo root (no worktree).
-                let callsign_for_prompt = self.next_callsign()
+                let callsign_for_prompt = self
+                    .next_callsign()
                     .unwrap_or_else(|| "Planner".to_string());
                 let slot_idx = match self.slots.iter().position(|s| s.is_none()) {
                     Some(i) => i,
-                    None => return tools::ToolResult::Error {
-                        message: "no available slots for planner agent".to_string(),
-                    },
+                    None => {
+                        return tools::ToolResult::Error {
+                            message: "no available slots for planner agent".to_string(),
+                        }
+                    }
                 };
 
                 let effective_tool = self.default_tool.clone();
                 let cmd = self.tool_cmd(&effective_tool).to_string();
-                let full_prompt = format!("Your callsign is {}. {}", callsign_for_prompt, planner_prompt);
+                let full_prompt = format!(
+                    "Your callsign is {}. {}",
+                    callsign_for_prompt, planner_prompt
+                );
 
                 match dispatch_slot(
-                    slot_idx, &effective_tool, &cmd, self.pane_rows, self.pane_cols,
-                    Some(&target_repo), self.scrollback_lines,
-                    repo_name_from_path(&target_repo), &target_repo,
+                    slot_idx,
+                    &effective_tool,
+                    &cmd,
+                    self.pane_rows,
+                    self.pane_cols,
+                    Some(&target_repo),
+                    self.scrollback_lines,
+                    repo_name_from_path(&target_repo),
+                    &target_repo,
                     Some(&full_prompt),
                     &callsign_for_prompt,
                     &self.merge_strategy,
                     None,
                 ) {
-                    Some(slot) => { self.slots[slot_idx] = Some(slot); }
-                    None => return tools::ToolResult::Error {
-                        message: "failed to spawn planner agent PTY".to_string(),
-                    },
+                    Some(slot) => {
+                        self.slots[slot_idx] = Some(slot);
+                    }
+                    None => {
+                        return tools::ToolResult::Error {
+                            message: "failed to spawn planner agent PTY".to_string(),
+                        }
+                    }
                 }
 
                 {
@@ -707,13 +900,17 @@ impl App {
                     slot.idle = false;
                 }
 
-                let phase_agent_callsign = self.slots[slot_idx].as_ref().unwrap().display_name().to_string();
+                let phase_agent_callsign = self.slots[slot_idx]
+                    .as_ref()
+                    .unwrap()
+                    .display_name()
+                    .to_string();
 
                 // Initialize strike team state.
                 let task_file_path = format!("{}/.dispatch/tasks-{}.md", target_repo, st_name);
                 self.strike_teams.push(strike_team::StrikeTeamState {
                     name: st_name.clone(),
-                    source_file: source_file.clone(),
+                    source_file: resolved_source_file.clone(),
                     repo: target_repo.clone(),
                     phase: strike_team::StrikeTeamPhase::Planning,
                     tasks: Vec::new(),
@@ -722,10 +919,19 @@ impl App {
                 });
 
                 self.push_orch(OrchestratorEventKind::Dispatched {
-                    agent: phase_agent_callsign.clone(), slot: slot_idx + 1, tool: effective_tool.clone(),
+                    agent: phase_agent_callsign.clone(),
+                    slot: slot_idx + 1,
+                    tool: effective_tool.clone(),
                 });
                 self.push_ticker(format!("STRIKE TEAM: planning {}...", st_name));
-                self.push_chat("System", &format!("Strike Team '{}': planner dispatched to slot {}.", st_name, slot_idx + 1));
+                self.push_chat(
+                    "System",
+                    &format!(
+                        "Strike Team '{}': planner dispatched to slot {}.",
+                        st_name,
+                        slot_idx + 1
+                    ),
+                );
 
                 // Sync ws_state.
                 {
@@ -742,13 +948,14 @@ impl App {
 
                 tools::ToolResult::StrikeTeamAcknowledged {
                     name: st_name,
-                    source_file: source_file.to_string(),
+                    source_file: resolved_source_file,
                     repo: target_repo,
                 }
             }
 
             tools::ToolCall::MessageAgent { agent, text } => {
-                let (slot_occupied, callsigns): (Vec<bool>, Vec<Option<String>>) = self.slots
+                let (slot_occupied, callsigns): (Vec<bool>, Vec<Option<String>>) = self
+                    .slots
                     .iter()
                     .map(|s| match s {
                         Some(slot) => (true, Some(slot.display_name().to_string())),
@@ -758,9 +965,11 @@ impl App {
 
                 let idx = match tools::resolve_agent(agent, &slot_occupied, &callsigns) {
                     Some(i) => i,
-                    None => return tools::ToolResult::Error {
-                        message: format!("agent '{}' not found", agent),
-                    },
+                    None => {
+                        return tools::ToolResult::Error {
+                            message: format!("agent '{}' not found", agent),
+                        }
+                    }
                 };
 
                 let slot = self.slots[idx].as_mut().unwrap();
@@ -812,7 +1021,9 @@ impl App {
     /// Advance the strike team state machine. Called each frame from the main loop.
     pub fn tick_strike_team(&mut self) {
         // Collect indices and phases to avoid borrow conflicts.
-        let work: Vec<(usize, strike_team::StrikeTeamPhase)> = self.strike_teams.iter()
+        let work: Vec<(usize, strike_team::StrikeTeamPhase)> = self
+            .strike_teams
+            .iter()
             .enumerate()
             .map(|(i, st)| (i, st.phase.clone()))
             .collect();
@@ -858,9 +1069,8 @@ impl App {
         });
         // Planner exited when its slot is gone entirely.
         let planner_gone = !self.slots.iter().any(|s| {
-            s.as_ref().map_or(false, |slot| {
-                slot.display_name().eq_ignore_ascii_case(&cs)
-            })
+            s.as_ref()
+                .map_or(false, |slot| slot.display_name().eq_ignore_ascii_case(&cs))
         });
 
         if planner_idle || planner_gone {
@@ -880,27 +1090,36 @@ impl App {
                         st.phase = strike_team::StrikeTeamPhase::Executing;
                         let name = st.name.clone();
                         self.push_ticker(format!("STRIKE TEAM: plan ready, {} tasks", task_count));
-                        self.push_chat("System", &format!("Strike Team '{}': plan ready with {} tasks.", name, task_count));
+                        self.push_chat(
+                            "System",
+                            &format!(
+                                "Strike Team '{}': plan ready with {} tasks.",
+                                name, task_count
+                            ),
+                        );
                     }
                 }
                 Err(_) => {
                     st.phase = strike_team::StrikeTeamPhase::Aborted;
                     let name = st.name.clone();
-                    self.push_ticker(format!("STRIKE TEAM: {} aborted — task file not found", name));
+                    self.push_ticker(format!(
+                        "STRIKE TEAM: {} aborted — task file not found",
+                        name
+                    ));
                 }
             }
 
             // Terminate the planner agent to free the slot.
             if planner_idle {
                 if let Some(idx) = self.slots.iter().position(|s| {
-                    s.as_ref().map_or(false, |slot| {
-                        slot.display_name().eq_ignore_ascii_case(&cs)
-                    })
+                    s.as_ref()
+                        .map_or(false, |slot| slot.display_name().eq_ignore_ascii_case(&cs))
                 }) {
                     let callsign = self.slots[idx].as_ref().unwrap().display_name().to_string();
                     crate::pty::terminate_slot(&mut self.slots[idx]);
                     self.push_orch(OrchestratorEventKind::Terminated {
-                        agent: callsign, slot: idx + 1,
+                        agent: callsign,
+                        slot: idx + 1,
                     });
                     {
                         let mut wst = self.ws_state.lock().unwrap();
@@ -927,23 +1146,22 @@ impl App {
             })
         });
         let verifier_gone = !self.slots.iter().any(|s| {
-            s.as_ref().map_or(false, |slot| {
-                slot.display_name().eq_ignore_ascii_case(&cs)
-            })
+            s.as_ref()
+                .map_or(false, |slot| slot.display_name().eq_ignore_ascii_case(&cs))
         });
 
         if verifier_idle || verifier_gone {
             // Terminate the verifier to free the slot.
             if verifier_idle {
                 if let Some(idx) = self.slots.iter().position(|s| {
-                    s.as_ref().map_or(false, |slot| {
-                        slot.display_name().eq_ignore_ascii_case(&cs)
-                    })
+                    s.as_ref()
+                        .map_or(false, |slot| slot.display_name().eq_ignore_ascii_case(&cs))
                 }) {
                     let callsign = self.slots[idx].as_ref().unwrap().display_name().to_string();
                     crate::pty::terminate_slot(&mut self.slots[idx]);
                     self.push_orch(OrchestratorEventKind::Terminated {
-                        agent: callsign, slot: idx + 1,
+                        agent: callsign,
+                        slot: idx + 1,
                     });
                     {
                         let mut wst = self.ws_state.lock().unwrap();
@@ -975,8 +1193,17 @@ impl App {
             if strike_team::is_complete(&st.tasks) {
                 let summary = strike_team::summary(&st.tasks);
                 let name = st.name.clone();
-                self.push_ticker(format!("STRIKE TEAM: tasks complete ({}), dispatching verifier", summary));
-                self.push_chat("System", &format!("Strike Team '{}': tasks complete ({}), verifying.", name, summary));
+                self.push_ticker(format!(
+                    "STRIKE TEAM: tasks complete ({}), dispatching verifier",
+                    summary
+                ));
+                self.push_chat(
+                    "System",
+                    &format!(
+                        "Strike Team '{}': tasks complete ({}), verifying.",
+                        name, summary
+                    ),
+                );
                 self.strike_team_dispatch_verifier(st_idx);
             }
             return;
@@ -1008,10 +1235,16 @@ impl App {
             let (prompt, title, source_file, st_name) = {
                 let st = &self.strike_teams[st_idx];
                 let task = st.tasks.iter().find(|t| t.id == *task_id).unwrap();
-                (task.prompt.clone(), task.title.clone(), st.source_file.clone(), st.name.clone())
+                (
+                    task.prompt.clone(),
+                    task.title.clone(),
+                    st.source_file.clone(),
+                    st.name.clone(),
+                )
             };
 
-            let callsign = self.next_callsign()
+            let callsign = self
+                .next_callsign()
                 .unwrap_or_else(|| format!("Agent-{}", slot_idx + 1));
             let effective_tool = self.default_tool.clone();
             let cmd = self.tool_cmd(&effective_tool).to_string();
@@ -1024,16 +1257,32 @@ impl App {
                 callsign, commit_prefix, commit_prefix, source_file, prompt
             );
 
+            // In PR mode, strike team task agents only push their branch --
+            // the verifier consolidates all branches into one PR later.
+            let task_strategy = if self.merge_strategy == "pr" {
+                "pr-strike-team"
+            } else {
+                &self.merge_strategy
+            };
+
             match dispatch_slot(
-                slot_idx, &effective_tool, &cmd, self.pane_rows, self.pane_cols,
-                None, self.scrollback_lines,
-                repo_name_from_path(&repo), &repo,
+                slot_idx,
+                &effective_tool,
+                &cmd,
+                self.pane_rows,
+                self.pane_cols,
+                None,
+                self.scrollback_lines,
+                repo_name_from_path(&repo),
+                &repo,
                 Some(&full_prompt),
                 &callsign,
-                &self.merge_strategy,
+                task_strategy,
                 Some(&commit_prefix),
             ) {
-                Some(slot) => { self.slots[slot_idx] = Some(slot); }
+                Some(slot) => {
+                    self.slots[slot_idx] = Some(slot);
+                }
                 None => continue,
             }
 
@@ -1044,7 +1293,11 @@ impl App {
                 slot.idle = false;
             }
 
-            let actual_callsign = self.slots[slot_idx].as_ref().unwrap().display_name().to_string();
+            let actual_callsign = self.slots[slot_idx]
+                .as_ref()
+                .unwrap()
+                .display_name()
+                .to_string();
 
             // Update task state: status=active, agent=callsign.
             {
@@ -1056,10 +1309,21 @@ impl App {
             }
 
             self.push_orch(OrchestratorEventKind::Dispatched {
-                agent: actual_callsign.clone(), slot: slot_idx + 1, tool: effective_tool.clone(),
+                agent: actual_callsign.clone(),
+                slot: slot_idx + 1,
+                tool: effective_tool.clone(),
             });
             self.push_ticker(format!("STRIKE TEAM: {} -> {}", task_id, actual_callsign));
-            self.push_chat("System", &format!("Strike Team: {} ({}) -> {} (slot {}).", task_id, title, actual_callsign, slot_idx + 1));
+            self.push_chat(
+                "System",
+                &format!(
+                    "Strike Team: {} ({}) -> {} (slot {}).",
+                    task_id,
+                    title,
+                    actual_callsign,
+                    slot_idx + 1
+                ),
+            );
 
             // Sync ws_state.
             {
@@ -1090,7 +1354,8 @@ impl App {
         };
 
         // Find the task assigned to this callsign.
-        let task_id = match strike_team::task_for_agent(&self.strike_teams[st_idx].tasks, callsign) {
+        let task_id = match strike_team::task_for_agent(&self.strike_teams[st_idx].tasks, callsign)
+        {
             Some(t) => t.id.clone(),
             None => return,
         };
@@ -1103,7 +1368,10 @@ impl App {
 
         let name = st.name.clone();
         self.push_ticker(format!("STRIKE TEAM: {} done ({})", task_id, callsign));
-        self.push_chat("System", &format!("Strike Team '{}': {} done ({}).", name, task_id, callsign));
+        self.push_chat(
+            "System",
+            &format!("Strike Team '{}': {} done ({}).", name, task_id, callsign),
+        );
 
         // Terminate the agent to free the slot for the next wave.
         if let Some(idx) = self.slots.iter().position(|s| {
@@ -1113,7 +1381,8 @@ impl App {
         }) {
             crate::pty::terminate_slot(&mut self.slots[idx]);
             self.push_orch(OrchestratorEventKind::Terminated {
-                agent: callsign.to_string(), slot: idx + 1,
+                agent: callsign.to_string(),
+                slot: idx + 1,
             });
             {
                 let mut wst = self.ws_state.lock().unwrap();
@@ -1125,12 +1394,91 @@ impl App {
 
     /// Dispatch a verifier agent after all tasks are done. Transitions to Verifying.
     fn strike_team_dispatch_verifier(&mut self, st_idx: usize) {
-        let (repo, source_file, task_file_path, name) = {
+        let (repo, source_file, task_file_path, name, consolidation_instructions) = {
             let st = match self.strike_teams.get(st_idx) {
                 Some(st) => st,
                 None => return,
             };
-            (st.repo.clone(), st.source_file.clone(), st.task_file_path.clone(), st.name.clone())
+
+            // In PR mode, build consolidation instructions listing every
+            // successfully-completed task branch for the verifier to merge.
+            let consolidation = if self.merge_strategy == "pr" {
+                let branches: Vec<String> = st
+                    .tasks
+                    .iter()
+                    .filter(|t| {
+                        t.status == dispatch_core::strike_team::TaskStatus::Done
+                            && t.agent.is_some()
+                    })
+                    .map(|t| {
+                        format!(
+                            "- `origin/dispatch/{}` ({}: {})",
+                            t.agent.as_ref().unwrap(),
+                            t.id,
+                            t.title,
+                        )
+                    })
+                    .collect();
+
+                let merge_cmds: String = st
+                    .tasks
+                    .iter()
+                    .filter(|t| {
+                        t.status == dispatch_core::strike_team::TaskStatus::Done
+                            && t.agent.is_some()
+                    })
+                    .map(|t| {
+                        format!(
+                            "git merge origin/dispatch/{} --no-ff -m \"Merge {}: {}\"",
+                            t.agent.as_ref().unwrap(),
+                            t.id,
+                            t.title,
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                let cleanup_cmds: String = st
+                    .tasks
+                    .iter()
+                    .filter(|t| {
+                        t.status == dispatch_core::strike_team::TaskStatus::Done
+                            && t.agent.is_some()
+                    })
+                    .map(|t| {
+                        format!(
+                            "git push origin --delete dispatch/{}",
+                            t.agent.as_ref().unwrap(),
+                        )
+                    })
+                    .collect::<Vec<_>>()
+                    .join("\n");
+
+                format!(
+                    "\n\n## PR Consolidation\n\n\
+                     Before verifying, consolidate all task branches into yours. \
+                     The strike team name is: {}\n\n\
+                     Task branches:\n{}\n\n\
+                     Fetch and merge each one:\n```bash\ngit fetch origin\n{}\n```\n\n\
+                     If any merge conflicts occur, resolve them manually and commit.\n\n\
+                     After verification and any fixes, clean up remote task branches:\n\
+                     ```bash\n{}\n```\n",
+                    st.name,
+                    branches.join("\n"),
+                    merge_cmds,
+                    cleanup_cmds,
+                )
+            } else {
+                String::new()
+            };
+
+            (
+                st.repo.clone(),
+                st.source_file.clone(),
+                st.task_file_path.clone(),
+                st.name.clone(),
+                consolidation,
+            )
         };
 
         let slot_idx = match self.slots.iter().position(|s| s.is_none()) {
@@ -1141,7 +1489,8 @@ impl App {
             }
         };
 
-        let callsign = self.next_callsign()
+        let callsign = self
+            .next_callsign()
             .unwrap_or_else(|| "Verifier".to_string());
         let effective_tool = self.default_tool.clone();
         let cmd = self.tool_cmd(&effective_tool).to_string();
@@ -1149,22 +1498,42 @@ impl App {
         let verifier_prompt = format!(
             "Your callsign is {}. {}",
             callsign,
-            read_prompt_template(
-                &repo, "VERIFIER.md",
-                &[("{source_file}", &source_file), ("{task_file_path}", &task_file_path)],
+            render_prompt_template(
+                VERIFIER_MD,
+                &[
+                    ("{source_file}", &source_file),
+                    ("{task_file_path}", &task_file_path),
+                    ("{consolidation_instructions}", &consolidation_instructions),
+                ],
             )
         );
 
+        // In PR mode the verifier uses the special pr-verifier workflow
+        // which creates the single consolidated PR.
+        let verifier_strategy = if self.merge_strategy == "pr" {
+            "pr-verifier"
+        } else {
+            &self.merge_strategy
+        };
+
         match dispatch_slot(
-            slot_idx, &effective_tool, &cmd, self.pane_rows, self.pane_cols,
-            None, self.scrollback_lines,
-            repo_name_from_path(&repo), &repo,
+            slot_idx,
+            &effective_tool,
+            &cmd,
+            self.pane_rows,
+            self.pane_cols,
+            None,
+            self.scrollback_lines,
+            repo_name_from_path(&repo),
+            &repo,
             Some(&verifier_prompt),
             &callsign,
-            &self.merge_strategy,
+            verifier_strategy,
             None,
         ) {
-            Some(slot) => { self.slots[slot_idx] = Some(slot); }
+            Some(slot) => {
+                self.slots[slot_idx] = Some(slot);
+            }
             None => return,
         }
 
@@ -1175,7 +1544,11 @@ impl App {
             slot.idle = false;
         }
 
-        let actual_callsign = self.slots[slot_idx].as_ref().unwrap().display_name().to_string();
+        let actual_callsign = self.slots[slot_idx]
+            .as_ref()
+            .unwrap()
+            .display_name()
+            .to_string();
 
         {
             let st = &mut self.strike_teams[st_idx];
@@ -1184,10 +1557,19 @@ impl App {
         }
 
         self.push_orch(OrchestratorEventKind::Dispatched {
-            agent: actual_callsign.clone(), slot: slot_idx + 1, tool: effective_tool.clone(),
+            agent: actual_callsign.clone(),
+            slot: slot_idx + 1,
+            tool: effective_tool.clone(),
         });
         self.push_ticker(format!("STRIKE TEAM: verifier -> {}", actual_callsign));
-        self.push_chat("System", &format!("Strike Team '{}': verifier dispatched to slot {}.", name, slot_idx + 1));
+        self.push_chat(
+            "System",
+            &format!(
+                "Strike Team '{}': verifier dispatched to slot {}.",
+                name,
+                slot_idx + 1
+            ),
+        );
 
         // Sync ws_state.
         {
@@ -1216,9 +1598,17 @@ impl App {
         st.phase_agent_callsign = None;
 
         self.push_ticker(format!("STRIKE TEAM: complete ({})", summary));
-        self.push_chat("System", &format!("Strike Team '{}': complete ({}).", name, summary));
+        self.push_chat(
+            "System",
+            &format!("Strike Team '{}': complete ({}).", name, summary),
+        );
         if let Some(orch) = &mut self.orchestrator {
-            orch.send_message(&format!("[D-{}:EVENT] STRIKE_TEAM_COMPLETE name={} result={}", orch.nonce(), name, summary));
+            orch.send_message(&format!(
+                "[D-{}:EVENT] STRIKE_TEAM_COMPLETE name={} result={}",
+                orch.nonce(),
+                name,
+                summary
+            ));
         }
     }
 
@@ -1232,7 +1622,8 @@ impl App {
                 st.phase = strike_team::StrikeTeamPhase::Aborted;
                 let name = st.name.clone();
                 let summary = strike_team::summary(&st.tasks);
-                self.ticker_pending.push_back(format!("STRIKE TEAM: {} aborted ({})", name, summary));
+                self.ticker_pending
+                    .push_back(format!("STRIKE TEAM: {} aborted ({})", name, summary));
                 // Note: push_chat/push_ticker require &mut self which we can't use
                 // inside the loop, so we use ticker_pending directly above and
                 // push chat messages after the loop.
@@ -1253,14 +1644,19 @@ impl App {
         // Check verifiers first, then executing tasks.
         let verifier_st_idx = self.strike_teams.iter().position(|st| {
             st.phase == strike_team::StrikeTeamPhase::Verifying
-                && st.phase_agent_callsign.as_deref()
+                && st
+                    .phase_agent_callsign
+                    .as_deref()
                     .map_or(false, |cs| cs.eq_ignore_ascii_case(&callsign))
         });
 
         if let Some(st_idx) = verifier_st_idx {
             let name = self.strike_teams[st_idx].name.clone();
             self.push_ticker(format!("STRIKE TEAM: verifier exited ({})", callsign));
-            self.push_chat("System", &format!("Strike Team '{}': verifier exited, completing.", name));
+            self.push_chat(
+                "System",
+                &format!("Strike Team '{}': verifier exited, completing.", name),
+            );
             self.strike_team_complete(st_idx);
             return;
         }
@@ -1283,8 +1679,74 @@ impl App {
 
             let name = st.name.clone();
             self.push_ticker(format!("STRIKE TEAM: {} failed ({})", task_id, callsign));
-            self.push_chat("System", &format!("Strike Team '{}': {} failed ({}).", name, task_id, callsign));
+            self.push_chat(
+                "System",
+                &format!("Strike Team '{}': {} failed ({}).", name, task_id, callsign),
+            );
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct TempRepo {
+        path: std::path::PathBuf,
+    }
+
+    impl TempRepo {
+        fn new(label: &str) -> Self {
+            let unique = SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos();
+            let path = std::env::temp_dir().join(format!("dispatch-{label}-{unique}"));
+            std::fs::create_dir_all(&path).unwrap();
+            Self { path }
+        }
+
+        fn write(&self, relative: &str) {
+            let full = self.path.join(relative);
+            if let Some(parent) = full.parent() {
+                std::fs::create_dir_all(parent).unwrap();
+            }
+            std::fs::write(full, "test").unwrap();
         }
     }
 
+    impl Drop for TempRepo {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.path);
+        }
+    }
+
+    #[test]
+    fn resolve_strike_team_source_defaults_to_repo_spec() {
+        let repo = TempRepo::new("spec-default");
+        repo.write("docs/SPEC.md");
+
+        let resolved = resolve_strike_team_source_file(&repo.path.to_string_lossy(), "");
+        assert_eq!(resolved.as_deref(), Some("docs/SPEC.md"));
+    }
+
+    #[test]
+    fn resolve_strike_team_source_canonicalizes_case() {
+        let repo = TempRepo::new("spec-case");
+        repo.write("docs/SPEC.md");
+
+        let resolved =
+            resolve_strike_team_source_file(&repo.path.to_string_lossy(), "docs/spec.md");
+        assert_eq!(resolved.as_deref(), Some("docs/SPEC.md"));
+    }
+
+    #[test]
+    fn resolve_strike_team_source_accepts_architecture_alias() {
+        let repo = TempRepo::new("arch-alias");
+        repo.write("docs/ARCHITECTURE.md");
+
+        let resolved =
+            resolve_strike_team_source_file(&repo.path.to_string_lossy(), "architecture");
+        assert_eq!(resolved.as_deref(), Some("docs/ARCHITECTURE.md"));
+    }
 }

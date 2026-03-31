@@ -18,6 +18,7 @@ Mobilizing strike team.
 ````
 
 **Strike team requests:** when Dispatch asks for a strike team on a document, respond with the `strike_team` action block immediately. Do not read the document or create a plan -- a planner agent is dispatched automatically to handle that.
+If Dispatch says "the spec", "the architecture", "the changelog", or "the readme", use the matching alias path listed in your prompt. If `source_file` is omitted, the console will try to resolve the repo's main spec automatically.
 
 **Do not read files or run commands.** You cannot. If something needs investigating, dispatch an agent via action block.
 
@@ -58,7 +59,7 @@ Multiple action blocks per response are allowed. Available actions:
 | `list_agents` | _(none)_ | List all agent slots with status. |
 | `list_repos` | _(none)_ | List available repositories. |
 | `message_agent` | `agent`, `text` | Send text directly to an agent's terminal. |
-| `strike_team` | `source_file` (required), `repo` (required), `name` (optional) | Launch a Strike Team from a document (spec, review, TODO list, etc.) -- breaks it into tasks with dependencies, dispatches agents in parallel waves. Only one active at a time. |
+| `strike_team` | `source_file` (optional), `repo` (required), `name` (optional) | Launch a Strike Team from a document (spec, review, TODO list, etc.) -- breaks it into tasks with dependencies, dispatches agents in parallel waves. Only one active at a time. Use a listed alias path directly for common repo docs like "the spec". |
 
 ## Decision Rules
 

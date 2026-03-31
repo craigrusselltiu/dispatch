@@ -518,6 +518,12 @@ fn main() -> io::Result<()> {
             while let Some(output) = orch.try_recv() {
                 orch_outputs.push(output);
             }
+            // If the orchestrator is stuck at Responding and the underlying
+            // process has exited (pipes inherited by a grandchild on Windows),
+            // the reader thread will never see EOF.  Detect this and recover.
+            if orch.check_process_alive() {
+                orch_outputs.push(orchestrator::OrchestratorOutput::Exited);
+            }
         }
         for output in orch_outputs {
             match output {

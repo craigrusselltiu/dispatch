@@ -12,10 +12,17 @@
 use std::io::{BufRead, BufReader, BufWriter, Write};
 use std::process::{Child, Command, Stdio};
 use std::sync::mpsc;
-use std::sync::{Arc, Mutex, atomic::{AtomicU64, Ordering}};
+use std::sync::{
+    atomic::{AtomicU64, Ordering},
+    Arc, Mutex,
+};
 use std::thread;
 
 use crate::tools;
+
+/// Orchestrator instructions bundled at compile time so the binary carries
+/// them regardless of which repo it is launched in.
+const ORCHESTRATOR_MD: &str = include_str!("../../../docs/ORCHESTRATOR.md");
 
 // ── Types ────────────────────────────────────────────────────────────────────
 
@@ -74,6 +81,9 @@ pub struct Orchestrator {
     /// Random per-session nonce embedded in protocol prefixes (e.g. `[D-a8f3:MIC]`)
     /// to prevent the LLM from hallucinating valid protocol messages.
     nonce: String,
+    /// When the orchestrator entered `Responding` state.  Used to detect
+    /// a stuck process whose pipes are still open (e.g. Copilot re-exec).
+    responding_since: Option<std::time::Instant>,
 }
 
 // ── Session nonce ────────────────────────────────────────────────────────────
@@ -83,18 +93,33 @@ pub fn generate_nonce() -> String {
     use std::collections::hash_map::RandomState;
     use std::hash::{BuildHasher, Hasher};
     let mut hasher = RandomState::new().build_hasher();
-    hasher.write_u64(std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .unwrap_or_default()
-        .as_nanos() as u64);
+    hasher.write_u64(
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos() as u64,
+    );
     format!("{:04x}", hasher.finish() as u16)
+}
+
+/// Compact timestamp for debug logs (HH:MM:SS.mmm).
+fn chrono_compact() -> String {
+    use std::time::{SystemTime, UNIX_EPOCH};
+    let d = SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default();
+    let secs = d.as_secs();
+    let h = (secs / 3600) % 24;
+    let m = (secs / 60) % 60;
+    let s = secs % 60;
+    let ms = d.subsec_millis();
+    format!("{:02}:{:02}:{:02}.{:03}", h, m, s, ms)
 }
 
 // ── System prompt ────────────────────────────────────────────────────────────
 
-/// Build the orchestrator system prompt. Reads from docs/ORCHESTRATOR.md in
-/// the repo, prepending the active repository name and configured callsigns.
-/// The `nonce` is embedded so the LLM knows the session-specific prefix format.
+/// Build the orchestrator system prompt. Uses the compile-time-bundled
+/// ORCHESTRATOR.md, prepending the active repository name and configured
+/// callsigns.  The `nonce` is embedded so the LLM knows the session-specific
+/// prefix format.
 pub fn build_system_prompt(
     repos: &[&str],
     _tool_defs: &serde_json::Value,
@@ -105,20 +130,17 @@ pub fn build_system_prompt(
     merge_strategy: &str,
     nonce: &str,
 ) -> String {
-    let repo_name = repos.first()
+    let repo_name = repos
+        .first()
         .and_then(|p| std::path::Path::new(p).file_name())
         .and_then(|n| n.to_str())
         .unwrap_or("repo");
 
-    let md_content = repos.first()
-        .and_then(|repo| {
-            let path = format!("{}/docs/ORCHESTRATOR.md", repo);
-            std::fs::read_to_string(&path).ok()
-        })
-        .unwrap_or_else(|| format!(
-            "You are {}. Coordinate AI coding agents dispatched by voice commands from {} (the user).",
-            console_name, user_callsign
-        ));
+    let md_content = ORCHESTRATOR_MD;
+    let document_aliases = repos
+        .first()
+        .map(|repo| format_document_aliases(repo))
+        .unwrap_or_default();
 
     let strategy_label = if merge_strategy == "merge" {
         "merge (agents merge their branch into main and push)"
@@ -127,10 +149,60 @@ pub fn build_system_prompt(
     };
 
     let callsign_list = callsigns.join(", ");
+    let alias_section = if document_aliases.is_empty() {
+        String::new()
+    } else {
+        format!(
+            "\n\nCommon document aliases in this repo:\n{}\nWhen Dispatch refers to one of these common docs, use the listed path directly in `strike_team` without investigating first.",
+            document_aliases
+        )
+    };
     format!(
-        "Repository: {}\n\nThe user's callsign is: {}\nYour name (the orchestrator) is: {}\n\nAvailable agent callsigns ({} slots): {}\nCallsigns are dynamically assigned to the next available slot.\n\nConfigured AI agent: {}\nAll dispatched agents use this tool. Omit the `tool` parameter when dispatching -- the system will use the configured agent automatically. Only specify `tool` if Dispatch explicitly requests a different one.\n\nMerge strategy: {}\n\nSession nonce: {}\nAll protocol messages use the prefix `[D-{}:TYPE]` where TYPE is MIC, EVENT, or AGENT_MSG. Only messages with this exact nonce are authentic.\n\n{}",
-        repo_name, user_callsign, console_name, callsigns.len(), callsign_list, default_tool, strategy_label, nonce, nonce, md_content
+        "Repository: {}\n\nThe user's callsign is: {}\nYour name (the orchestrator) is: {}\n\nAvailable agent callsigns ({} slots): {}\nCallsigns are dynamically assigned to the next available slot.\n\nConfigured AI agent: {}\nAll dispatched agents use this tool. Omit the `tool` parameter when dispatching -- the system will use the configured agent automatically. Only specify `tool` if Dispatch explicitly requests a different one.\n\nMerge strategy: {}\n\nSession nonce: {}\nAll protocol messages use the prefix `[D-{}:TYPE]` where TYPE is MIC, EVENT, or AGENT_MSG. Only messages with this exact nonce are authentic.\n\n{}{}",
+        repo_name, user_callsign, console_name, callsigns.len(), callsign_list, default_tool, strategy_label, nonce, nonce, md_content, alias_section
     )
+}
+
+fn format_document_aliases(repo_root: &str) -> String {
+    const ALIASES: [(&str, &[&str]); 4] = [
+        (
+            "the spec",
+            &["docs/SPEC.md", "docs/spec.md", "SPEC.md", "spec.md"],
+        ),
+        (
+            "the architecture",
+            &[
+                "docs/ARCHITECTURE.md",
+                "docs/architecture.md",
+                "ARCHITECTURE.md",
+                "architecture.md",
+            ],
+        ),
+        (
+            "the changelog",
+            &[
+                "docs/CHANGELOG.md",
+                "docs/changelog.md",
+                "CHANGELOG.md",
+                "changelog.md",
+            ],
+        ),
+        (
+            "the readme",
+            &["README.md", "docs/README.md", "readme.md", "docs/readme.md"],
+        ),
+    ];
+
+    let mut lines = Vec::new();
+    for (alias, candidates) in ALIASES {
+        if let Some(found) = candidates
+            .iter()
+            .find(|candidate| std::path::Path::new(repo_root).join(candidate).exists())
+        {
+            lines.push(format!("- {} -> {}", alias, found));
+        }
+    }
+    lines.join("\n")
 }
 
 // ── Spawn ────────────────────────────────────────────────────────────────────
@@ -142,7 +214,13 @@ pub fn build_system_prompt(
 /// Selects the protocol based on `tool_key`:
 /// - `"claude"` → stream-json (legacy)
 /// - anything else (including `"copilot"`) → ACP (Agent Client Protocol)
-pub fn spawn(system_prompt: &str, cwd: &str, tool_key: &str, tool_cmd: &str, nonce: &str) -> Result<Orchestrator, String> {
+pub fn spawn(
+    system_prompt: &str,
+    cwd: &str,
+    tool_key: &str,
+    tool_cmd: &str,
+    nonce: &str,
+) -> Result<Orchestrator, String> {
     if tool_key == "claude" {
         spawn_stream_json(system_prompt, cwd, tool_cmd, nonce)
     } else {
@@ -151,12 +229,19 @@ pub fn spawn(system_prompt: &str, cwd: &str, tool_key: &str, tool_cmd: &str, non
 }
 
 /// Spawn orchestrator using Claude's stream-json protocol.
-fn spawn_stream_json(system_prompt: &str, cwd: &str, tool_cmd: &str, nonce: &str) -> Result<Orchestrator, String> {
+fn spawn_stream_json(
+    system_prompt: &str,
+    cwd: &str,
+    tool_cmd: &str,
+    nonce: &str,
+) -> Result<Orchestrator, String> {
     let mut cmd = Command::new(tool_cmd);
     cmd.args([
         "-p",
-        "--output-format", "stream-json",
-        "--input-format", "stream-json",
+        "--output-format",
+        "stream-json",
+        "--input-format",
+        "stream-json",
         "--verbose",
     ]);
     // Remove all Claude Code built-in tools. The orchestrator acts purely
@@ -170,11 +255,18 @@ fn spawn_stream_json(system_prompt: &str, cwd: &str, tool_cmd: &str, nonce: &str
     cmd.stderr(Stdio::null());
 
     let mut child = cmd.spawn().map_err(|e| {
-        format!("failed to spawn {}: {e} -- is it installed and on PATH?", tool_cmd)
+        format!(
+            "failed to spawn {}: {e} -- is it installed and on PATH?",
+            tool_cmd
+        )
     })?;
-    let stdin = child.stdin.take()
+    let stdin = child
+        .stdin
+        .take()
         .ok_or_else(|| "failed to open orchestrator stdin".to_string())?;
-    let stdout = child.stdout.take()
+    let stdout = child
+        .stdout
+        .take()
         .ok_or_else(|| "failed to open orchestrator stdout".to_string())?;
 
     let writer = Arc::new(Mutex::new(BufWriter::new(stdin)));
@@ -236,7 +328,8 @@ fn spawn_stream_json(system_prompt: &str, cwd: &str, tool_cmd: &str, nonce: &str
         let _ = tx.send(OrchestratorOutput::Exited);
     });
 
-    let session_id = sid_rx.recv_timeout(std::time::Duration::from_secs(10))
+    let session_id = sid_rx
+        .recv_timeout(std::time::Duration::from_secs(10))
         .unwrap_or_else(|_| "default".to_string());
 
     Ok(Orchestrator {
@@ -251,13 +344,17 @@ fn spawn_stream_json(system_prompt: &str, cwd: &str, tool_cmd: &str, nonce: &str
         protocol: Protocol::StreamJson,
         next_rpc_id: Arc::new(AtomicU64::new(1)),
         nonce: nonce.to_string(),
+        responding_since: None,
     })
 }
 
 // ── ACP (Agent Client Protocol) ─────────────────────────────────────────────
 
 /// Write a JSON-RPC line to the shared writer. Returns Err on I/O failure.
-fn rpc_write(writer: &Arc<Mutex<BufWriter<std::process::ChildStdin>>>, msg: &serde_json::Value) -> Result<(), String> {
+fn rpc_write(
+    writer: &Arc<Mutex<BufWriter<std::process::ChildStdin>>>,
+    msg: &serde_json::Value,
+) -> Result<(), String> {
     let mut w = writer.lock().map_err(|e| format!("stdin lock: {e}"))?;
     writeln!(w, "{}", msg).map_err(|e| format!("stdin write: {e}"))?;
     w.flush().map_err(|e| format!("stdin flush: {e}"))
@@ -277,15 +374,19 @@ fn rpc_read_response(
     let mut line_buf = String::new();
     for i in 0..RPC_READ_MAX_LINES {
         line_buf.clear();
-        let n = reader.read_line(&mut line_buf).map_err(|e| format!("stdout read: {e}"))?;
+        let n = reader
+            .read_line(&mut line_buf)
+            .map_err(|e| format!("stdout read: {e}"))?;
         if n == 0 {
             return Err("agent process closed stdout during init".to_string());
         }
         let trimmed = line_buf.trim();
-        if trimmed.is_empty() { continue; }
+        if trimmed.is_empty() {
+            continue;
+        }
 
-        let parsed: serde_json::Value = serde_json::from_str(trimmed)
-            .map_err(|e| format!("json parse: {e}"))?;
+        let parsed: serde_json::Value =
+            serde_json::from_str(trimmed).map_err(|e| format!("json parse: {e}"))?;
 
         let has_id = parsed.get("id").is_some();
         let has_method = parsed.get("method").is_some();
@@ -297,29 +398,45 @@ fn rpc_read_response(
                     if let Some(err) = parsed.get("error") {
                         return Err(format!("RPC error: {}", err));
                     }
-                    return Ok(parsed.get("result").cloned().unwrap_or(serde_json::Value::Null));
+                    return Ok(parsed
+                        .get("result")
+                        .cloned()
+                        .unwrap_or(serde_json::Value::Null));
                 }
             }
         }
 
         if i == 1000 {
-            eprintln!("warning: rpc_read_response still waiting for id {} after 1000 lines", expected_id);
+            eprintln!(
+                "warning: rpc_read_response still waiting for id {} after 1000 lines",
+                expected_id
+            );
         }
 
-        // Agent request — auto-handle during init.
+        // Agent request — auto-handle during init (approve permissions so
+        // the agent can bootstrap).
         if has_id && has_method {
-            handle_agent_request(writer, &parsed);
+            handle_agent_request(writer, &parsed, false);
         }
         // Notifications during init — ignore.
     }
-    Err(format!("no response for RPC id {} after {} lines", expected_id, RPC_READ_MAX_LINES))
+    Err(format!(
+        "no response for RPC id {} after {} lines",
+        expected_id, RPC_READ_MAX_LINES
+    ))
 }
 
 /// Respond to an agent-initiated JSON-RPC request.
-/// Permissions are auto-approved; everything else is rejected.
+///
+/// `deny_permissions` controls whether tool-use permissions are denied.
+/// During init (`rpc_read_response`), permissions are approved so the agent
+/// can bootstrap. During normal operation (the reader thread), permissions
+/// are denied so the orchestrator cannot use built-in tools — it must
+/// communicate exclusively through action blocks in its text output.
 fn handle_agent_request(
     writer: &Arc<Mutex<BufWriter<std::process::ChildStdin>>>,
     parsed: &serde_json::Value,
+    deny_permissions: bool,
 ) {
     let id = match parsed.get("id") {
         Some(id) => id.clone(),
@@ -327,11 +444,21 @@ fn handle_agent_request(
     };
     let method = parsed.get("method").and_then(|v| v.as_str()).unwrap_or("");
     let response = match method {
-        "requestPermission" => serde_json::json!({
-            "jsonrpc": "2.0",
-            "id": id,
-            "result": { "outcome": "approved" }
-        }),
+        "requestPermission" => {
+            if deny_permissions {
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": { "outcome": "denied" }
+                })
+            } else {
+                serde_json::json!({
+                    "jsonrpc": "2.0",
+                    "id": id,
+                    "result": { "outcome": "approved" }
+                })
+            }
+        }
         _ => serde_json::json!({
             "jsonrpc": "2.0",
             "id": id,
@@ -343,7 +470,13 @@ fn handle_agent_request(
 
 /// Spawn orchestrator using the Agent Client Protocol (ACP).
 /// Works with Copilot and any other ACP-compatible agent.
-fn spawn_acp(system_prompt: &str, cwd: &str, tool_key: &str, tool_cmd: &str, nonce: &str) -> Result<Orchestrator, String> {
+fn spawn_acp(
+    system_prompt: &str,
+    cwd: &str,
+    tool_key: &str,
+    tool_cmd: &str,
+    nonce: &str,
+) -> Result<Orchestrator, String> {
     let mut cmd = Command::new(tool_cmd);
     cmd.arg("--acp");
     if tool_key == "copilot" {
@@ -352,7 +485,16 @@ fn spawn_acp(system_prompt: &str, cwd: &str, tool_key: &str, tool_cmd: &str, non
     cmd.current_dir(cwd);
     cmd.stdin(Stdio::piped());
     cmd.stdout(Stdio::piped());
-    cmd.stderr(Stdio::null());
+
+    // Capture stderr to a log file so Copilot errors are visible for
+    // post-mortem diagnosis (previously sent to /dev/null).
+    let dispatch_dir = format!("{}/.dispatch", cwd);
+    let _ = std::fs::create_dir_all(&dispatch_dir);
+    let stderr_log = format!("{}/orchestrator-stderr.log", dispatch_dir);
+    match std::fs::File::create(&stderr_log) {
+        Ok(f) => cmd.stderr(Stdio::from(f)),
+        Err(_) => cmd.stderr(Stdio::null()),
+    };
 
     // Force Copilot into app mode, bypassing its loader which tries to
     // re-exec with --no-warnings and crashes (GitHub CLI bug #1399).
@@ -360,13 +502,20 @@ fn spawn_acp(system_prompt: &str, cwd: &str, tool_key: &str, tool_cmd: &str, non
     cmd.env_remove("COPILOT_LOADER_PID");
 
     let mut child = cmd.spawn().map_err(|e| {
-        format!("failed to spawn {}: {e} -- is it installed and on PATH?", tool_cmd)
+        format!(
+            "failed to spawn {}: {e} -- is it installed and on PATH?",
+            tool_cmd
+        )
     })?;
-    let stdin = child.stdin.take()
+    let stdin = child
+        .stdin
+        .take()
         .ok_or_else(|| "failed to open orchestrator stdin".to_string())?;
     let mut stdout = BufReader::new(
-        child.stdout.take()
-            .ok_or_else(|| "failed to open orchestrator stdout".to_string())?
+        child
+            .stdout
+            .take()
+            .ok_or_else(|| "failed to open orchestrator stdout".to_string())?,
     );
 
     let writer = Arc::new(Mutex::new(BufWriter::new(stdin)));
@@ -374,46 +523,56 @@ fn spawn_acp(system_prompt: &str, cwd: &str, tool_key: &str, tool_cmd: &str, non
 
     // ── 1. Initialize ────────────────────────────────────────────────────
     let init_id = next_rpc_id.fetch_add(1, Ordering::SeqCst);
-    rpc_write(&writer, &serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": init_id,
-        "method": "initialize",
-        "params": {
-            "protocolVersion": 1,
-            "clientInfo": { "name": "dispatch", "version": "1.0" },
-            "clientCapabilities": {}
-        }
-    }))?;
+    rpc_write(
+        &writer,
+        &serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": init_id,
+            "method": "initialize",
+            "params": {
+                "protocolVersion": 1,
+                "clientInfo": { "name": "dispatch", "version": "1.0" },
+                "clientCapabilities": {}
+            }
+        }),
+    )?;
     let _init_result = rpc_read_response(&mut stdout, &writer, init_id)?;
 
     // ── 2. Create session ────────────────────────────────────────────────
     let session_id_rpc = next_rpc_id.fetch_add(1, Ordering::SeqCst);
-    rpc_write(&writer, &serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": session_id_rpc,
-        "method": "session/new",
-        "params": {
-            "cwd": cwd,
-            "mcpServers": []
-        }
-    }))?;
+    rpc_write(
+        &writer,
+        &serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": session_id_rpc,
+            "method": "session/new",
+            "params": {
+                "cwd": cwd,
+                "mcpServers": []
+            }
+        }),
+    )?;
     let session_result = rpc_read_response(&mut stdout, &writer, session_id_rpc)?;
-    let session_id = session_result.get("sessionId")
+    let session_id = session_result
+        .get("sessionId")
         .and_then(|v| v.as_str())
         .ok_or("ACP session/new response missing sessionId")?
         .to_string();
 
     // ── 3. Send system prompt as first turn ──────────────────────────────
     let sys_prompt_id = next_rpc_id.fetch_add(1, Ordering::SeqCst);
-    rpc_write(&writer, &serde_json::json!({
-        "jsonrpc": "2.0",
-        "id": sys_prompt_id,
-        "method": "session/prompt",
-        "params": {
-            "sessionId": &session_id,
-            "prompt": [{ "type": "text", "text": system_prompt }]
-        }
-    }))?;
+    rpc_write(
+        &writer,
+        &serde_json::json!({
+            "jsonrpc": "2.0",
+            "id": sys_prompt_id,
+            "method": "session/prompt",
+            "params": {
+                "sessionId": &session_id,
+                "prompt": [{ "type": "text", "text": system_prompt }]
+            }
+        }),
+    )?;
     // Drain all notifications and the response for the system-prompt turn.
     // We discard the agent's reply — it's just an acknowledgement.
     let _sys_result = rpc_read_response(&mut stdout, &writer, sys_prompt_id)?;
@@ -422,21 +581,72 @@ fn spawn_acp(system_prompt: &str, cwd: &str, tool_key: &str, tool_cmd: &str, non
     let (tx, rx) = mpsc::channel();
     let reader_writer = writer.clone();
 
+    // Debug log for ACP wire traffic — helps diagnose silent freezes.
+    let log_path = format!("{}/orchestrator-acp.log", dispatch_dir);
+    let debug_log: Option<std::fs::File> = std::fs::File::create(&log_path).ok();
+    let debug_log = Arc::new(Mutex::new(debug_log));
+
     thread::spawn(move || {
         // Accumulate text chunks within a turn so we can emit the full text.
         let mut turn_text = String::new();
+        // Buffer for incomplete JSON lines (handles multi-line / pretty-printed
+        // JSON that Copilot may emit).
+        let mut json_buf = String::new();
+
+        let log = |msg: &str| {
+            if let Ok(mut guard) = debug_log.lock() {
+                if let Some(ref mut f) = *guard {
+                    let _ = writeln!(f, "[{}] {}", chrono_compact(), msg);
+                    let _ = f.flush();
+                }
+            }
+        };
+
+        log("reader thread started");
 
         for line in stdout.lines() {
             let line = match line {
                 Ok(l) => l,
-                Err(_) => break,
+                Err(e) => {
+                    log(&format!("read error: {e}"));
+                    break;
+                }
             };
             let trimmed = line.trim();
-            if trimmed.is_empty() { continue; }
+            if trimmed.is_empty() {
+                continue;
+            }
 
+            // Try parsing the line on its own first (fast path for NDJSON).
             let parsed: serde_json::Value = match serde_json::from_str(trimmed) {
-                Ok(v) => v,
-                Err(_) => continue,
+                Ok(v) => {
+                    // If we had an accumulator going, it was junk — discard it.
+                    if !json_buf.is_empty() {
+                        log(&format!("discarding incomplete json_buf ({} bytes)", json_buf.len()));
+                        json_buf.clear();
+                    }
+                    v
+                }
+                Err(_) => {
+                    // Could be a fragment of a multi-line JSON object.
+                    json_buf.push_str(trimmed);
+                    match serde_json::from_str::<serde_json::Value>(&json_buf) {
+                        Ok(v) => {
+                            log(&format!("parsed multi-line JSON ({} bytes)", json_buf.len()));
+                            json_buf.clear();
+                            v
+                        }
+                        Err(_) => {
+                            // Still incomplete — keep accumulating.
+                            // Safety: cap at 1 MB to prevent unbounded growth.
+                            if json_buf.len() > 1_000_000 {
+                                log("json_buf exceeded 1MB, discarding");
+                                json_buf.clear();
+                            }
+                            continue;
+                        }
+                    }
+                }
             };
 
             let has_id = parsed.get("id").is_some();
@@ -446,6 +656,11 @@ fn spawn_acp(system_prompt: &str, cwd: &str, tool_key: &str, tool_cmd: &str, non
 
             if has_id && (has_result || has_error) && !has_method {
                 // ── Response to a session/prompt request (turn complete) ──
+                log(&format!(
+                    "turn complete (id={}, text_len={})",
+                    parsed.get("id").unwrap_or(&serde_json::Value::Null),
+                    turn_text.len()
+                ));
                 if !turn_text.is_empty() {
                     let _ = tx.send(OrchestratorOutput::Text(std::mem::take(&mut turn_text)));
                 }
@@ -455,22 +670,33 @@ fn spawn_acp(system_prompt: &str, cwd: &str, tool_key: &str, tool_cmd: &str, non
                 let method = parsed.get("method").and_then(|v| v.as_str()).unwrap_or("");
                 if method == "session/update" {
                     if let Some(update) = parsed.pointer("/params/update") {
-                        let update_type = update.get("sessionUpdate")
+                        let update_type = update
+                            .get("sessionUpdate")
                             .and_then(|v| v.as_str())
                             .unwrap_or("");
                         if update_type == "agent_message_chunk" {
-                            if let Some(text) = update.pointer("/content/text").and_then(|v| v.as_str()) {
+                            if let Some(text) =
+                                update.pointer("/content/text").and_then(|v| v.as_str())
+                            {
                                 turn_text.push_str(text);
                             }
                         }
-                        // agent_thought_chunk, tool calls, etc. are ignored for now.
+                        log(&format!("notification: session/update type={}", update_type));
                     }
+                } else {
+                    log(&format!("notification: method={}", method));
                 }
             } else if has_id && has_method {
                 // ── Agent request (needs response) ──
-                handle_agent_request(&reader_writer, &parsed);
+                let method = parsed.get("method").and_then(|v| v.as_str()).unwrap_or("");
+                log(&format!("agent request: method={}", method));
+                // Deny tool permissions so the orchestrator acts text-only.
+                handle_agent_request(&reader_writer, &parsed, true);
+            } else {
+                log(&format!("unhandled message: {}", &trimmed.chars().take(200).collect::<String>()));
             }
         }
+        log("reader thread exiting");
         let _ = tx.send(OrchestratorOutput::Exited);
     });
 
@@ -486,6 +712,7 @@ fn spawn_acp(system_prompt: &str, cwd: &str, tool_key: &str, tool_cmd: &str, non
         protocol: Protocol::Acp,
         next_rpc_id,
         nonce: nonce.to_string(),
+        responding_since: None,
     })
 }
 
@@ -563,9 +790,11 @@ impl Orchestrator {
         };
         if rpc_write(&self.writer, &msg).is_err() {
             self.state = OrchestratorState::Dead;
+            self.responding_since = None;
             return;
         }
         self.state = OrchestratorState::Responding;
+        self.responding_since = Some(std::time::Instant::now());
     }
 
     /// Try to receive output. Returns None if nothing available yet.
@@ -575,6 +804,7 @@ impl Orchestrator {
                 match &output {
                     OrchestratorOutput::TurnComplete => {
                         self.state = OrchestratorState::Idle;
+                        self.responding_since = None;
                         // Flush pending messages.
                         if let Some(msg) = self.pending.pop_front() {
                             self.user_turn = self.pending_user.pop_front().unwrap_or(false);
@@ -583,6 +813,7 @@ impl Orchestrator {
                     }
                     OrchestratorOutput::Exited => {
                         self.state = OrchestratorState::Dead;
+                        self.responding_since = None;
                     }
                     _ => {}
                 }
@@ -591,6 +822,7 @@ impl Orchestrator {
             Err(mpsc::TryRecvError::Empty) => None,
             Err(mpsc::TryRecvError::Disconnected) => {
                 self.state = OrchestratorState::Dead;
+                self.responding_since = None;
                 Some(OrchestratorOutput::Exited)
             }
         }
@@ -612,6 +844,43 @@ impl Orchestrator {
     /// Check if the orchestrator is alive.
     pub fn is_alive(&self) -> bool {
         self.state != OrchestratorState::Dead
+    }
+
+    /// Check whether the orchestrator process has silently exited while the
+    /// reader thread is still blocked on a pipe read (common on Windows when
+    /// child handles are inherited by grandchild processes).
+    ///
+    /// Call this from the main loop when the orchestrator is stuck in
+    /// `Responding` for an extended period.  Returns `true` if the process
+    /// was discovered dead and the state was set to `Dead`.
+    pub fn check_process_alive(&mut self) -> bool {
+        if self.state != OrchestratorState::Responding {
+            return false;
+        }
+        // Only check after the orchestrator has been unresponsive for a while.
+        let since = match self.responding_since {
+            Some(t) => t,
+            None => return false,
+        };
+        if since.elapsed().as_secs() < 15 {
+            return false;
+        }
+        match self.child.try_wait() {
+            Ok(Some(_status)) => {
+                // Process exited but pipes are still open — the reader thread
+                // is blocked on read_line.  Force-kill to close the pipes.
+                let _ = self.child.kill();
+                self.state = OrchestratorState::Dead;
+                self.responding_since = None;
+                true
+            }
+            Ok(None) => false, // still running
+            Err(_) => {
+                self.state = OrchestratorState::Dead;
+                self.responding_since = None;
+                true
+            }
+        }
     }
 }
 
@@ -676,36 +945,89 @@ fn parse_action_json(json_str: &str) -> Result<tools::ToolCall, serde_json::Erro
 
     match action {
         "dispatch" => {
-            let repo = v.get("repo").and_then(|r| r.as_str()).unwrap_or("").to_string();
-            let prompt = v.get("prompt").and_then(|p| p.as_str()).unwrap_or("").to_string();
-            let callsign = v.get("callsign").and_then(|c| c.as_str()).map(|s| s.to_string());
-            let tool = v.get("tool").and_then(|t| t.as_str()).map(|s| s.to_string());
-            Ok(tools::ToolCall::Dispatch { repo, prompt, callsign, tool })
+            let repo = v
+                .get("repo")
+                .and_then(|r| r.as_str())
+                .unwrap_or("")
+                .to_string();
+            let prompt = v
+                .get("prompt")
+                .and_then(|p| p.as_str())
+                .unwrap_or("")
+                .to_string();
+            let callsign = v
+                .get("callsign")
+                .and_then(|c| c.as_str())
+                .map(|s| s.to_string());
+            let tool = v
+                .get("tool")
+                .and_then(|t| t.as_str())
+                .map(|s| s.to_string());
+            Ok(tools::ToolCall::Dispatch {
+                repo,
+                prompt,
+                callsign,
+                tool,
+            })
         }
         "terminate" => {
-            let agent = v.get("agent").and_then(|a| a.as_str()).unwrap_or("").to_string();
+            let agent = v
+                .get("agent")
+                .and_then(|a| a.as_str())
+                .unwrap_or("")
+                .to_string();
             Ok(tools::ToolCall::Terminate { agent })
         }
         "merge" => {
-            let agent = v.get("agent").and_then(|a| a.as_str()).unwrap_or("").to_string();
+            let agent = v
+                .get("agent")
+                .and_then(|a| a.as_str())
+                .unwrap_or("")
+                .to_string();
             Ok(tools::ToolCall::Merge { agent })
         }
         "list_agents" => Ok(tools::ToolCall::ListAgents),
         "list_repos" => Ok(tools::ToolCall::ListRepos),
         "message_agent" => {
-            let agent = v.get("agent").and_then(|a| a.as_str()).unwrap_or("").to_string();
-            let text = v.get("text").and_then(|t| t.as_str()).unwrap_or("").to_string();
+            let agent = v
+                .get("agent")
+                .and_then(|a| a.as_str())
+                .unwrap_or("")
+                .to_string();
+            let text = v
+                .get("text")
+                .and_then(|t| t.as_str())
+                .unwrap_or("")
+                .to_string();
             Ok(tools::ToolCall::MessageAgent { agent, text })
         }
         "strike_team" => {
-            let source_file = v.get("source_file").and_then(|s| s.as_str()).unwrap_or("").to_string();
-            let name = v.get("name").and_then(|n| n.as_str()).map(|s| s.to_string());
-            let repo = v.get("repo").and_then(|r| r.as_str()).unwrap_or("").to_string();
-            Ok(tools::ToolCall::StrikeTeam { source_file, name, repo })
+            let source_file = v
+                .get("source_file")
+                .and_then(|s| s.as_str())
+                .unwrap_or("")
+                .to_string();
+            let name = v
+                .get("name")
+                .and_then(|n| n.as_str())
+                .map(|s| s.to_string());
+            let repo = v
+                .get("repo")
+                .and_then(|r| r.as_str())
+                .unwrap_or("")
+                .to_string();
+            Ok(tools::ToolCall::StrikeTeam {
+                source_file,
+                name,
+                repo,
+            })
         }
         _ => {
             use serde::de::Error;
-            Err(serde_json::Error::custom(format!("unknown action: {}", action)))
+            Err(serde_json::Error::custom(format!(
+                "unknown action: {}",
+                action
+            )))
         }
     }
 }
@@ -747,7 +1069,11 @@ mod tests {
         let calls = parse_all_tool_calls(text);
         assert_eq!(calls.len(), 1);
         match &calls[0] {
-            tools::ToolCall::StrikeTeam { source_file, name, repo } => {
+            tools::ToolCall::StrikeTeam {
+                source_file,
+                name,
+                repo,
+            } => {
                 assert_eq!(source_file, "docs/PERFORMANCE_REVIEW.md");
                 assert!(name.is_none());
                 assert_eq!(repo, "dispatch");
@@ -762,9 +1088,32 @@ mod tests {
         let calls = parse_all_tool_calls(text);
         assert_eq!(calls.len(), 1);
         match &calls[0] {
-            tools::ToolCall::StrikeTeam { source_file, name, repo } => {
+            tools::ToolCall::StrikeTeam {
+                source_file,
+                name,
+                repo,
+            } => {
                 assert_eq!(source_file, "docs/spec.md");
                 assert_eq!(name.as_deref(), Some("perf"));
+                assert_eq!(repo, "myrepo");
+            }
+            _ => panic!("expected StrikeTeam"),
+        }
+    }
+
+    #[test]
+    fn parse_strike_team_action_without_source_file() {
+        let text = "```action\n{\"action\": \"strike_team\", \"repo\": \"myrepo\"}\n```";
+        let calls = parse_all_tool_calls(text);
+        assert_eq!(calls.len(), 1);
+        match &calls[0] {
+            tools::ToolCall::StrikeTeam {
+                source_file,
+                name,
+                repo,
+            } => {
+                assert!(source_file.is_empty());
+                assert!(name.is_none());
                 assert_eq!(repo, "myrepo");
             }
             _ => panic!("expected StrikeTeam"),
@@ -783,7 +1132,9 @@ mod tests {
         let repos = vec!["/home/user/myrepo"];
         let tools = tools::tool_definitions();
         let callsigns = vec!["Alpha".to_string(), "Bravo".to_string()];
-        let prompt = build_system_prompt(&repos, &tools, &callsigns, "Dispatch", "Console", "claude", "pr", "ab12");
+        let prompt = build_system_prompt(
+            &repos, &tools, &callsigns, "Dispatch", "Console", "claude", "pr", "ab12",
+        );
         // Should always contain repo name as context prefix.
         assert!(prompt.contains("Repository: myrepo"));
         // Should list configured callsigns.
@@ -805,8 +1156,28 @@ mod tests {
         let repos = vec!["/home/user/myrepo"];
         let tools = tools::tool_definitions();
         let callsigns = vec!["Alpha".to_string()];
-        let prompt = build_system_prompt(&repos, &tools, &callsigns, "Dispatch", "Console", "copilot", "merge", "cd34");
+        let prompt = build_system_prompt(
+            &repos, &tools, &callsigns, "Dispatch", "Console", "copilot", "merge", "cd34",
+        );
         assert!(prompt.contains("Configured AI agent: copilot"));
         assert!(prompt.contains("Merge strategy: merge"));
+    }
+
+    #[test]
+    fn format_document_aliases_lists_well_known_docs() {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos();
+        let repo = std::env::temp_dir().join(format!("dispatch-orch-alias-{unique}"));
+        std::fs::create_dir_all(repo.join("docs")).unwrap();
+        std::fs::write(repo.join("docs").join("SPEC.md"), "spec").unwrap();
+        std::fs::write(repo.join("README.md"), "readme").unwrap();
+
+        let aliases = format_document_aliases(&repo.to_string_lossy());
+        assert!(aliases.contains("- the spec -> docs/SPEC.md"));
+        assert!(aliases.contains("- the readme -> README.md"));
+
+        let _ = std::fs::remove_dir_all(repo);
     }
 }

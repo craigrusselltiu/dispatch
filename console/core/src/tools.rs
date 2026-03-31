@@ -59,7 +59,9 @@ pub enum ToolCall {
     },
     /// Launch a Strike Team from a document.
     StrikeTeam {
-        /// Path to the document (spec, review, design doc, etc.), relative to repo root.
+        /// Optional document hint or path. May be omitted for common repo docs
+        /// like "the spec", which the console resolves automatically.
+        #[serde(default)]
         source_file: String,
         /// Short name for this operation. Defaults to source filename without extension.
         #[serde(default)]
@@ -101,10 +103,7 @@ pub enum ToolResult {
         task_id: String,
     },
     /// Agent terminated.
-    Terminated {
-        slot: u32,
-        callsign: String,
-    },
+    Terminated { slot: u32, callsign: String },
     /// Merge result.
     Merged {
         agent: String,
@@ -112,18 +111,11 @@ pub enum ToolResult {
         message: String,
     },
     /// Agent listing.
-    Agents {
-        agents: Vec<AgentInfo>,
-    },
+    Agents { agents: Vec<AgentInfo> },
     /// Repository listing.
-    Repos {
-        repos: Vec<RepoInfo>,
-    },
+    Repos { repos: Vec<RepoInfo> },
     /// Message sent to agent.
-    MessageSent {
-        agent: String,
-        slot: u32,
-    },
+    MessageSent { agent: String, slot: u32 },
     /// Strike team launched.
     StrikeTeamAcknowledged {
         name: String,
@@ -131,9 +123,7 @@ pub enum ToolResult {
         repo: String,
     },
     /// Tool call failed.
-    Error {
-        message: String,
-    },
+    Error { message: String },
 }
 
 // ── Tool definitions for LLM ────────────────────────────────────────────────
@@ -238,7 +228,7 @@ pub fn tool_definitions() -> serde_json::Value {
                 "properties": {
                     "source_file": {
                         "type": "string",
-                        "description": "Path to the document (spec, review, design doc, TODO list, etc.), relative to repo root."
+                        "description": "Optional repo-relative path or shorthand for the document (for example \"docs/SPEC.md\", \"spec\", or \"architecture\"). Omit this when Dispatch says \"the spec\" and the console should resolve the repo's main spec automatically."
                     },
                     "name": {
                         "type": "string",
@@ -249,7 +239,7 @@ pub fn tool_definitions() -> serde_json::Value {
                         "description": "Repository name or path."
                     }
                 },
-                "required": ["source_file", "repo"]
+                "required": ["repo"]
             }
         }
     ])
@@ -327,7 +317,12 @@ mod tests {
         let text = r#"<tool_call>{"name": "dispatch", "input": {"repo": "myrepo", "prompt": "fix the bug"}}</tool_call>"#;
         let call = parse_tool_call(text).unwrap();
         match call {
-            ToolCall::Dispatch { repo, prompt, callsign, tool } => {
+            ToolCall::Dispatch {
+                repo,
+                prompt,
+                callsign,
+                tool,
+            } => {
                 assert_eq!(repo, "myrepo");
                 assert_eq!(prompt, "fix the bug");
                 assert!(callsign.is_none());
@@ -342,7 +337,12 @@ mod tests {
         let text = r#"<tool_call>{"name": "dispatch", "input": {"repo": "myrepo", "prompt": "fix the bug", "callsign": "Delta"}}</tool_call>"#;
         let call = parse_tool_call(text).unwrap();
         match call {
-            ToolCall::Dispatch { repo, prompt, callsign, tool } => {
+            ToolCall::Dispatch {
+                repo,
+                prompt,
+                callsign,
+                tool,
+            } => {
                 assert_eq!(repo, "myrepo");
                 assert_eq!(prompt, "fix the bug");
                 assert_eq!(callsign.as_deref(), Some("Delta"));
@@ -357,7 +357,12 @@ mod tests {
         let text = r#"<tool_call>{"name": "dispatch", "input": {"repo": "myrepo", "prompt": "fix the bug", "tool": "copilot"}}</tool_call>"#;
         let call = parse_tool_call(text).unwrap();
         match call {
-            ToolCall::Dispatch { repo, prompt, callsign, tool } => {
+            ToolCall::Dispatch {
+                repo,
+                prompt,
+                callsign,
+                tool,
+            } => {
                 assert_eq!(repo, "myrepo");
                 assert_eq!(prompt, "fix the bug");
                 assert!(callsign.is_none());
@@ -412,7 +417,11 @@ mod tests {
         let text = r#"<tool_call>{"name": "strike_team", "input": {"source_file": "docs/auth-spec.md", "repo": "myrepo"}}</tool_call>"#;
         let call = parse_tool_call(text).unwrap();
         match call {
-            ToolCall::StrikeTeam { source_file, name, repo } => {
+            ToolCall::StrikeTeam {
+                source_file,
+                name,
+                repo,
+            } => {
                 assert_eq!(source_file, "docs/auth-spec.md");
                 assert!(name.is_none());
                 assert_eq!(repo, "myrepo");
@@ -426,9 +435,31 @@ mod tests {
         let text = r#"<tool_call>{"name": "strike_team", "input": {"source_file": "docs/auth-spec.md", "name": "auth", "repo": "myrepo"}}</tool_call>"#;
         let call = parse_tool_call(text).unwrap();
         match call {
-            ToolCall::StrikeTeam { source_file, name, repo } => {
+            ToolCall::StrikeTeam {
+                source_file,
+                name,
+                repo,
+            } => {
                 assert_eq!(source_file, "docs/auth-spec.md");
                 assert_eq!(name.as_deref(), Some("auth"));
+                assert_eq!(repo, "myrepo");
+            }
+            _ => panic!("expected StrikeTeam"),
+        }
+    }
+
+    #[test]
+    fn parse_strike_team_call_without_source_file() {
+        let text = r#"<tool_call>{"name": "strike_team", "input": {"repo": "myrepo"}}</tool_call>"#;
+        let call = parse_tool_call(text).unwrap();
+        match call {
+            ToolCall::StrikeTeam {
+                source_file,
+                name,
+                repo,
+            } => {
+                assert!(source_file.is_empty());
+                assert!(name.is_none());
                 assert_eq!(repo, "myrepo");
             }
             _ => panic!("expected StrikeTeam"),
@@ -451,11 +482,7 @@ mod tests {
     #[test]
     fn resolve_agent_by_slot() {
         let slots = [true, true, false];
-        let callsigns = [
-            Some("ALPHA".to_string()),
-            Some("BRAVO".to_string()),
-            None,
-        ];
+        let callsigns = [Some("ALPHA".to_string()), Some("BRAVO".to_string()), None];
         assert_eq!(resolve_agent("1", &slots, &callsigns), Some(0));
         assert_eq!(resolve_agent("2", &slots, &callsigns), Some(1));
         assert_eq!(resolve_agent("3", &slots, &callsigns), None); // empty slot
@@ -464,11 +491,7 @@ mod tests {
     #[test]
     fn resolve_agent_by_callsign() {
         let slots = [true, true, false];
-        let callsigns = [
-            Some("ALPHA".to_string()),
-            Some("BRAVO".to_string()),
-            None,
-        ];
+        let callsigns = [Some("ALPHA".to_string()), Some("BRAVO".to_string()), None];
         assert_eq!(resolve_agent("Alpha", &slots, &callsigns), Some(0));
         assert_eq!(resolve_agent("bravo", &slots, &callsigns), Some(1));
         assert_eq!(resolve_agent("Charlie", &slots, &callsigns), None);
@@ -478,10 +501,7 @@ mod tests {
     fn tool_definitions_has_all_tools() {
         let defs = tool_definitions();
         let arr = defs.as_array().unwrap();
-        let names: Vec<&str> = arr
-            .iter()
-            .map(|d| d["name"].as_str().unwrap())
-            .collect();
+        let names: Vec<&str> = arr.iter().map(|d| d["name"].as_str().unwrap()).collect();
         assert!(names.contains(&"dispatch"));
         assert!(names.contains(&"terminate"));
         assert!(names.contains(&"merge"));

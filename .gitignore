@@ -1,5 +1,6 @@
 # Dispatch runtime artifacts (created in target repos)
 .dispatch/
+.worktrees/
 
 # Dolt database files (legacy)
 .dolt/
