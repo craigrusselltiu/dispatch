@@ -1217,10 +1217,10 @@ impl App {
         {
             Ok(output) if !output.status.success() => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                self.push_ticker(format!("STRIKE TEAM: git pull failed — {}", stderr.trim()));
+                log::warn!("STRIKE TEAM: git pull failed — {}", stderr.trim());
             }
             Err(e) => {
-                self.push_ticker(format!("STRIKE TEAM: git pull error — {}", e));
+                log::warn!("STRIKE TEAM: git pull error — {}", e);
             }
             _ => {}
         }
