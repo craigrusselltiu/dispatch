@@ -24,9 +24,9 @@ pub enum TaskStatus {
 impl fmt::Display for TaskStatus {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            TaskStatus::Pending => write!(f, "pending"),
-            TaskStatus::Active => write!(f, "active"),
-            TaskStatus::Done => write!(f, "done"),
+            TaskStatus::Pending => write!(f, "ready"),
+            TaskStatus::Active => write!(f, "working"),
+            TaskStatus::Done => write!(f, "success"),
             TaskStatus::Failed => write!(f, "failed"),
         }
     }
@@ -73,6 +73,11 @@ pub struct StrikeTeamState {
     /// detect idle/exit without scanning slots by task_id (which races
     /// against the main loop clearing task_id before the tick runs).
     pub phase_agent_callsign: Option<String>,
+    /// Number of ticks spent waiting for the planner's task file after
+    /// the planner goes idle/exits. The file may not appear immediately
+    /// due to filesystem sync delays or the agent finishing its write.
+    #[serde(default)]
+    pub planning_wait_ticks: u32,
 }
 
 // ── Parsing ──────────────────────────────────────────────────────────────────
@@ -128,8 +133,8 @@ pub fn parse_task_file(content: &str) -> Vec<Task> {
         if let Some(val) = trimmed.strip_prefix("status:") {
             let val = val.trim();
             task.status = match val {
-                "active" => TaskStatus::Active,
-                "done" => TaskStatus::Done,
+                "working" | "active" => TaskStatus::Active,
+                "success" | "done" => TaskStatus::Done,
                 "failed" => TaskStatus::Failed,
                 _ => TaskStatus::Pending,
             };
@@ -241,6 +246,31 @@ pub fn complete_task(tasks: &mut [Task], task_id: &str) {
 pub fn fail_task(tasks: &mut [Task], task_id: &str) {
     if let Some(task) = tasks.iter_mut().find(|t| t.id == task_id) {
         task.status = TaskStatus::Failed;
+    }
+}
+
+/// Prepare tasks for rescue: reset failed/working tasks to pending so they
+/// can be redispatched. If a working task's worktree still exists, keep the
+/// agent field so dispatch can reuse the worktree.
+pub fn rescue_tasks(tasks: &mut [Task], worktree_base: &str) {
+    for task in tasks.iter_mut() {
+        match task.status {
+            TaskStatus::Done => {} // already completed
+            TaskStatus::Failed => {
+                task.status = TaskStatus::Pending;
+                task.agent = None;
+            }
+            TaskStatus::Active => {
+                let has_worktree = task.agent.as_ref().map_or(false, |agent| {
+                    std::path::Path::new(&format!("{}/{}", worktree_base, agent)).exists()
+                });
+                task.status = TaskStatus::Pending;
+                if !has_worktree {
+                    task.agent = None;
+                }
+            }
+            TaskStatus::Pending => {} // already ready
+        }
     }
 }
 
@@ -475,9 +505,9 @@ prompt: Test the thing.
 
     #[test]
     fn task_status_display() {
-        assert_eq!(TaskStatus::Pending.to_string(), "pending");
-        assert_eq!(TaskStatus::Active.to_string(), "active");
-        assert_eq!(TaskStatus::Done.to_string(), "done");
+        assert_eq!(TaskStatus::Pending.to_string(), "ready");
+        assert_eq!(TaskStatus::Active.to_string(), "working");
+        assert_eq!(TaskStatus::Done.to_string(), "success");
         assert_eq!(TaskStatus::Failed.to_string(), "failed");
     }
 
@@ -571,5 +601,57 @@ prompt: Do a simple thing.
             tasks[0].prompt,
             "Create a User struct in src/models/user.rs with serde derives."
         );
+    }
+
+    #[test]
+    fn rescue_resets_failed_tasks() {
+        let mut tasks = parse_task_file(SAMPLE_TASK_FILE);
+        complete_task(&mut tasks, "T1");
+        fail_task(&mut tasks, "T2");
+        assign_task(&mut tasks, "T3", "Charlie");
+        fail_task(&mut tasks, "T3");
+
+        rescue_tasks(&mut tasks, "/nonexistent");
+
+        assert_eq!(tasks[0].status, TaskStatus::Done); // T1 stays done
+        assert_eq!(tasks[1].status, TaskStatus::Pending); // T2 reset
+        assert!(tasks[1].agent.is_none()); // agent cleared
+        assert_eq!(tasks[2].status, TaskStatus::Pending); // T3 reset
+        assert!(tasks[2].agent.is_none()); // agent cleared
+        assert_eq!(tasks[3].status, TaskStatus::Pending); // T4 was pending
+    }
+
+    #[test]
+    fn rescue_keeps_agent_with_worktree() {
+        let mut tasks = parse_task_file(SAMPLE_TASK_FILE);
+        complete_task(&mut tasks, "T1");
+        assign_task(&mut tasks, "T2", "Bravo");
+        // T2 is Active (working) with agent Bravo
+
+        // Use the actual temp dir as worktree base
+        let tmp = std::env::temp_dir().join("dispatch-rescue-test");
+        let worktree_dir = tmp.join("Bravo");
+        std::fs::create_dir_all(&worktree_dir).unwrap();
+
+        rescue_tasks(&mut tasks, &tmp.to_string_lossy());
+
+        assert_eq!(tasks[1].status, TaskStatus::Pending);
+        assert_eq!(tasks[1].agent.as_deref(), Some("Bravo")); // kept
+
+        // Clean up
+        let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn rescue_clears_agent_without_worktree() {
+        let mut tasks = parse_task_file(SAMPLE_TASK_FILE);
+        complete_task(&mut tasks, "T1");
+        assign_task(&mut tasks, "T2", "Bravo");
+        // T2 is Active (working) with agent Bravo, but no worktree
+
+        rescue_tasks(&mut tasks, "/nonexistent");
+
+        assert_eq!(tasks[1].status, TaskStatus::Pending);
+        assert!(tasks[1].agent.is_none()); // cleared, no worktree
     }
 }

@@ -12,13 +12,13 @@ Use this EXACT format:
 source: {source_file}
 
 ## T1: <short title>
-status: pending
+status: ready
 dependencies: none
 prompt: <first line of prompt>
   <continuation lines indented with 2 spaces>
 
 ## T2: <short title>
-status: pending
+status: ready
 dependencies: T1
 prompt: <first line of prompt>
   <more detail on indented continuation lines>

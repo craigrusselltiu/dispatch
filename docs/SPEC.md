@@ -272,10 +272,10 @@ Idle --> Planning --> Executing --> Verifying --> Complete
 1. The orchestrator issues a `strike_team(source_file?, name, repo)` action.
 2. The console dispatches a **planner agent** that reads the document and creates a task file (`.dispatch/tasks-<name>.md`) with dependency information.
 3. Once the planner finishes, the console parses the task file and transitions to the Executing phase.
-4. The console scans for **ready** tasks (status `pending` with all dependencies `done`) and dispatches agents in parallel for each ready task that has an available slot.
+4. The console scans for **ready** tasks (status `ready` with all dependencies `success`) and dispatches agents in parallel for each ready task that has an available slot.
 5. When an agent finishes, it merges to main and is terminated to free the slot.
 6. The console pulls the latest main, checks for newly unblocked tasks, and dispatches the next wave.
-7. Repeats until all tasks are `done` or `failed`.
+7. Repeats until all tasks are `success` or `failed`.
 8. A **verifier agent** is dispatched to check all implementations against the source document and fix any issues.
 9. When the verifier finishes, the strike team transitions to Complete.
 
@@ -288,7 +288,7 @@ Location: `.dispatch/tasks-<name>.md`
 source: docs/auth-spec.md
 
 ## T1: Implement user model
-status: pending
+status: ready
 dependencies: none
 prompt: Create a User struct in src/models/user.rs.
   Fields: id (Uuid), email (String), name (String), created_at (DateTime).
@@ -296,19 +296,19 @@ prompt: Create a User struct in src/models/user.rs.
   Add a User::new(email, name) constructor that generates the id and timestamp.
 
 ## T2: Add user API endpoints
-status: pending
+status: ready
 dependencies: T1
 prompt: Create REST endpoints for CRUD operations on users in src/routes/users.rs.
   Add routes for GET /users, POST /users, GET /users/:id, DELETE /users/:id.
   Return JSON responses with proper HTTP status codes.
 
 ## T3: Add authentication middleware
-status: pending
+status: ready
 dependencies: T1
 prompt: Implement JWT authentication middleware in src/middleware/auth.rs.
 
 ## T4: Wire auth into endpoints
-status: pending
+status: ready
 dependencies: T2, T3
 prompt: Apply auth middleware to user endpoints.
   Protect POST, DELETE routes with JWT validation.
@@ -319,12 +319,12 @@ prompt: Apply auth middleware to user endpoints.
 
 | Field | Values | Description |
 |-------|--------|-------------|
-| `status` | `pending`, `active`, `done`, `failed` | Current state |
+| `status` | `ready`, `working`, `success`, `failed` | Current state |
 | `dependencies` | `none` or comma-separated IDs (`T1, T3`) | Dependency list |
 | `prompt` | First line after `prompt:`, with 2-space indented continuation lines | Self-contained agent instruction (multi-line) |
 | `agent` | Callsign (e.g., `Alpha`) | Written by console when assigned |
 
-**Readiness rule:** a task is ready when its status is `pending` and all dependencies have status `done`.
+**Readiness rule:** a task is ready when its status is `ready` and all dependencies have status `success`.
 
 **Parsing:** line-by-line string matching. `## T<N>:` starts a task, `key: value` lines set fields. Prompt continuation lines are indented with 2+ spaces. No markdown parsing library needed.
 
@@ -333,15 +333,15 @@ prompt: Apply auth middleware to user endpoints.
 Runs inside the existing 16ms main loop tick -- no new threads or async.
 
 1. `git pull --ff-only` in repo root (pick up prior merges from completed agents).
-2. Scan tasks: find all where status=`pending` and all deps are `done`.
+2. Scan tasks: find all where status=`ready` and all deps are `success`.
 3. For each ready task with an available slot: dispatch a fresh agent with the task's prompt and a reference to the source document for context.
-4. Update task file: status=`active`, agent=`<callsign>`.
+4. Update task file: status=`working`, agent=`<callsign>`.
 5. When an agent goes idle (existing 10s idle detection):
-   - Mark task `done` in the task file.
-   - Terminate the agent (free the slot for next wave).
+   - Check PTY output for usage-limit indicators. If detected, leave task as `working` (the agent failed to complete but wasn't a code error).
+   - Otherwise mark task `success` in the task file and terminate the agent (free the slot for next wave).
    - Re-run from step 1.
 6. When an agent process exits unexpectedly: mark task `failed`, continue.
-7. When all tasks are `done` or `failed`: transition to Verifying phase and dispatch a verifier agent.
+7. When all tasks are `success` or `failed`: transition to Verifying phase and dispatch a verifier agent.
 8. The verifier reads the source document and task file, checks implementations, fixes issues, then stops.
 9. When the verifier goes idle or exits: transition to Complete and notify the orchestrator via `[D-{nonce}:EVENT] STRIKE_TEAM_COMPLETE name=<name> result=<done>/<total>`.
 
@@ -362,8 +362,12 @@ Each task agent follows the normal dispatch workflow: creates a worktree from la
 ### Edge Cases
 
 - **Max slots full**: ready tasks wait. As agents finish and slots free up, the next wave dispatches.
-- **Agent failure**: task marked `failed`. Its dependents stay `pending` forever (blocked by the failed dependency). Sibling tasks continue normally.
+- **Agent failure**: task marked `failed`. Its dependents stay `ready` forever (blocked by the failed dependency). Sibling tasks continue normally.
+- **Usage limit**: if an agent goes idle and its PTY output contains a usage-limit indicator, the task stays as `working` instead of being promoted to `success`. This naturally prevents the strike team from completing (not all tasks are `success` or `failed`), blocking verification until the situation is resolved.
 - **Merge conflicts**: agents handle conflicts per their normal workflow. If unresolvable, the agent reports failure.
+- **Task file not found**: after the planner finishes, the console retries reading the task file for up to 5 seconds and scans `.dispatch/` for alternative filenames before aborting.
+- **Rescue mode**: if a `strike_team` call is made and a task file (`.dispatch/tasks-<name>.md`) already exists, the console skips planning and enters rescue mode: `failed` and `working` tasks are reset to `ready` for retry. If a `working` task's worktree (`.dispatch/.worktrees/<agent>`) still exists on disk, the agent field is preserved so the next dispatch reuses the worktree — the agent receives a `RESUME` prompt telling it to continue from where the previous agent stopped.
+- **Task file cleanup**: the verifier deletes the task file after completing verification.
 - **Cancellation**: press `s` in command mode to abort the active strike team. This transitions to the Aborted phase, stopping all future task dispatching. Active agents finish their current work but no new tasks are dispatched.
 - **One at a time**: only one strike team can be active at once. A second `strike_team` call returns an error.
 

@@ -2,6 +2,23 @@
 
 All notable changes to this project will be documented in this file.
 
+## v0.4.8
+
+### Added
+
+- **Search and rescue**: when a `strike_team` call is made and a task file already exists, the console skips planning and enters rescue mode — resetting `failed` and `working` tasks to `ready` for retry. If a stalled task's worktree still exists on disk, the agent is redispatched into the existing worktree with a resume prompt.
+- Verifier now deletes the task file (`.dispatch/tasks-<name>.md`) after completing verification.
+
+### Changed
+
+- Strike team task statuses renamed: `pending`→`ready`, `active`→`working`, `done`→`success`. The parser accepts both old and new names. Planner prompt template and SPEC updated to match.
+
+### Fixed
+
+- Strike team planner task file detection now retries for up to 5 seconds after the planner goes idle and scans `.dispatch/` for alternative filenames, instead of aborting immediately when the file isn't at the exact expected path. Fixes #36.
+- Strike team idle detection now checks agent PTY output for usage-limit indicators before marking a task as `success`. If a usage limit is detected, the task stays as `working`, which prevents the team from proceeding to verification on incomplete work. Fixes #35.
+- Replaced unlinked `log::warn!` calls with `eprintln!` in strike team git-pull error handling.
+
 ## v0.4.7
 
 ### Fixed

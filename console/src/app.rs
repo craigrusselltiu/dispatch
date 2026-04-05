@@ -839,6 +839,56 @@ impl App {
                     })
                     .to_string();
 
+                // Check for existing task file → rescue mode (skip planning).
+                let task_file_path = format!("{}/.dispatch/tasks-{}.md", target_repo, st_name);
+                if let Ok(contents) = std::fs::read_to_string(&task_file_path) {
+                    let mut tasks = strike_team::parse_task_file(&contents);
+                    if !tasks.is_empty() {
+                        let worktree_base =
+                            format!("{}/.dispatch/.worktrees", target_repo);
+                        strike_team::rescue_tasks(&mut tasks, &worktree_base);
+                        let _ = std::fs::write(
+                            &task_file_path,
+                            strike_team::write_task_file(&tasks),
+                        );
+
+                        let task_count = tasks.len();
+                        let done = tasks
+                            .iter()
+                            .filter(|t| t.status == strike_team::TaskStatus::Done)
+                            .count();
+
+                        self.strike_teams.push(strike_team::StrikeTeamState {
+                            name: st_name.clone(),
+                            source_file: resolved_source_file.clone(),
+                            repo: target_repo.clone(),
+                            phase: strike_team::StrikeTeamPhase::Executing,
+                            tasks,
+                            task_file_path,
+                            phase_agent_callsign: None,
+                            planning_wait_ticks: 0,
+                        });
+
+                        self.push_ticker(format!(
+                            "STRIKE TEAM: rescuing {} ({}/{})",
+                            st_name, done, task_count
+                        ));
+                        self.push_chat(
+                            "System",
+                            &format!(
+                                "Strike Team '{}': rescued with {}/{} tasks already done.",
+                                st_name, done, task_count
+                            ),
+                        );
+
+                        return tools::ToolResult::StrikeTeamAcknowledged {
+                            name: st_name,
+                            source_file: resolved_source_file,
+                            repo: target_repo,
+                        };
+                    }
+                }
+
                 // Build planner prompt from docs/PLANNER.md template.
                 let planner_prompt = render_prompt_template(
                     PLANNER_MD,
@@ -916,6 +966,7 @@ impl App {
                     tasks: Vec::new(),
                     task_file_path,
                     phase_agent_callsign: Some(phase_agent_callsign.clone()),
+                    planning_wait_ticks: 0,
                 });
 
                 self.push_orch(OrchestratorEventKind::Dispatched {
@@ -1053,69 +1104,49 @@ impl App {
     }
 
     fn tick_strike_team_planning(&mut self, st_idx: usize) {
-        let cs = match self.strike_teams.get(st_idx) {
-            Some(st) => match &st.phase_agent_callsign {
-                Some(cs) => cs.clone(),
-                None => return,
-            },
+        let st = match self.strike_teams.get(st_idx) {
+            Some(st) => st,
             None => return,
         };
 
-        // Planner is idle when its slot exists but task_id has been cleared.
-        let planner_idle = self.slots.iter().any(|s| {
-            s.as_ref().map_or(false, |slot| {
-                slot.display_name().eq_ignore_ascii_case(&cs) && slot.task_id.is_none()
-            })
-        });
-        // Planner exited when its slot is gone entirely.
-        let planner_gone = !self.slots.iter().any(|s| {
-            s.as_ref()
-                .map_or(false, |slot| slot.display_name().eq_ignore_ascii_case(&cs))
-        });
+        // Already waiting for the task file (planner terminated, retrying reads).
+        let already_waiting = st.planning_wait_ticks > 0;
 
-        if planner_idle || planner_gone {
-            // Parse the task file and transition to Executing.
-            let st = &mut self.strike_teams[st_idx];
-            st.phase_agent_callsign = None;
-            let task_file = st.task_file_path.clone();
-            match std::fs::read_to_string(&task_file) {
-                Ok(contents) => {
-                    st.tasks = strike_team::parse_task_file(&contents);
-                    let task_count = st.tasks.len();
-                    if task_count == 0 {
-                        st.phase = strike_team::StrikeTeamPhase::Aborted;
-                        let name = st.name.clone();
-                        self.push_ticker(format!("STRIKE TEAM: {} aborted — no tasks found", name));
-                    } else {
-                        st.phase = strike_team::StrikeTeamPhase::Executing;
-                        let name = st.name.clone();
-                        self.push_ticker(format!("STRIKE TEAM: plan ready, {} tasks", task_count));
-                        self.push_chat(
-                            "System",
-                            &format!(
-                                "Strike Team '{}': plan ready with {} tasks.",
-                                name, task_count
-                            ),
-                        );
-                    }
-                }
-                Err(_) => {
-                    st.phase = strike_team::StrikeTeamPhase::Aborted;
-                    let name = st.name.clone();
-                    self.push_ticker(format!(
-                        "STRIKE TEAM: {} aborted — task file not found",
-                        name
-                    ));
-                }
+        if !already_waiting {
+            let cs = match &st.phase_agent_callsign {
+                Some(cs) => cs.clone(),
+                None => return,
+            };
+
+            // Planner is idle when its slot exists but task_id has been cleared.
+            let planner_idle = self.slots.iter().any(|s| {
+                s.as_ref().map_or(false, |slot| {
+                    slot.display_name().eq_ignore_ascii_case(&cs) && slot.task_id.is_none()
+                })
+            });
+            // Planner exited when its slot is gone entirely.
+            let planner_gone = !self.slots.iter().any(|s| {
+                s.as_ref()
+                    .map_or(false, |slot| slot.display_name().eq_ignore_ascii_case(&cs))
+            });
+
+            if !planner_idle && !planner_gone {
+                return;
             }
 
-            // Terminate the planner agent to free the slot.
+            // Planner is done. Terminate it immediately to free the slot,
+            // then start polling for the task file.
+            let st = &mut self.strike_teams[st_idx];
+            st.phase_agent_callsign = None;
+            st.planning_wait_ticks = 1;
+
             if planner_idle {
                 if let Some(idx) = self.slots.iter().position(|s| {
                     s.as_ref()
                         .map_or(false, |slot| slot.display_name().eq_ignore_ascii_case(&cs))
                 }) {
-                    let callsign = self.slots[idx].as_ref().unwrap().display_name().to_string();
+                    let callsign =
+                        self.slots[idx].as_ref().unwrap().display_name().to_string();
                     crate::pty::terminate_slot(&mut self.slots[idx]);
                     self.push_orch(OrchestratorEventKind::Terminated {
                         agent: callsign,
@@ -1126,6 +1157,74 @@ impl App {
                         wst.slots[idx] = None;
                     }
                     self.broadcast_agents();
+                }
+            }
+        }
+
+        // Poll for the task file. Try exact path first, then scan .dispatch/
+        // for any tasks-*.md in case the planner wrote a slightly different name.
+        let task_file = self.strike_teams[st_idx].task_file_path.clone();
+        let repo = self.strike_teams[st_idx].repo.clone();
+        let name = self.strike_teams[st_idx].name.clone();
+
+        let contents = std::fs::read_to_string(&task_file).ok().or_else(|| {
+            let dispatch_dir = format!("{}/.dispatch", repo);
+            let prefix = "tasks-";
+            std::fs::read_dir(&dispatch_dir)
+                .ok()?
+                .filter_map(|e| e.ok())
+                .find(|e| {
+                    let fname = e.file_name();
+                    let fname = fname.to_string_lossy();
+                    fname.starts_with(prefix) && fname.ends_with(".md") && fname != "tasks-.md"
+                })
+                .and_then(|e| {
+                    let found_path = e.path();
+                    eprintln!(
+                        "STRIKE TEAM: task file not at expected path, found {}",
+                        found_path.display()
+                    );
+                    self.strike_teams[st_idx].task_file_path =
+                        found_path.to_string_lossy().to_string();
+                    std::fs::read_to_string(&found_path).ok()
+                })
+        });
+
+        match contents {
+            Some(contents) => {
+                let st = &mut self.strike_teams[st_idx];
+                st.tasks = strike_team::parse_task_file(&contents);
+                let task_count = st.tasks.len();
+                if task_count == 0 {
+                    st.phase = strike_team::StrikeTeamPhase::Aborted;
+                    self.push_ticker(format!(
+                        "STRIKE TEAM: {} aborted — no tasks found",
+                        name
+                    ));
+                } else {
+                    st.phase = strike_team::StrikeTeamPhase::Executing;
+                    self.push_ticker(format!("STRIKE TEAM: plan ready, {} tasks", task_count));
+                    self.push_chat(
+                        "System",
+                        &format!(
+                            "Strike Team '{}': plan ready with {} tasks.",
+                            name, task_count
+                        ),
+                    );
+                }
+            }
+            None => {
+                // Wait up to ~5 seconds (~312 ticks at 16ms) for the file to appear.
+                let st = &mut self.strike_teams[st_idx];
+                if already_waiting {
+                    st.planning_wait_ticks += 1;
+                }
+                if st.planning_wait_ticks > 312 {
+                    st.phase = strike_team::StrikeTeamPhase::Aborted;
+                    self.push_ticker(format!(
+                        "STRIKE TEAM: {} aborted — task file not found",
+                        name
+                    ));
                 }
             }
         }
@@ -1217,10 +1316,10 @@ impl App {
         {
             Ok(output) if !output.status.success() => {
                 let stderr = String::from_utf8_lossy(&output.stderr);
-                log::warn!("STRIKE TEAM: git pull failed — {}", stderr.trim());
+                eprintln!("STRIKE TEAM: git pull failed — {}", stderr.trim());
             }
             Err(e) => {
-                log::warn!("STRIKE TEAM: git pull error — {}", e);
+                eprintln!("STRIKE TEAM: git pull error — {}", e);
             }
             _ => {}
         }
@@ -1232,7 +1331,7 @@ impl App {
                 None => break, // No more slots — wait for next tick.
             };
 
-            let (prompt, title, source_file, st_name) = {
+            let (prompt, title, source_file, st_name, existing_agent) = {
                 let st = &self.strike_teams[st_idx];
                 let task = st.tasks.iter().find(|t| t.id == *task_id).unwrap();
                 (
@@ -1240,22 +1339,53 @@ impl App {
                     task.title.clone(),
                     st.source_file.clone(),
                     st.name.clone(),
+                    task.agent.clone(),
                 )
             };
 
-            let callsign = self
-                .next_callsign()
-                .unwrap_or_else(|| format!("Agent-{}", slot_idx + 1));
+            // Check for an existing worktree from a previous run (rescue mode).
+            let worktree_path = existing_agent
+                .as_ref()
+                .map(|agent| format!("{}/.dispatch/.worktrees/{}", repo, agent))
+                .filter(|p| std::path::Path::new(p).exists());
+            let resuming = worktree_path.is_some();
+
+            // Reuse original callsign if worktree exists, otherwise generate new.
+            let callsign = if let Some(ref agent) = existing_agent {
+                if resuming {
+                    agent.clone()
+                } else {
+                    self.next_callsign()
+                        .unwrap_or_else(|| format!("Agent-{}", slot_idx + 1))
+                }
+            } else {
+                self.next_callsign()
+                    .unwrap_or_else(|| format!("Agent-{}", slot_idx + 1))
+            };
+
             let effective_tool = self.default_tool.clone();
             let cmd = self.tool_cmd(&effective_tool).to_string();
             let task_num = task_id.strip_prefix('T').unwrap_or(task_id);
             let commit_prefix = format!("{}-t{}", st_name, task_num);
-            let full_prompt = format!(
-                "Your callsign is {}. COMMIT PREFIX: you MUST prefix ALL git commit messages with \
-                 '{}: ' (example: '{}: implement feature X'). \
-                 Source document: {} -- read it for full context. {}",
-                callsign, commit_prefix, commit_prefix, source_file, prompt
-            );
+
+            let full_prompt = if resuming {
+                format!(
+                    "Your callsign is {}. COMMIT PREFIX: you MUST prefix ALL git commit messages with \
+                     '{}: ' (example: '{}: implement feature X'). \
+                     RESUME: Your worktree and branch already exist from a previous run that was interrupted. \
+                     cd into .dispatch/.worktrees/{} and continue from where the previous agent stopped. \
+                     Check git log and git status to understand current state before proceeding. \
+                     Source document: {} -- read it for full context. {}",
+                    callsign, commit_prefix, commit_prefix, callsign, source_file, prompt
+                )
+            } else {
+                format!(
+                    "Your callsign is {}. COMMIT PREFIX: you MUST prefix ALL git commit messages with \
+                     '{}: ' (example: '{}: implement feature X'). \
+                     Source document: {} -- read it for full context. {}",
+                    callsign, commit_prefix, commit_prefix, source_file, prompt
+                )
+            };
 
             // In PR mode, strike team task agents only push their branch --
             // the verifier consolidates all branches into one PR later.
@@ -1271,7 +1401,7 @@ impl App {
                 &cmd,
                 self.pane_rows,
                 self.pane_cols,
-                None,
+                worktree_path.as_deref(),
                 self.scrollback_lines,
                 repo_name_from_path(&repo),
                 &repo,
@@ -1341,8 +1471,9 @@ impl App {
     }
 
     /// Called when an agent goes idle (10s no output). If the agent is working
-    /// on a strike team task, mark the task done, terminate the agent to free
-    /// the slot, and write the updated task file.
+    /// on a strike team task, check whether it actually succeeded or hit a
+    /// usage limit. If the PTY contains usage-limit text the task stays as
+    /// `working` so the strike team won't proceed to verification.
     pub fn strike_team_on_agent_idle(&mut self, callsign: &str) {
         // Find which strike team owns this agent.
         let st_idx = match self.strike_teams.iter().position(|st| {
@@ -1360,7 +1491,45 @@ impl App {
             None => return,
         };
 
-        // Mark task done.
+        // Check the agent's PTY output for usage-limit indicators. If the
+        // agent went idle because it hit a limit (not because it finished),
+        // leave the task as "working" so it's clear work is incomplete.
+        let hit_limit = self.slots.iter().find_map(|s| {
+            let slot = s.as_ref()?;
+            if slot.display_name().eq_ignore_ascii_case(callsign) {
+                let screen = slot.screen.lock().unwrap();
+                let text = screen.screen().contents();
+                Some(
+                    text.contains("usage limit")
+                        || text.contains("Usage limit")
+                        || text.contains("rate limit")
+                        || text.contains("Rate limit")
+                        || text.contains("out of tokens")
+                        || text.contains("token limit"),
+                )
+            } else {
+                None
+            }
+        }).unwrap_or(false);
+
+        if hit_limit {
+            // Leave task as "working". Don't mark success, don't terminate.
+            let name = self.strike_teams[st_idx].name.clone();
+            self.push_ticker(format!(
+                "STRIKE TEAM: {} stalled — usage limit ({})",
+                task_id, callsign
+            ));
+            self.push_chat(
+                "System",
+                &format!(
+                    "Strike Team '{}': {} hit usage limit ({}). Task stays as working.",
+                    name, task_id, callsign
+                ),
+            );
+            return;
+        }
+
+        // Mark task success.
         let st = &mut self.strike_teams[st_idx];
         strike_team::complete_task(&mut st.tasks, &task_id);
         let contents = strike_team::write_task_file(&st.tasks);
